@@ -4719,7 +4719,7 @@ describe("GET /auth/status", () => {
     // Structural assertions here are about OAuth + API-key paths only.
     const providers = res.body.providers.filter((p: any) => p.id !== "claude-cli");
     expect(providers).toEqual([
-      { id: "anthropic", name: "Anthropic", authenticated: true, type: "oauth" },
+      { id: "anthropic", name: "Anthropic", authenticated: true, type: "oauth", loginInProgress: false },
       { id: "openrouter", name: "OpenRouter", authenticated: false, type: "api_key" },
       { id: "kimi-coding", name: "Kimi", authenticated: false, type: "api_key" },
     ]);
@@ -4744,8 +4744,8 @@ describe("GET /auth/status", () => {
     expect(res.status).toBe(200);
     const providers = res.body.providers.filter((p: any) => p.id !== "claude-cli");
     expect(providers).toEqual([
-      { id: "anthropic", name: "Anthropic", authenticated: true, type: "oauth" },
-      { id: "github-copilot", name: "GitHub Copilot", authenticated: false, type: "oauth" },
+      { id: "anthropic", name: "Anthropic", authenticated: true, type: "oauth", loginInProgress: false },
+      { id: "github-copilot", name: "GitHub Copilot", authenticated: false, type: "oauth", loginInProgress: false },
       { id: "openrouter", name: "OpenRouter", authenticated: false, type: "api_key" },
       { id: "kimi-coding", name: "Kimi", authenticated: false, type: "api_key" },
       { id: "acme-extension", name: "Acme Extension", authenticated: true, type: "api_key" },
@@ -4759,6 +4759,31 @@ describe("GET /auth/status", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.providers[0].authenticated).toBe(false);
+  });
+
+  it("reports loginInProgress for oauth providers with active logins", async () => {
+    let releaseLogin: (() => void) | undefined;
+    (authStorage.login as ReturnType<typeof vi.fn>).mockImplementation(
+      (_provider: string, callbacks: { onAuth: (info: { url: string }) => void }) => {
+        callbacks.onAuth({ url: "https://auth.example.com/login" });
+        return new Promise<void>((resolve) => {
+          releaseLogin = resolve;
+        });
+      },
+    );
+
+    const app = buildApp();
+    const loginRequest = REQUEST(app, "POST", "/api/auth/login", JSON.stringify({ provider: "anthropic" }), {
+      "Content-Type": "application/json",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const statusRes = await GET(app, "/api/auth/status");
+    const anthropic = statusRes.body.providers.find((p: any) => p.id === "anthropic");
+    expect(anthropic.loginInProgress).toBe(true);
+
+    releaseLogin?.();
+    await loginRequest;
   });
 
   it("returns authenticated true for API-key provider when hasApiKey is true", async () => {
@@ -5047,6 +5072,76 @@ describe("POST /auth/login", () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toBe("OAuth failed");
+  });
+});
+
+describe("POST /auth/cancel", () => {
+  let store: TaskStore;
+  let authStorage: AuthStorageLike;
+
+  beforeEach(() => {
+    store = createMockStore();
+    authStorage = createMockAuthStorage();
+  });
+
+  function buildApp() {
+    const app = express();
+    app.use(express.json());
+    app.use("/api", createApiRoutes(store, { authStorage }));
+    return app;
+  }
+
+  it("cancels active login and allows immediate retry", async () => {
+    let releaseLogin: (() => void) | undefined;
+    (authStorage.login as ReturnType<typeof vi.fn>).mockImplementation(
+      (_provider: string, callbacks: { onAuth: (info: { url: string }) => void; signal: AbortSignal }) => {
+        callbacks.onAuth({ url: "https://auth.example.com/login" });
+        return new Promise<void>((resolve, reject) => {
+          releaseLogin = resolve;
+          callbacks.signal.addEventListener("abort", () => {
+            reject(new Error("cancelled"));
+          });
+        });
+      },
+    );
+
+    const app = buildApp();
+    const firstLogin = REQUEST(app, "POST", "/api/auth/login", JSON.stringify({ provider: "anthropic" }), {
+      "Content-Type": "application/json",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cancelRes = await REQUEST(app, "POST", "/api/auth/cancel", JSON.stringify({ provider: "anthropic" }), {
+      "Content-Type": "application/json",
+    });
+    expect(cancelRes.status).toBe(200);
+    expect(cancelRes.body).toEqual({ success: true, cancelled: true });
+
+    const retryRes = await REQUEST(app, "POST", "/api/auth/login", JSON.stringify({ provider: "anthropic" }), {
+      "Content-Type": "application/json",
+    });
+    expect(retryRes.status).toBe(200);
+
+    releaseLogin?.();
+    await firstLogin;
+  });
+
+  it("returns success when there is no active login", async () => {
+    const res = await REQUEST(buildApp(), "POST", "/api/auth/cancel", JSON.stringify({ provider: "anthropic" }), {
+      "Content-Type": "application/json",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, cancelled: false });
+  });
+
+  it("returns 400 when provider is missing", async () => {
+    const res = await REQUEST(buildApp(), "POST", "/api/auth/cancel", JSON.stringify({}), {
+      "Content-Type": "application/json",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("provider is required");
   });
 });
 

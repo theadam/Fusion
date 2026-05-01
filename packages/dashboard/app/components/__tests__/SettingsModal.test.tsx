@@ -13,6 +13,7 @@ const mockUpdateGlobalSettings = vi.fn();
 const mockFetchAuthStatus = vi.fn();
 const mockLoginProvider = vi.fn();
 const mockLogoutProvider = vi.fn();
+const mockCancelProviderLogin = vi.fn();
 const mockSaveApiKey = vi.fn();
 const mockFetchModels = vi.fn();
 const mockFetchCustomProviders = vi.fn();
@@ -62,6 +63,7 @@ vi.mock("../../api", async (importOriginal) => {
     fetchAuthStatus: (...args: unknown[]) => mockFetchAuthStatus(...args),
     loginProvider: (...args: unknown[]) => mockLoginProvider(...args),
     logoutProvider: (...args: unknown[]) => mockLogoutProvider(...args),
+    cancelProviderLogin: (...args: unknown[]) => mockCancelProviderLogin(...args),
     saveApiKey: (...args: unknown[]) => mockSaveApiKey(...args),
     fetchModels: (...args: unknown[]) => mockFetchModels(...args),
     fetchCustomProviders: (...args: unknown[]) => mockFetchCustomProviders(...args),
@@ -212,6 +214,7 @@ describe("SettingsModal", () => {
     mockCreateCustomProvider.mockResolvedValue({ provider: {} });
     mockUpdateCustomProvider.mockResolvedValue({ provider: {} });
     mockDeleteCustomProvider.mockResolvedValue(undefined);
+    mockCancelProviderLogin.mockResolvedValue({ success: true, cancelled: true });
     mockSaveApiKey.mockResolvedValue(undefined);
     mockTestNotification.mockResolvedValue({ success: true });
     mockFetchBackups.mockResolvedValue({ backups: [], totalSize: 0 });
@@ -858,6 +861,23 @@ describe("SettingsModal", () => {
         expect(scrollToSpy).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
       });
       expect(openSpy).toHaveBeenCalled();
+    });
+
+    it("shows cancel action for server-reported pending oauth login", async () => {
+      mockFetchAuthStatus.mockResolvedValue({
+        providers: [{ id: "github-copilot", name: "GitHub Copilot", authenticated: false, type: "oauth", loginInProgress: true }],
+      });
+
+      renderModal();
+      await waitForSettingsModalReady();
+
+      const copilotCard = screen.getByTestId("auth-provider-icon-github-copilot").closest(".auth-provider-card") as HTMLElement;
+      expect(within(copilotCard).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+      await userEvent.click(within(copilotCard).getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() => {
+        expect(mockCancelProviderLogin).toHaveBeenCalledWith("github-copilot");
+      });
     });
 
     it("scrolls settings content to top after API key save succeeds", async () => {

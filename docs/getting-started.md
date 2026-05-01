@@ -82,6 +82,8 @@ On first launch, Fusion opens an onboarding wizard with three steps:
 
 The wizard is dismissible and non-blocking. You can skip it and continue using Fusion, then reopen it later from **Settings → Authentication**.
 
+If a provider login gets stuck in progress (for example GitHub Copilot/device-code sign-in), use **Cancel** on the provider card in onboarding or in **Settings → Authentication**, then retry immediately — no dashboard restart is required.
+
 On startup, Fusion prints an `Open:` URL that includes a bearer token (for example, `http://localhost:4040/?token=fn_...`). Open that URL to sign in quickly.
 
 ## Create Your First Task

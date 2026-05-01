@@ -10,7 +10,7 @@ import {
   resolveTitleSummarizerSettingsModel,
 } from "@fusion/core";
 import type { Settings, GlobalSettings, ThemeMode, ColorTheme, ModelPreset, NtfyNotificationEvent, AgentPromptsConfig, ThinkingLevel } from "@fusion/core";
-import { fetchSettings, fetchSettingsByScope, updateSettings, updateGlobalSettings, fetchAuthStatus, loginProvider, logoutProvider, saveApiKey, clearApiKey, fetchModels, testNotification, fetchBackups, createBackup, exportSettings, importSettings, fetchMemoryFile, fetchMemoryFiles, saveMemoryFile, compactMemory, fetchGlobalConcurrency, updateGlobalConcurrency, installQmd, testMemoryRetrieval, triggerMemoryDreams, fetchGitRemotesDetailed, fetchDashboardHealth, checkForUpdates, fetchRemoteSettings, updateRemoteSettings, fetchRemoteStatus, installCloudflared, startRemoteTunnel, stopRemoteTunnel, killExternalTunnel, regenerateRemotePersistentToken, generateShortLivedRemoteToken, fetchRemoteQr, fetchRemoteUrl } from "../api";
+import { fetchSettings, fetchSettingsByScope, updateSettings, updateGlobalSettings, fetchAuthStatus, loginProvider, logoutProvider, cancelProviderLogin, saveApiKey, clearApiKey, fetchModels, testNotification, fetchBackups, createBackup, exportSettings, importSettings, fetchMemoryFile, fetchMemoryFiles, saveMemoryFile, compactMemory, fetchGlobalConcurrency, updateGlobalConcurrency, installQmd, testMemoryRetrieval, triggerMemoryDreams, fetchGitRemotesDetailed, fetchDashboardHealth, checkForUpdates, fetchRemoteSettings, updateRemoteSettings, fetchRemoteStatus, installCloudflared, startRemoteTunnel, stopRemoteTunnel, killExternalTunnel, regenerateRemotePersistentToken, generateShortLivedRemoteToken, fetchRemoteQr, fetchRemoteUrl } from "../api";
 import type { AuthProvider, ModelInfo, BackupListResponse, SettingsExportData, MemoryFileInfo, MemoryRetrievalTestResult, GitRemoteDetailed, RemoteSettings, RemoteStatus, UpdateCheckResponse } from "../api";
 import { useMemoryBackendStatus } from "../hooks/useMemoryBackendStatus";
 import { useOverlayDismiss } from "../hooks/useOverlayDismiss";
@@ -863,6 +863,23 @@ export function SettingsModal({
     };
   }, [activeSection, loadAuthStatus]);
 
+  useEffect(() => {
+    if (activeSection !== "authentication") {
+      return;
+    }
+
+    const hasPendingServerLogin = authProviders.some((provider) => provider.type !== "api_key" && provider.loginInProgress);
+    if (!hasPendingServerLogin) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      void loadAuthStatus();
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [activeSection, authProviders, loadAuthStatus]);
+
   const scrollSettingsToTop = useCallback(() => {
     settingsContentRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
@@ -913,7 +930,14 @@ export function SettingsModal({
         }
       }, 2000);
     } catch (err) {
-      addToast(getErrorMessage(err) || "Login failed", "error");
+      const message = getErrorMessage(err) || "Login failed";
+      const isConflict = message.includes("already in progress") || (typeof err === "object" && err !== null && "status" in err && (err as { status?: number }).status === 409);
+      if (isConflict) {
+        addToast("Login already in progress. You can cancel it and retry.", "warning");
+        await loadAuthStatus();
+      } else {
+        addToast(message, "error");
+      }
       setAuthActionInProgress(null);
       setLoginInstructions((prev) => {
         if (!(providerId in prev)) {
@@ -924,7 +948,32 @@ export function SettingsModal({
         return next;
       });
     }
-  }, [addToast, scrollSettingsToTop]);
+  }, [addToast, loadAuthStatus, scrollSettingsToTop]);
+
+  const handleCancelLogin = useCallback(async (providerId: string) => {
+    setAuthActionInProgress(providerId);
+    try {
+      await cancelProviderLogin(providerId);
+      setLoginInstructions((prev) => {
+        if (!(providerId in prev)) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[providerId];
+        return next;
+      });
+      await loadAuthStatus();
+      addToast("Login cancelled", "success");
+    } catch (err) {
+      addToast(getErrorMessage(err) || "Failed to cancel login", "error");
+    } finally {
+      setAuthActionInProgress(null);
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    }
+  }, [addToast, loadAuthStatus]);
 
   const handleLogout = useCallback(async (providerId: string) => {
     setAuthActionInProgress(providerId);
@@ -4894,6 +4943,15 @@ export function SettingsModal({
                               <button className="btn btn-sm" disabled>
                                 Logging out…
                               </button>
+                            ) : provider.loginInProgress ? (
+                              <div className="auth-provider-actions-row">
+                                <button className="btn btn-sm" disabled>
+                                  Waiting for login…
+                                </button>
+                                <button className="btn btn-sm" onClick={() => handleCancelLogin(provider.id)}>
+                                  Cancel
+                                </button>
+                              </div>
                             ) : (
                               <button
                                 className="btn btn-sm"
@@ -4965,6 +5023,15 @@ export function SettingsModal({
                               <button className="btn btn-sm" disabled>
                                 Waiting for login…
                               </button>
+                            ) : provider.loginInProgress ? (
+                              <div className="auth-provider-actions-row">
+                                <button className="btn btn-sm" disabled>
+                                  Waiting for login…
+                                </button>
+                                <button className="btn btn-sm" onClick={() => handleCancelLogin(provider.id)}>
+                                  Cancel
+                                </button>
+                              </div>
                             ) : (
                               <button
                                 className="btn btn-primary btn-sm"
@@ -4973,7 +5040,7 @@ export function SettingsModal({
                                 Login
                               </button>
                             )}
-                            {loginInstructions[provider.id] && (
+                            {loginInstructions[provider.id] && (provider.loginInProgress || authActionInProgress === provider.id) && (
                               <LoginInstructions
                                 instructions={loginInstructions[provider.id]}
                                 data-testid={`auth-login-instructions-${provider.id}`}

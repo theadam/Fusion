@@ -1236,6 +1236,8 @@ export interface AuthProvider {
   id: string;
   name: string;
   authenticated: boolean;
+  /** True when the server currently has an active OAuth login flow for this provider. */
+  loginInProgress?: boolean;
   /**
    * How this provider authenticates / is activated.
    * - "oauth": OAuth flow (user clicks Login → redirect)
@@ -1648,6 +1650,14 @@ export function loginProvider(provider: string): Promise<{ url: string; instruct
 /** Logout from a provider, removing stored credentials. */
 export function logoutProvider(provider: string): Promise<{ success: boolean }> {
   return api<{ success: boolean }>("/auth/logout", {
+    method: "POST",
+    body: JSON.stringify({ provider }),
+  });
+}
+
+/** Cancel an in-progress OAuth login attempt for a provider. */
+export function cancelProviderLogin(provider: string): Promise<{ success: boolean; cancelled: boolean }> {
+  return api<{ success: boolean; cancelled: boolean }>("/auth/cancel", {
     method: "POST",
     body: JSON.stringify({ provider }),
   });

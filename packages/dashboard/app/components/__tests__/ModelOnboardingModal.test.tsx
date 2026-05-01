@@ -9,6 +9,7 @@ import type { Task } from "@fusion/core";
 const mockFetchAuthStatus = vi.fn();
 const mockLoginProvider = vi.fn();
 const mockLogoutProvider = vi.fn();
+const mockCancelProviderLogin = vi.fn();
 const mockSaveApiKey = vi.fn();
 const mockClearApiKey = vi.fn();
 const mockFetchModels = vi.fn();
@@ -22,6 +23,7 @@ vi.mock("../../api", () => ({
   fetchAuthStatus: (...args: unknown[]) => mockFetchAuthStatus(...args),
   loginProvider: (...args: unknown[]) => mockLoginProvider(...args),
   logoutProvider: (...args: unknown[]) => mockLogoutProvider(...args),
+  cancelProviderLogin: (...args: unknown[]) => mockCancelProviderLogin(...args),
   saveApiKey: (...args: unknown[]) => mockSaveApiKey(...args),
   clearApiKey: (...args: unknown[]) => mockClearApiKey(...args),
   fetchModels: (...args: unknown[]) => mockFetchModels(...args),
@@ -176,6 +178,7 @@ beforeEach(() => {
   mockCreateCustomProvider.mockResolvedValue({ provider: {} });
   mockLoginProvider.mockResolvedValue({ url: "https://auth.example.com/login" });
   mockLogoutProvider.mockResolvedValue({ success: true });
+  mockCancelProviderLogin.mockResolvedValue({ success: true, cancelled: true });
   mockSaveApiKey.mockResolvedValue({ success: true });
   mockClearApiKey.mockResolvedValue({ success: true });
   // Default to no persisted state (start at ai-setup)
@@ -3042,12 +3045,30 @@ describe("ModelOnboardingModal", () => {
       fireEvent.click(screen.getByText("Cancel"));
 
       await waitFor(() => {
+        expect(mockCancelProviderLogin).toHaveBeenCalledWith("anthropic");
         // Login button should be shown again
         expect(screen.getByText("Login")).toBeTruthy();
         // Waiting for login should no longer be shown
         expect(screen.queryByText("Waiting for login…")).toBeNull();
         // Cancel button should no longer be shown
         expect(screen.queryByText("Cancel")).toBeNull();
+      });
+    });
+
+    it("shows cancel action for server-reported pending login", async () => {
+      mockFetchAuthStatus.mockResolvedValue({
+        providers: [{ id: "anthropic", name: "Anthropic", authenticated: false, type: "oauth", loginInProgress: true }],
+      });
+
+      render(<ModelOnboardingModal onComplete={vi.fn()} addToast={vi.fn()} projectId="proj_123" />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Waiting for login…")).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByText("Cancel"));
+      await waitFor(() => {
+        expect(mockCancelProviderLogin).toHaveBeenCalledWith("anthropic");
       });
     });
 
@@ -3072,8 +3093,34 @@ describe("ModelOnboardingModal", () => {
       fireEvent.click(screen.getByText("Cancel"));
 
       await waitFor(() => {
+        expect(mockCancelProviderLogin).toHaveBeenCalledWith("anthropic");
         expect(screen.queryByTestId("onboarding-login-instructions-anthropic")).toBeNull();
       });
+    });
+
+    it("does not show cancel action while logout is in progress", async () => {
+      let resolveLogout: (() => void) | null = null;
+      mockFetchAuthStatus.mockResolvedValueOnce({
+        providers: [{ id: "anthropic", name: "Anthropic", authenticated: true, type: "oauth" }],
+      });
+      mockLogoutProvider.mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveLogout = resolve;
+      }));
+
+      render(<ModelOnboardingModal onComplete={vi.fn()} addToast={vi.fn()} projectId="proj_123" />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Logout")).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByText("Logout"));
+
+      await waitFor(() => {
+        expect(screen.getByText("Logging out…")).toBeTruthy();
+      });
+      expect(screen.queryByText("Cancel")).toBeNull();
+
+      resolveLogout?.();
     });
 
     it("shows GitHub login instructions during connect attempts", async () => {
@@ -3105,6 +3152,7 @@ describe("ModelOnboardingModal", () => {
       fireEvent.click(screen.getByText("Cancel"));
 
       await waitFor(() => {
+        expect(mockCancelProviderLogin).toHaveBeenCalledWith("github");
         expect(screen.queryByTestId("onboarding-login-instructions-github")).toBeNull();
       });
     });
@@ -3148,7 +3196,7 @@ describe("ModelOnboardingModal", () => {
 
       await waitFor(() => {
         expect(addToast).toHaveBeenCalledWith(
-          "Login already in progress. Please wait or cancel the current attempt.",
+          "Login already in progress. Cancel it to retry.",
           "warning"
         );
       });

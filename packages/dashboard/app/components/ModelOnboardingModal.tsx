@@ -8,6 +8,7 @@ import {
   fetchGlobalSettings,
   loginProvider,
   logoutProvider,
+  cancelProviderLogin,
   saveApiKey,
   clearApiKey,
   fetchModels,
@@ -738,11 +739,26 @@ export function ModelOnboardingModal({
         const next: Record<string, string> = {};
         for (const [providerId, instructions] of Object.entries(prev)) {
           const provider = providers.find((candidate) => candidate.id === providerId);
-          if (provider && !provider.authenticated) {
+          if (provider && !provider.authenticated && provider.loginInProgress) {
             next[providerId] = instructions;
           }
         }
         return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+      });
+      setLoginOutcomes((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const [providerId, outcome] of Object.entries(prev)) {
+          if (outcome !== "pending") {
+            continue;
+          }
+          const provider = providers.find((candidate) => candidate.id === providerId);
+          if (!provider?.loginInProgress) {
+            delete next[providerId];
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
       });
       // Remove from skippedProviders when a provider becomes authenticated
       setSkippedProviders((prev) => {
@@ -795,10 +811,22 @@ export function ModelOnboardingModal({
     aiSetupReturnRef.current = step !== "ai-setup";
   }, [step, loadAuthStatus, loadCustomProviders]);
 
+  useEffect(() => {
+    const hasPendingLogin = authProviders.some((provider) => provider.loginInProgress);
+    if (!hasPendingLogin) {
+      return;
+    }
+    const interval = setInterval(() => {
+      void loadAuthStatus();
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [authProviders, loadAuthStatus]);
+
   // OAuth status for the GitHub provider (used for OAuth-specific controls like Connect/Disconnect).
   const githubProvider = authProviders.find((p) => p.id === "github");
   const hasGithubProvider = !!githubProvider;
   const isGithubAuthenticated = githubProvider?.authenticated ?? false;
+  const isGithubLoginInProgress = githubProvider?.loginInProgress ?? false;
   const isGithubCliAuthenticated = ghCliStatus?.authenticated ?? false;
   // Effective GitHub readiness (matches useSetupReadiness): OAuth OR authenticated gh CLI session.
   const isGitHubReady = isGithubAuthenticated || isGithubCliAuthenticated;
@@ -1132,8 +1160,9 @@ export function ModelOnboardingModal({
           (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 409);
 
         if (isConcurrentLogin) {
-          addToast("Login already in progress. Please wait or cancel the current attempt.", "warning");
-          setLoginOutcomes((prev) => ({ ...prev, [providerId]: "failed" }));
+          addToast("Login already in progress. Cancel it to retry.", "warning");
+          setLoginOutcomes((prev) => ({ ...prev, [providerId]: "pending" }));
+          void loadAuthStatus();
         } else {
           addToast(err instanceof Error ? err.message : "Login failed", "error");
           setLoginOutcomes((prev) => ({ ...prev, [providerId]: "failed" }));
@@ -1149,27 +1178,37 @@ export function ModelOnboardingModal({
         });
       }
     },
-    [addToast, setGitHubSkippedState],
+    [addToast, loadAuthStatus, setGitHubSkippedState],
   );
 
   // Cancellation handler for in-progress logins
-  const handleCancelLogin = useCallback((providerId: string) => {
+  const handleCancelLogin = useCallback(async (providerId: string) => {
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
-    setAuthActionInProgress(null);
+    setAuthActionInProgress(providerId);
     pollCountRef.current = 0;
-    setLoginOutcomes((prev) => ({ ...prev, [providerId]: "cancelled" }));
-    setLoginInstructions((prev) => {
-      if (!(providerId in prev)) {
-        return prev;
-      }
-      const next = { ...prev };
-      delete next[providerId];
-      return next;
-    });
-  }, []);
+
+    try {
+      await cancelProviderLogin(providerId);
+      await loadAuthStatus();
+      setLoginOutcomes((prev) => ({ ...prev, [providerId]: "cancelled" }));
+      addToast("Login cancelled", "success");
+    } catch (err) {
+      addToast(getErrorMessage(err) || "Failed to cancel login", "error");
+    } finally {
+      setAuthActionInProgress(null);
+      setLoginInstructions((prev) => {
+        if (!(providerId in prev)) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[providerId];
+        return next;
+      });
+    }
+  }, [addToast, loadAuthStatus]);
 
   // API key input update handler
   const handleApiKeyInputChange = useCallback((providerId: string, value: string) => {
@@ -1753,15 +1792,31 @@ export function ModelOnboardingModal({
         </div>
         <div className="onboarding-provider-card__actions">
           {authActionInProgress === provider.id ? (
+            provider.authenticated ? (
+              <button className="btn btn-sm" disabled>
+                Logging out…
+              </button>
+            ) : (
+              <>
+                <button className="btn btn-sm" disabled>
+                  Waiting for login…
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => void handleCancelLogin(provider.id)}
+                >
+                  Cancel
+                </button>
+              </>
+            )
+          ) : provider.loginInProgress ? (
             <>
               <button className="btn btn-sm" disabled>
-                {provider.authenticated
-                  ? "Logging out…"
-                  : "Waiting for login…"}
+                Waiting for login…
               </button>
               <button
                 className="btn btn-sm"
-                onClick={() => handleCancelLogin(provider.id)}
+                onClick={() => void handleCancelLogin(provider.id)}
               >
                 Cancel
               </button>
@@ -1782,7 +1837,7 @@ export function ModelOnboardingModal({
             </button>
           )}
         </div>
-        {authActionInProgress === provider.id && loginInstructions[provider.id] && (
+        {(authActionInProgress === provider.id || provider.loginInProgress) && loginInstructions[provider.id] && (
           <LoginInstructions
             instructions={loginInstructions[provider.id]}
             data-testid={`onboarding-login-instructions-${provider.id}`}
@@ -2192,7 +2247,7 @@ export function ModelOnboardingModal({
                         : "Continue without GitHub →"}
                     </button>
                     {isGitHubReadyViaCli && (
-                      authActionInProgress === "github" ? (
+                      (authActionInProgress === "github" || isGithubLoginInProgress) ? (
                         <button className="btn btn-sm" disabled>
                           <Loader2 size={14} className="onboarding-spinner" />
                           Waiting for OAuth login…
@@ -2208,7 +2263,7 @@ export function ModelOnboardingModal({
                       )
                     )}
                   </div>
-                  {isGitHubReadyViaCli && authActionInProgress === "github" && loginInstructions.github && (
+                  {isGitHubReadyViaCli && (authActionInProgress === "github" || isGithubLoginInProgress) && loginInstructions.github && (
                     <LoginInstructions
                       instructions={loginInstructions.github}
                       data-testid="onboarding-login-instructions-github"
@@ -2245,14 +2300,14 @@ export function ModelOnboardingModal({
 
                   {(githubStatus === "not-connected" || githubStatus === "pending") && (
                     <div className="onboarding-github-connect-cta" data-testid="onboarding-github-connect-cta">
-                      {authActionInProgress === "github" ? (
+                      {(authActionInProgress === "github" || isGithubLoginInProgress) ? (
                         <div className="onboarding-github-connect-actions">
                           <button className="btn btn-sm" disabled>
                             Waiting for login…
                           </button>
                           <button
                             className="btn btn-sm"
-                            onClick={() => handleCancelLogin("github")}
+                            onClick={() => void handleCancelLogin("github")}
                           >
                             Cancel
                           </button>
@@ -2266,7 +2321,7 @@ export function ModelOnboardingModal({
                           Connect
                         </button>
                       )}
-                      {authActionInProgress === "github" && loginInstructions.github && (
+                      {(authActionInProgress === "github" || isGithubLoginInProgress) && loginInstructions.github && (
                         <LoginInstructions
                           instructions={loginInstructions.github}
                           data-testid="onboarding-login-instructions-github"

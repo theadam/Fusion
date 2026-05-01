@@ -120,11 +120,19 @@ export const registerAuthRoutes: ApiRouteRegistrar = (ctx) => {
       const storage = getAuthStorage();
       storage.reload();
       const oauthProviders = storage.getOAuthProviders();
-      const providers: { id: string; name: string; authenticated: boolean; type: "oauth" | "api_key" | "cli"; keyHint?: string }[] = oauthProviders.map((p) => ({
+      const providers: {
+        id: string;
+        name: string;
+        authenticated: boolean;
+        type: "oauth" | "api_key" | "cli";
+        keyHint?: string;
+        loginInProgress?: boolean;
+      }[] = oauthProviders.map((p) => ({
         id: p.id,
         name: p.name,
         authenticated: storage.hasAuth(p.id),
         type: "oauth" as const,
+        loginInProgress: loginInProgress.has(p.id),
       }));
 
       // Include API-key-backed providers if supported
@@ -417,6 +425,36 @@ export const registerAuthRoutes: ApiRouteRegistrar = (ctx) => {
       // Clean up on error
       const provider = req.body?.provider;
       if (provider) loginInProgress.delete(provider);
+      rethrowAsApiError(err);
+    }
+  });
+
+  /**
+   * POST /api/auth/cancel
+   * Cancel an in-progress OAuth login for a provider.
+   * Body: { provider: string }
+   * Response: { success: true, cancelled: boolean }
+   */
+  router.post("/auth/cancel", (req, res) => {
+    try {
+      const { provider } = req.body;
+      if (!provider || typeof provider !== "string") {
+        throw badRequest("provider is required");
+      }
+
+      const activeLogin = loginInProgress.get(provider);
+      if (!activeLogin) {
+        res.json({ success: true, cancelled: false });
+        return;
+      }
+
+      loginInProgress.delete(provider);
+      activeLogin.abort();
+      res.json({ success: true, cancelled: true });
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        throw err;
+      }
       rethrowAsApiError(err);
     }
   });

@@ -1238,6 +1238,11 @@
   color: var(--color-error);
   padding-right: 4px;
 }
+.auth-provider-actions-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
 
 /* === Key Hint === */
 .auth-key-hint {
@@ -1558,6 +1563,11 @@
 
   .auth-provider-header > div:not(.auth-provider-info):not(.auth-apikey-section) {
     margin-left: auto;
+  }
+
+  .auth-provider-actions-row {
+    width: 100%;
+    justify-content: flex-end;
   }
 
   .auth-provider-info {
