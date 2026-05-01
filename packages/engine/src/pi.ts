@@ -34,7 +34,7 @@ import {
   type AgentSession,
   type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
-import { getEnabledPiExtensionPaths, getFusionAgentDir, getLegacyPiAgentDir, reconcileClaudeCliPaths, resolvePiExtensionProjectRoot } from "@fusion/core";
+import { getEnabledPiExtensionPaths, getFusionAgentDir, getLegacyPiAgentDir, reconcileClaudeCliPaths, reconcileDroidCliPaths, resolvePiExtensionProjectRoot } from "@fusion/core";
 import {
   resolveSessionSkills,
   createSkillsOverrideFromSelection,
@@ -731,6 +731,29 @@ function resolveVendoredClaudeCliEntry(): string | null {
   }
 }
 
+/**
+ * Resolve the absolute path to Fusion's vendored `@fusion/droid-cli`
+ * extension entry. Used by `registerExtensionProviders` to ensure the
+ * vendored extension always wins over any externally-installed `droid-cli`.
+ */
+function resolveVendoredDroidCliEntry(): string | null {
+  try {
+    const require_ = createRequire(import.meta.url);
+    const pkgJsonPath = require_.resolve("@fusion/droid-cli/package.json");
+    const pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as {
+      pi?: { extensions?: unknown };
+    };
+    const extensions = pkgJson.pi?.extensions;
+    if (!Array.isArray(extensions) || extensions.length === 0) return null;
+    const entry = extensions[0];
+    if (typeof entry !== "string" || entry.length === 0) return null;
+    const path = resolve(dirname(pkgJsonPath), entry);
+    return existsSync(path) ? path : null;
+  } catch {
+    return null;
+  }
+}
+
 async function registerExtensionProviders(cwd: string, modelRegistry: ModelRegistry): Promise<void> {
   try {
     const agentDir = getPackageManagerAgentDir();
@@ -755,8 +778,17 @@ async function registerExtensionProviders(cwd: string, modelRegistry: ModelRegis
       vendoredClaudeCli,
     );
 
-    const extensionsResult = await discoverAndLoadExtensions(
+    // Prefer Fusion's vendored `@fusion/droid-cli` over any external
+    // `droid-cli` install. Side-by-side loading of two extensions that
+    // register the same provider name produces unpredictable winners.
+    const vendoredDroidCli = resolveVendoredDroidCliEntry();
+    const doubleReconciledPaths = reconcileDroidCliPaths(
       reconciledPaths,
+      vendoredDroidCli,
+    );
+
+    const extensionsResult = await discoverAndLoadExtensions(
+      doubleReconciledPaths,
       cwd,
       join(resolvePiExtensionProjectRoot(cwd), ".fusion", "disabled-auto-extension-discovery"),
     );

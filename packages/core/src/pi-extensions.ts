@@ -276,6 +276,42 @@ export function reconcileClaudeCliPaths(
   return filtered;
 }
 
+/**
+ * Heuristic: does this extension path look like an external (non-Fusion)
+ * `droid-cli` install? We match any path with a directory segment named
+ * exactly `droid-cli`, except for the explicit vendored path that callers
+ * pass in (which always wins).
+ */
+function isExternalDroidCliPath(p: string, vendoredPath: string | null): boolean {
+  if (vendoredPath && p === vendoredPath) return false;
+  return /(^|[/\\])droid-cli([/\\]|$)/i.test(p);
+}
+
+/**
+ * Reconcile the assembled pi-extension load list so Fusion's vendored
+ * `@fusion/droid-cli` always wins over any externally-installed
+ * `droid-cli` (e.g. a stale `npm install -g droid-cli` left in
+ * `/opt/homebrew/lib/node_modules`, or `npm:droid-cli` in agent
+ * settings).
+ *
+ * Side-by-side loading of two extensions that register the same
+ * provider name (`droid-cli`) produces unpredictable winners
+ * depending on load order.
+ */
+export function reconcileDroidCliPaths(
+  paths: readonly string[],
+  vendoredPath: string | null,
+): string[] {
+  if (!vendoredPath) {
+    return [...paths];
+  }
+  const filtered = paths.filter((p) => !isExternalDroidCliPath(p, vendoredPath));
+  if (!filtered.includes(vendoredPath)) {
+    return [vendoredPath, ...filtered];
+  }
+  return filtered;
+}
+
 function getDisplayPathWithinRoot(root: string, targetPath: string): string | null {
   const usesWindowsPaths = /^[A-Za-z]:[\\/]/.test(root) || /^[A-Za-z]:[\\/]/.test(targetPath) || root.includes("\\") || targetPath.includes("\\");
   const pathApi = usesWindowsPaths ? win32 : { relative, isAbsolute, sep };
