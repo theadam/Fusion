@@ -72,6 +72,18 @@ fn task archive FN-001
 fn task unarchive FN-001
 ```
 
+### Dependency reconciliation guidance
+
+When a task was created to resolve a temporary failure state in another task (for example, a preserved `in-review/failed` merge condition), its dependency contract may become stale after recovery.
+
+Use supported TaskStore/API paths to reconcile safely:
+
+- Remove/replace stale dependencies through task update APIs (do not hand-edit `task.json`/SQLite)
+- Add a single comment/log entry explaining why the dependency changed
+- Keep downstream blockers coherent (only tasks that still truly depend on unfinished work should remain blocked)
+
+Completion gating treats dependencies as resolved only when the dependency task is in `done`, `in-review`, or `archived`.
+
 ## Task Execution Modes
 
 Each task has an execution mode that controls how the executor agent approaches the task:
