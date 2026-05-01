@@ -963,6 +963,134 @@ describe("PlanningModeModal", () => {
   });
 
   describe("Conversation history", () => {
+    it("hides completed-session Q&A by default behind a summary disclosure", async () => {
+      const resumedSummary: PlanningSummary = {
+        title: "Summary with hidden history",
+        description: "Recovered summary description",
+        suggestedSize: "M",
+        suggestedDependencies: [],
+        keyDeliverables: ["Deliverable A"],
+      };
+
+      const restoredHistory = [
+        {
+          question: {
+            id: "q1",
+            type: "single_select",
+            question: "What scope do you need?",
+            options: [
+              { id: "small", label: "Small" },
+              { id: "medium", label: "Medium" },
+            ],
+          },
+          response: { q1: "medium" },
+          thinkingOutput: "Reasoning for scope question",
+        },
+      ];
+
+      mockFetchAiSession.mockResolvedValueOnce({
+        id: "session-complete-with-history",
+        type: "planning",
+        status: "complete",
+        title: resumedSummary.title,
+        inputPayload: JSON.stringify({ initialPlan: "Build planning history restore" }),
+        conversationHistory: JSON.stringify(restoredHistory),
+        currentQuestion: null,
+        result: JSON.stringify(resumedSummary),
+        thinkingOutput: "",
+        error: null,
+        projectId: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+          resumeSessionId="session-complete-with-history"
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Planning Complete!")).toBeDefined();
+      });
+
+      expect(screen.getByRole("button", { name: "Show user Q&A" })).toBeDefined();
+      expect(screen.queryByTestId("conversation-history")).toBeNull();
+      expect(screen.queryByText("What scope do you need?")).toBeNull();
+      expect(screen.queryByText("Medium")).toBeNull();
+    });
+
+    it("reveals completed-session Q&A when summary disclosure is expanded", async () => {
+      const resumedSummary: PlanningSummary = {
+        title: "Summary with expandable history",
+        description: "Recovered summary description",
+        suggestedSize: "M",
+        suggestedDependencies: [],
+        keyDeliverables: ["Deliverable A"],
+      };
+
+      const restoredHistory = [
+        {
+          question: {
+            id: "q1",
+            type: "single_select",
+            question: "What scope do you need?",
+            options: [
+              { id: "small", label: "Small" },
+              { id: "medium", label: "Medium" },
+            ],
+          },
+          response: { q1: "medium" },
+          thinkingOutput: "Reasoning for scope question",
+        },
+      ];
+
+      mockFetchAiSession.mockResolvedValueOnce({
+        id: "session-complete-with-history-2",
+        type: "planning",
+        status: "complete",
+        title: resumedSummary.title,
+        inputPayload: JSON.stringify({ initialPlan: "Build planning history restore" }),
+        conversationHistory: JSON.stringify(restoredHistory),
+        currentQuestion: null,
+        result: JSON.stringify(resumedSummary),
+        thinkingOutput: "",
+        error: null,
+        projectId: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+          resumeSessionId="session-complete-with-history-2"
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Planning Complete!")).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Show user Q&A" }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("conversation-history")).toBeDefined();
+      });
+
+      expect(screen.getByText("What scope do you need?")).toBeDefined();
+      expect(within(screen.getByTestId("conversation-history")).getByText("Medium")).toBeDefined();
+    });
+
     it("restores all persisted Q&A pairs when resuming a session", async () => {
       mockConnectPlanningStream.mockImplementationOnce(() => ({
         close: vi.fn(),

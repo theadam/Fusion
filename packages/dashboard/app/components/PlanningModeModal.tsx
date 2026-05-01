@@ -36,6 +36,7 @@ import {
 import { Lightbulb, X, Loader2, CheckCircle, ArrowLeft, ArrowRight, Sparkles, ListTree, GripVertical, ArrowUp, ArrowDown, Plus, Trash2, RefreshCw, Lock, ChevronLeft, MessageSquarePlus, AlertCircle, Clock, HelpCircle, StopCircle, Archive, ArchiveRestore } from "lucide-react";
 import { CustomModelDropdown } from "./CustomModelDropdown";
 import { ConversationHistory } from "./ConversationHistory";
+import { OnboardingDisclosure } from "./OnboardingDisclosure";
 import { useSessionLock } from "../hooks/useSessionLock";
 import { useAiSessionSync } from "../hooks/useAiSessionSync";
 import { getSessionTabId } from "../utils/getSessionTabId";
@@ -1731,10 +1732,10 @@ function SummaryView({
     <div className="planning-summary">
       <div className="planning-view-scroll planning-summary-scroll">
         {historyEntries.length > 0 && (
-          <>
+          <OnboardingDisclosure summary="Show user Q&A" className="planning-summary-qa-disclosure">
             <ConversationHistory entries={historyEntries} />
             <div className="conversation-separator" />
-          </>
+          </OnboardingDisclosure>
         )}
 
         <div className="planning-summary-header">

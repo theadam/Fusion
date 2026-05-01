@@ -9987,9 +9987,9 @@ describe("Planning Mode Routes", () => {
         expect(res.body.sessionId).toBeDefined();
       });
 
-      it("enforces rate limiting (5 sessions per hour per IP)", async () => {
-        // Create 5 sessions (should succeed)
-        for (let i = 0; i < 5; i++) {
+      it("enforces rate limiting (1000 sessions per hour per IP)", async () => {
+        // Create 1000 sessions (should succeed)
+        for (let i = 0; i < 1000; i++) {
           const res = await REQUEST(
             buildApp(),
             "POST",
@@ -10000,12 +10000,12 @@ describe("Planning Mode Routes", () => {
           expect(res.status).toBe(201);
         }
 
-        // 6th session should be rate limited
+        // 1001st session should be rate limited
         const res = await REQUEST(
           buildApp(),
           "POST",
           "/api/planning/start",
-          JSON.stringify({ initialPlan: "Plan 6" }),
+          JSON.stringify({ initialPlan: "Plan 1001" }),
           { "Content-Type": "application/json" }
         );
 

@@ -2317,7 +2317,7 @@ describe("Planning Mode API", () => {
 
     it("throws on rate limit error", async () => {
       globalThis.fetch = vi.fn().mockReturnValue(
-        mockFetchResponse(false, { error: "Rate limit exceeded. Maximum 5 planning sessions per hour." }, 429)
+        mockFetchResponse(false, { error: "Rate limit exceeded. Maximum 1000 planning sessions per hour." }, 429)
       );
 
       await expect(startPlanning("Build something")).rejects.toThrow("Rate limit exceeded");

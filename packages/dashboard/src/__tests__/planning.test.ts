@@ -311,12 +311,12 @@ describe("planning module", () => {
 
     it("enforces rate limiting", async () => {
       const mockIp = getUniqueIp();
-      // Create max sessions (5 per hour)
-      for (let i = 0; i < 5; i++) {
+      // Create max sessions (1000 per hour)
+      for (let i = 0; i < 1000; i++) {
         await createSession(mockIp, `${initialPlan} ${i}`, undefined, TEST_ROOT_DIR);
       }
 
-      // 6th session should fail
+      // 1001st session should fail
       await expect(createSession(mockIp, initialPlan, undefined, TEST_ROOT_DIR)).rejects.toThrow(RateLimitError);
     });
 
@@ -325,7 +325,7 @@ describe("planning module", () => {
       try {
         const mockIp = getUniqueIp();
         // Create max sessions
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 1000; i++) {
           await createSession(mockIp, `${initialPlan} ${i}`, undefined, TEST_ROOT_DIR);
         }
 

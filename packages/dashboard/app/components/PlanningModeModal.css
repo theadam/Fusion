@@ -776,6 +776,14 @@
   gap: 20px;
 }
 
+.planning-summary-qa-disclosure {
+  margin-top: 0;
+}
+
+.planning-summary-qa-disclosure .onboarding-disclosure-content {
+  padding-inline-start: 0;
+}
+
 .planning-summary-form {
   display: flex;
   flex-direction: column;

@@ -213,7 +213,7 @@ export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
 /** Max planning sessions per IP per hour */
-const MAX_SESSIONS_PER_IP_PER_HOUR = 5;
+const MAX_SESSIONS_PER_IP_PER_HOUR = 1000;
 
 /** Rate limiting window in milliseconds (1 hour) */
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;

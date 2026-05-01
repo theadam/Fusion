@@ -1599,7 +1599,7 @@ export async function runTaskPlan(initialPlanArg?: string, yesFlag = false, proj
     clearThinking();
 
     if (err instanceof RateLimitError) {
-      console.error("\n  Rate limit exceeded. Maximum 5 planning sessions per hour.\n");
+      console.error("\n  Rate limit exceeded. Maximum 1000 planning sessions per hour.\n");
       process.exit(1);
     }
 
