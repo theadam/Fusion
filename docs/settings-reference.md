@@ -189,6 +189,7 @@ Defaults from `DEFAULT_PROJECT_SETTINGS`; key scope from `PROJECT_SETTINGS_KEYS`
 | `verificationFixRetries` | `number` | `3` | Auto-fix retry attempts when verification fails during merge. |
 | `buildTimeoutMs` | `number` | `300000` | Build timeout in milliseconds (5 minutes). |
 | `requirePlanApproval` | `boolean` | `false` | Require manual approval before planning → todo. |
+| `completionDocumentationMode` | `"off" \| "changeset" \| "changelog"` | `"off"` | Controls triage prompt injection for release-note artifacts in future task specs. `"changeset"` requires `.changeset/*.md` workflow guidance; `"changelog"` requires updating an existing changelog file (without inventing a new one); `"off"` disables this automation. |
 | `specStalenessEnabled` | `boolean` | `false` | Enforce automatic re-planning for stale plans. |
 | `specStalenessMaxAgeMs` | `number` | `21600000` | Spec staleness threshold in ms (6 hours). |
 | `taskStuckTimeoutMs` | `number` | `undefined` | Inactivity timeout for stuck-task recovery. |

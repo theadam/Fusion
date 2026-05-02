@@ -181,6 +181,7 @@ export const DEFAULT_PROJECT_SETTINGS = {
   validatorFallbackModelId: undefined,
   modelPresets: [],
   autoSelectModelPreset: false,
+  completionDocumentationMode: "off",
   defaultPresetBySize: {},
   autoResolveConflicts: true,
   smartConflictResolution: true,

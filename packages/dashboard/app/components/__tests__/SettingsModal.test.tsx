@@ -474,6 +474,42 @@ describe("SettingsModal", () => {
     });
   });
 
+  describe("Project General", () => {
+    it("renders completion documentation automation control", async () => {
+      renderModal({ initialSection: "general" });
+      await waitForSettingsModalReady();
+
+      const select = screen.getByLabelText("Completion Documentation Automation") as HTMLSelectElement;
+      expect(select).toBeInTheDocument();
+      expect(select.value).toBe("off");
+      expect(screen.getByRole("option", { name: "Require changeset (.changeset/*.md)" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Require changelog update (existing changelog)" })).toBeInTheDocument();
+    });
+
+    it("saves completion documentation mode through project settings", async () => {
+      renderModal({ initialSection: "general" });
+      await waitForSettingsModalReady();
+
+      await userEvent.selectOptions(
+        screen.getByLabelText("Completion Documentation Automation"),
+        "changeset",
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => {
+        expect(mockUpdateSettings).toHaveBeenCalled();
+      });
+
+      const projectPayload = mockUpdateSettings.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(projectPayload.completionDocumentationMode).toBe("changeset");
+
+      if (mockUpdateGlobalSettings.mock.calls.length > 0) {
+        const globalPayload = mockUpdateGlobalSettings.mock.calls[0]?.[0] as Record<string, unknown>;
+        expect(globalPayload.completionDocumentationMode).toBeUndefined();
+      }
+    });
+  });
+
   describe("Appearance", () => {
     it("renders dashboard font size options with saved value", async () => {
       const onDashboardFontScaleChange = vi.fn();

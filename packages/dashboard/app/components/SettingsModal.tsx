@@ -1825,6 +1825,27 @@ export function SettingsModal({
               <small>When enabled, AI-generated task specifications require manual approval before moving to Todo</small>
             </div>
             <div className="form-group">
+              <label htmlFor="completionDocumentationMode">Completion Documentation Automation</label>
+              <select
+                id="completionDocumentationMode"
+                value={form.completionDocumentationMode || "off"}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    completionDocumentationMode: e.target.value as "off" | "changeset" | "changelog",
+                  }))
+                }
+              >
+                <option value="off">Off</option>
+                <option value="changeset">Require changeset (.changeset/*.md)</option>
+                <option value="changelog">Require changelog update (existing changelog)</option>
+              </select>
+              <small>
+                Controls how future task specs handle release-note artifacts at completion. Use changeset mode for repositories that follow
+                <code>.changeset</code> workflows, or changelog mode when contributors should update an existing changelog file.
+              </small>
+            </div>
+            <div className="form-group">
               <label htmlFor="showQuickChatFAB" className="checkbox-label">
                 <input
                   id="showQuickChatFAB"

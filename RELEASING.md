@@ -98,6 +98,7 @@ This will trigger `release.yml` to build binaries and create a GitHub Release. N
 - You can add multiple changesets per PR if you're making changes to multiple packages
 - Changeset files are automatically deleted when versions are bumped
 - CI verifies binary compilation on every push/PR to catch build regressions early
+- If your project enables `completionDocumentationMode: "changeset"`, triage specs will explicitly require `.changeset/*.md` completion artifacts for relevant tasks; keep this aligned with your repo's release convention.
 
 ## Internal packages
 

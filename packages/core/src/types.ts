@@ -27,6 +27,10 @@ export type ExecutionMode = (typeof EXECUTION_MODES)[number];
 /** Default execution mode for new tasks */
 export const DEFAULT_EXECUTION_MODE: ExecutionMode = "standard";
 
+/** Controls whether triage should require completion documentation artifacts in task specs. */
+export const COMPLETION_DOCUMENTATION_MODES = ["off", "changeset", "changelog"] as const;
+export type CompletionDocumentationMode = (typeof COMPLETION_DOCUMENTATION_MODES)[number];
+
 /** Theme mode for light/dark/system preference */
 export const THEME_MODES = ["dark", "light", "system"] as const;
 export type ThemeMode = (typeof THEME_MODES)[number];
@@ -1736,6 +1740,12 @@ export interface ProjectSettings {
   modelPresets?: ModelPreset[];
   /** When true, task creation UIs automatically recommend/apply a preset based on task size. */
   autoSelectModelPreset?: boolean;
+  /** Controls whether planning specs should require release documentation artifacts on completion.
+   *  - "off": do not inject any release-documentation requirement
+   *  - "changeset": require a `.changeset/*.md` entry when relevant
+   *  - "changelog": require updating an existing changelog file (do not invent a new one)
+   *  Default: "off" */
+  completionDocumentationMode?: CompletionDocumentationMode;
   /** Mapping of task sizes to preset IDs used for auto-selection during task creation. */
   defaultPresetBySize?: { S?: string; M?: string; L?: string };
   /** When true, auto-merge will automatically resolve common conflict patterns

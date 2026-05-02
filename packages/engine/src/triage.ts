@@ -2129,6 +2129,18 @@ export function buildSpecificationPrompt(
     commandsSection = "\n\n" + lines.join("\n");
   }
 
+  const completionDocumentationMode = settings?.completionDocumentationMode ?? "off";
+  let completionDocumentationSection = "";
+  if (completionDocumentationMode !== "off") {
+    const instruction = completionDocumentationMode === "changeset"
+      ? "If the task changes published-package behavior, require a `.changeset/*.md` entry and call out the repository's changeset workflow."
+      : "Require updating an existing changelog file as part of completion; do not invent a new changelog file when none exists.";
+    completionDocumentationSection = `\n\n## Completion Documentation Preference\nProject setting \`completionDocumentationMode\` is set to \`${completionDocumentationMode}\`.
+
+When writing PROMPT.md, add this as an explicit requirement under completion documentation/delivery expectations (not a side note):
+- ${instruction}`;
+  }
+
   // Build project memory section from settings.
   // When enabled, agents consult project memory for durable project learnings.
   // Backend-aware: instructions branch based on memoryBackendType (file, readonly, qmd)
@@ -2277,5 +2289,5 @@ ${task.dependencies.length > 0 ? `- **Dependencies:** ${task.dependencies.join("
 ## Instructions
 ${isRevision ? "1. Review the existing specification and user feedback carefully\n2. Revise the PROMPT.md to address the feedback while maintaining the structure\n3. Ensure the specification is detailed enough for an AI agent to execute" : isFreshRespecification ? "1. Read the project structure to understand context (package.json, source files, etc.)\n2. Write a fresh complete PROMPT.md specification to the given path following the format in your system prompt\n3. Address the user feedback without carrying forward stale assumptions from the old spec\n4. Name actual files, functions, and patterns from the codebase — be specific" : "1. Read the project structure to understand context (package.json, source files, etc.)\n2. Write a complete PROMPT.md specification to the given path following the format in your system prompt\n3. The specification must be detailed enough for an autonomous AI agent to implement without asking questions\n4. Name actual files, functions, and patterns from the codebase — be specific"}
 
-Use the write tool to write the specification file.${commandsSection}${memorySection}${attachmentsSection}${userCommentsSection}`;
+Use the write tool to write the specification file.${commandsSection}${completionDocumentationSection}${memorySection}${attachmentsSection}${userCommentsSection}`;
 }

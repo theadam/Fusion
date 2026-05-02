@@ -237,6 +237,14 @@ describe("settings-export", () => {
       const result = await exportSettings(store, { source: "my-laptop" });
       expect(result.source).toBe("my-laptop");
     });
+
+    it("should export completionDocumentationMode in project scope", async () => {
+      await store.updateSettings({ completionDocumentationMode: "changelog" });
+
+      const result = await exportSettings(store, { scope: "project" });
+
+      expect(result.project?.completionDocumentationMode).toBe("changelog");
+    });
   });
 
   describe("importSettings", () => {
@@ -282,6 +290,24 @@ describe("settings-export", () => {
       const settings = await store.getSettings();
       expect(settings.maxConcurrent).toBe(6);
       expect(settings.maxWorktrees).toBe(10);
+    });
+
+    it("should import completionDocumentationMode in project merge mode", async () => {
+      await store.updateSettings({ completionDocumentationMode: "off" });
+
+      const importData: SettingsExportData = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        project: { completionDocumentationMode: "changeset" },
+      };
+
+      const result = await importSettings(store, importData, { scope: "project", merge: true });
+
+      expect(result.success).toBe(true);
+      expect(result.projectCount).toBe(1);
+
+      const settings = await store.getSettings();
+      expect(settings.completionDocumentationMode).toBe("changeset");
     });
 
     it("should import both scopes", async () => {

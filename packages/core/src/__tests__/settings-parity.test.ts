@@ -50,6 +50,7 @@ describe("settings key parity", () => {
     expect(isGlobalSettingsKey("maxConcurrent")).toBe(false);
     expect(isProjectSettingsKey("maxConcurrent")).toBe(true);
     expect(isProjectSettingsKey("heartbeatMultiplier")).toBe(true);
+    expect(isProjectSettingsKey("completionDocumentationMode")).toBe(true);
     expect(isProjectSettingsKey("remoteAccess")).toBe(false);
     expect(isProjectSettingsKey("researchSettings")).toBe(true);
     expect(isGlobalSettingsKey("researchGlobalDefaults")).toBe(true);
@@ -62,6 +63,10 @@ describe("settings key parity", () => {
 
   it("includes heartbeatMultiplier in project defaults", () => {
     expect(DEFAULT_PROJECT_SETTINGS.heartbeatMultiplier).toBe(1);
+  });
+
+  it("defaults completionDocumentationMode to off", () => {
+    expect(DEFAULT_PROJECT_SETTINGS.completionDocumentationMode).toBe("off");
   });
 
   it("keeps remoteAccess scoped to global settings only", () => {

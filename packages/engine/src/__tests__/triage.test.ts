@@ -159,6 +159,70 @@ describe("buildSpecificationPrompt", () => {
     expect(prompt).toContain("pnpm build");
   });
 
+  describe("completionDocumentationMode setting", () => {
+    it("omits completion documentation guidance when mode is off", () => {
+      const settings: Settings = {
+        maxConcurrent: 2,
+        maxWorktrees: 4,
+        pollIntervalMs: 10000,
+        groupOverlappingFiles: false,
+        autoMerge: true,
+        completionDocumentationMode: "off",
+      };
+
+      const prompt = buildSpecificationPrompt(
+        baseTask,
+        ".fusion/tasks/KB-001/PROMPT.md",
+        settings,
+      );
+
+      expect(prompt).not.toContain("## Completion Documentation Preference");
+    });
+
+    it("includes changeset guidance when mode is changeset", () => {
+      const settings: Settings = {
+        maxConcurrent: 2,
+        maxWorktrees: 4,
+        pollIntervalMs: 10000,
+        groupOverlappingFiles: false,
+        autoMerge: true,
+        completionDocumentationMode: "changeset",
+      };
+
+      const prompt = buildSpecificationPrompt(
+        baseTask,
+        ".fusion/tasks/KB-001/PROMPT.md",
+        settings,
+      );
+
+      expect(prompt).toContain("## Completion Documentation Preference");
+      expect(prompt).toContain("`completionDocumentationMode` is set to `changeset`");
+      expect(prompt).toContain("`.changeset/*.md`");
+      expect(prompt).toContain("completion documentation/delivery expectations");
+    });
+
+    it("includes changelog guidance when mode is changelog", () => {
+      const settings: Settings = {
+        maxConcurrent: 2,
+        maxWorktrees: 4,
+        pollIntervalMs: 10000,
+        groupOverlappingFiles: false,
+        autoMerge: true,
+        completionDocumentationMode: "changelog",
+      };
+
+      const prompt = buildSpecificationPrompt(
+        baseTask,
+        ".fusion/tasks/KB-001/PROMPT.md",
+        settings,
+      );
+
+      expect(prompt).toContain("`completionDocumentationMode` is set to `changelog`");
+      expect(prompt).toContain("updating an existing changelog file");
+      expect(prompt).toContain("do not invent a new changelog file");
+    });
+  });
+
   it("generates revision prompt when existingPrompt and feedback provided", () => {
     const existingPrompt = "# Original Spec\n\nOriginal content.";
     const feedback = "Add more details about error handling";
