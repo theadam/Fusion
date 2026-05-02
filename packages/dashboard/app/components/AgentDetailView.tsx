@@ -1759,12 +1759,21 @@ function SoulTab({
   const [isSaving, setIsSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const justSavedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setSoul(agent.soul ?? "");
     setJustSaved(false);
     setShowPreview(false);
   }, [agent.id, agent.soul]);
+
+  useEffect(() => {
+    return () => {
+      if (justSavedTimeoutRef.current) {
+        clearTimeout(justSavedTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const hasChanges = soul !== (agent.soul ?? "");
 
@@ -1779,7 +1788,10 @@ function SoulTab({
       await updateAgentSoul(agent.id, soul, projectId);
       addToast("Soul saved", "success");
       setJustSaved(true);
-      setTimeout(() => setJustSaved(false), 3000);
+      if (justSavedTimeoutRef.current) {
+        clearTimeout(justSavedTimeoutRef.current);
+      }
+      justSavedTimeoutRef.current = setTimeout(() => setJustSaved(false), 3000);
       await onSaved();
     } catch (err) {
       addToast(`Failed to save soul: ${getErrorMessage(err)}`, "error");
@@ -1910,6 +1922,8 @@ function MemoryTab({
   const [savingSelectedFile, setSavingSelectedFile] = useState(false);
   const [selectedFileJustSaved, setSelectedFileJustSaved] = useState(false);
   const [fileSwitchHint, setFileSwitchHint] = useState("");
+  const justSavedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectedFileJustSavedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isReadOnly = agent.state === "running";
   const hasInlineChanges = memory !== (agent.memory ?? "");
@@ -1973,6 +1987,17 @@ function MemoryTab({
     void loadMemoryFiles();
   }, [agent.id, agent.memory, loadMemoryFiles]);
 
+  useEffect(() => {
+    return () => {
+      if (justSavedTimeoutRef.current) {
+        clearTimeout(justSavedTimeoutRef.current);
+      }
+      if (selectedFileJustSavedTimeoutRef.current) {
+        clearTimeout(selectedFileJustSavedTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handleSaveInlineMemory = async () => {
     if (memory.length > 50000) {
       addToast("Memory must be at most 50,000 characters", "error");
@@ -1984,7 +2009,10 @@ function MemoryTab({
       await updateAgentMemory(agent.id, memory, projectId);
       addToast("Memory saved", "success");
       setJustSaved(true);
-      setTimeout(() => setJustSaved(false), 3000);
+      if (justSavedTimeoutRef.current) {
+        clearTimeout(justSavedTimeoutRef.current);
+      }
+      justSavedTimeoutRef.current = setTimeout(() => setJustSaved(false), 3000);
       await onSaved();
     } catch (err) {
       addToast(`Failed to save memory: ${getErrorMessage(err)}`, "error");
@@ -2016,7 +2044,10 @@ function MemoryTab({
       await saveAgentMemoryFile(agent.id, selectedFilePath, selectedFileContent, projectId);
       setSelectedFileDirty(false);
       setSelectedFileJustSaved(true);
-      setTimeout(() => setSelectedFileJustSaved(false), 3000);
+      if (selectedFileJustSavedTimeoutRef.current) {
+        clearTimeout(selectedFileJustSavedTimeoutRef.current);
+      }
+      selectedFileJustSavedTimeoutRef.current = setTimeout(() => setSelectedFileJustSaved(false), 3000);
       setFileSwitchHint("");
       await loadMemoryFiles(selectedFilePath);
       addToast("Agent memory file saved", "success");
@@ -2255,6 +2286,8 @@ function InstructionsTab({
   const [isSavingFile, setIsSavingFile] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [justSavedFile, setJustSavedFile] = useState(false);
+  const justSavedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const justSavedFileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load file content when instructionsPath changes
   useEffect(() => {
@@ -2296,6 +2329,17 @@ function InstructionsTab({
     setShowPreview(false);
   }, [agent.id, agent.instructionsText, agent.instructionsPath]);
 
+  useEffect(() => {
+    return () => {
+      if (justSavedTimeoutRef.current) {
+        clearTimeout(justSavedTimeoutRef.current);
+      }
+      if (justSavedFileTimeoutRef.current) {
+        clearTimeout(justSavedFileTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const hasInstructionsChanges = (() => {
     const currentText = instructionsText ?? "";
     const persistedText = agent.instructionsText ?? "";
@@ -2317,7 +2361,10 @@ function InstructionsTab({
       );
       addToast("Instructions saved", "success");
       setJustSaved(true);
-      setTimeout(() => setJustSaved(false), 3000);
+      if (justSavedTimeoutRef.current) {
+        clearTimeout(justSavedTimeoutRef.current);
+      }
+      justSavedTimeoutRef.current = setTimeout(() => setJustSaved(false), 3000);
       await onSaved();
     } catch (err) {
       addToast(`Failed to save instructions: ${getErrorMessage(err)}`, "error");
@@ -2339,7 +2386,10 @@ function InstructionsTab({
       addToast("Instructions file saved", "success");
       setFileContentDirty(false);
       setJustSavedFile(true);
-      setTimeout(() => setJustSavedFile(false), 3000);
+      if (justSavedFileTimeoutRef.current) {
+        clearTimeout(justSavedFileTimeoutRef.current);
+      }
+      justSavedFileTimeoutRef.current = setTimeout(() => setJustSavedFile(false), 3000);
     } catch (err) {
       addToast(`Failed to save instructions file: ${getErrorMessage(err)}`, "error");
     } finally {
@@ -2602,6 +2652,7 @@ function HeartbeatProcedureSection({
   const [fileContentDirty, setFileContentDirty] = useState(false);
   const [fileLoadError, setFileLoadError] = useState<string | null>(null);
   const [justSavedFile, setJustSavedFile] = useState(false);
+  const justSavedFileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentPath = agent.heartbeatProcedurePath?.trim();
   const canonicalDefaultPath = `.fusion/agents/${agent.name
     .toLowerCase()
@@ -2647,6 +2698,14 @@ function HeartbeatProcedureSection({
     setJustSavedFile(false);
   }, [agent.id, currentPath]);
 
+  useEffect(() => {
+    return () => {
+      if (justSavedFileTimeoutRef.current) {
+        clearTimeout(justSavedFileTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handleOpenViewer = async () => {
     if (!currentPath) return;
     setShowFileViewer(true);
@@ -2661,7 +2720,10 @@ function HeartbeatProcedureSection({
       setFileContentDirty(false);
       setJustSavedFile(true);
       addToast("Heartbeat procedure file saved", "success");
-      setTimeout(() => setJustSavedFile(false), 3000);
+      if (justSavedFileTimeoutRef.current) {
+        clearTimeout(justSavedFileTimeoutRef.current);
+      }
+      justSavedFileTimeoutRef.current = setTimeout(() => setJustSavedFile(false), 3000);
     } catch (err) {
       addToast(`Failed to save heartbeat procedure file: ${getErrorMessage(err)}`, "error");
     } finally {

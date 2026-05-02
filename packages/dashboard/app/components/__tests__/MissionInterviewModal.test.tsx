@@ -292,4 +292,36 @@ describe("MissionInterviewModal", () => {
     expect(screen.getByText("Continuing...")).toBeInTheDocument();
     expect(mockConnectMissionInterviewStream).toHaveBeenCalledTimes(2);
   });
+
+  it("shows comment textarea and submits _comment for non-text questions", async () => {
+    renderModal();
+
+    fireEvent.change(screen.getByLabelText("What do you want to build?"), {
+      target: { value: "Build a mission planning workflow" },
+    });
+    fireEvent.click(screen.getByText("Start Interview"));
+
+    await waitFor(() => {
+      expect(streamHandlers).toBeDefined();
+    });
+
+    act(() => {
+      streamHandlers.onQuestion?.(SAMPLE_QUESTION);
+    });
+
+    fireEvent.click(await screen.findByText("MVP"));
+    fireEvent.change(screen.getByPlaceholderText("Add any extra context or direction..."), {
+      target: { value: "Optimize for launch speed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(mockRespondToMissionInterview).toHaveBeenCalledWith(
+        "mission-session-1",
+        expect.objectContaining({ scope: "mvp", _comment: "Optimize for launch speed" }),
+        undefined,
+        expect.any(String),
+      );
+    });
+  });
 });

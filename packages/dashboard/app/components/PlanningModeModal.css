@@ -476,6 +476,21 @@
   box-shadow: var(--focus-ring);
 }
 
+.planning-comment-section {
+  margin-top: var(--space-lg);
+}
+
+.planning-comment-label {
+  display: block;
+  margin-bottom: var(--space-xs);
+  color: var(--text-muted);
+  font-size: var(--font-size-xs, 12px);
+}
+
+.planning-comment-section .planning-textarea {
+  min-height: calc(var(--space-md) * 5);
+}
+
 .planning-char-count {
   text-align: right;
   font-size: 12px;
@@ -1246,6 +1261,10 @@
   /* Prevent mobile zoom on focus for planning text inputs (16px minimum) */
   .planning-textarea {
     font-size: 16px;
+  }
+
+  .planning-comment-section .planning-textarea {
+    min-height: calc(var(--space-md) * 5);
   }
 
   /* Planning options compact on mobile */

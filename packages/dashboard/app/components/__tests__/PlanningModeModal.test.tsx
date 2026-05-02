@@ -1279,6 +1279,125 @@ describe("PlanningModeModal", () => {
       expect(container.querySelector(".planning-question-form > .planning-actions")).not.toBeNull();
     });
 
+    it("shows comment textarea for single_select questions", async () => {
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      fireEvent.change(screen.getByPlaceholderText(/e.g., Build a user authentication/), {
+        target: { value: "Build auth system" },
+      });
+      fireEvent.click(screen.getByText("Start Planning"));
+
+      expect(await screen.findByPlaceholderText("Add any extra context or direction...")).toBeInTheDocument();
+    });
+
+    it("does not show comment textarea for text questions", async () => {
+      const textQuestion: PlanningQuestion = {
+        id: "q-text",
+        type: "text",
+        question: "Describe your requirements",
+      };
+
+      mockConnectPlanningStream.mockImplementationOnce((_sessionId: string, _projectId: string | undefined, handlers: any) => {
+        setTimeout(() => {
+          handlers.onQuestion?.(textQuestion);
+        }, 10);
+
+        return {
+          close: vi.fn(),
+          isConnected: vi.fn().mockReturnValue(true),
+        };
+      });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      fireEvent.change(screen.getByPlaceholderText(/e.g., Build a user authentication/), {
+        target: { value: "Build auth system" },
+      });
+      fireEvent.click(screen.getByText("Start Planning"));
+
+      await screen.findByText("Describe your requirements");
+      expect(screen.queryByPlaceholderText("Add any extra context or direction...")).not.toBeInTheDocument();
+    });
+
+    it("includes _comment in response when comment is filled", async () => {
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      fireEvent.change(screen.getByPlaceholderText(/e.g., Build a user authentication/), {
+        target: { value: "Build auth system" },
+      });
+      fireEvent.click(screen.getByText("Start Planning"));
+
+      await screen.findByText("What is the scope?");
+      fireEvent.click(screen.getByText("Medium"));
+      fireEvent.change(screen.getByPlaceholderText("Add any extra context or direction..."), {
+        target: { value: "Prioritize API first" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+      await waitFor(() => {
+        expect(mockRespondToPlanning).toHaveBeenCalledWith(
+          "session-123",
+          expect.objectContaining({ "q-scope": "medium", _comment: "Prioritize API first" }),
+          undefined,
+          expect.any(String),
+        );
+      });
+    });
+
+    it("omits _comment when comment is empty", async () => {
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      fireEvent.change(screen.getByPlaceholderText(/e.g., Build a user authentication/), {
+        target: { value: "Build auth system" },
+      });
+      fireEvent.click(screen.getByText("Start Planning"));
+
+      await screen.findByText("What is the scope?");
+      fireEvent.click(screen.getByText("Medium"));
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+      await waitFor(() => {
+        expect(mockRespondToPlanning).toHaveBeenCalledWith(
+          "session-123",
+          expect.not.objectContaining({ _comment: expect.anything() }),
+          undefined,
+          expect.any(String),
+        );
+      });
+    });
+
     it("shows reconnecting indicator without clearing current question state", async () => {
       let streamHandlers: any;
 

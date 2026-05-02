@@ -1522,21 +1522,32 @@ interface QuestionFormProps {
 function QuestionForm({ question, progress, historyEntries, onSubmit, onBack }: QuestionFormProps) {
   const [response, setResponse] = useState<QuestionResponse>({});
   const [textValue, setTextValue] = useState("");
+  const [commentValue, setCommentValue] = useState("");
 
   const handleSubmit = useCallback(() => {
+    let nextResponse: QuestionResponse;
+
     if (question.type === "text") {
-      onSubmit({ [question.id]: textValue });
+      nextResponse = { [question.id]: textValue };
     } else if (question.type === "confirm") {
-      onSubmit({ [question.id]: response[question.id] === true });
+      nextResponse = { [question.id]: response[question.id] === true };
     } else {
-      onSubmit(response);
+      nextResponse = response;
     }
-  }, [question, response, textValue, onSubmit]);
+
+    const trimmedComment = commentValue.trim();
+    if (trimmedComment.length > 0) {
+      nextResponse = { ...nextResponse, _comment: trimmedComment };
+    }
+
+    onSubmit(nextResponse);
+  }, [commentValue, question, response, textValue, onSubmit]);
 
   // Reset state when question changes
   useEffect(() => {
     setResponse({});
     setTextValue("");
+    setCommentValue("");
   }, [question.id]);
 
   const isValid = () => {
@@ -1670,6 +1681,22 @@ function QuestionForm({ question, progress, historyEntries, onSubmit, onBack }: 
                 </div>
               )}
             </div>
+
+            {question.type !== "text" && (
+              <div className="planning-comment-section">
+                <label className="planning-comment-label" htmlFor={`planning-comment-${question.id}`}>
+                  Additional comments (optional)
+                </label>
+                <textarea
+                  id={`planning-comment-${question.id}`}
+                  className="planning-textarea"
+                  rows={2}
+                  placeholder="Add any extra context or direction..."
+                  value={commentValue}
+                  onChange={(e) => setCommentValue(e.target.value)}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>

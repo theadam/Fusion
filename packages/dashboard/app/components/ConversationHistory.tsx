@@ -102,6 +102,12 @@ export function ConversationHistory({ entries, defaultShowThinking = false }: Co
           entry.question && responseValue !== undefined
             ? formatResponse(entry.question, responseValue)
             : "";
+        const responseRecord =
+          entry.response && typeof entry.response === "object" && !Array.isArray(entry.response)
+            ? (entry.response as Record<string, unknown>)
+            : undefined;
+        const comment =
+          typeof responseRecord?._comment === "string" ? responseRecord._comment.trim() : "";
 
         return (
           <div key={`${entry.question?.id ?? "thinking"}-${index}`} className="conversation-entry">
@@ -120,6 +126,7 @@ export function ConversationHistory({ entries, defaultShowThinking = false }: Co
               <div className="conversation-entry-response">
                 <strong>Your response</strong>
                 <p>{formattedResponse || "—"}</p>
+                {comment && <p className="conversation-comment">💬 {comment}</p>}
               </div>
             )}
 

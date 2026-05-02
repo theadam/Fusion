@@ -72,4 +72,19 @@ describe("ConversationHistory", () => {
     fireEvent.click(screen.getByRole("button", { name: /Show AI reasoning/i }));
     expect(screen.getByText("Reasoning captured during subtask generation")).toBeDefined();
   });
+
+  it("renders comment when response includes _comment", () => {
+    render(
+      <ConversationHistory
+        entries={[
+          {
+            question: baseQuestion,
+            response: { "q-scope": "small", _comment: "Need this done by next sprint" },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("💬 Need this done by next sprint")).toBeDefined();
+  });
 });

@@ -411,6 +411,52 @@ describe("MilestoneSliceInterviewModal", () => {
     });
   });
 
+  describe("comment input", () => {
+    it("shows comment textarea and submits _comment in milestone interview", async () => {
+      mockStartMilestoneInterview.mockResolvedValue({ sessionId: "session-123" });
+
+      render(
+        <MilestoneSliceInterviewModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onApplied={vi.fn()}
+          targetType="milestone"
+          targetId="MS-001"
+          targetTitle="Test Milestone"
+          projectId="test-project"
+        />,
+      );
+
+      fireEvent.click(screen.getByText("Start Interview"));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Preparing next question/)).toBeDefined();
+      });
+
+      act(() => {
+        streamHandlers.onQuestion(SAMPLE_QUESTION);
+      });
+
+      await screen.findByText("What is the target scope?");
+      expect(screen.getByPlaceholderText("Add any extra context or direction...")).toBeDefined();
+
+      fireEvent.click(screen.getByText("MVP"));
+      fireEvent.change(screen.getByPlaceholderText("Add any extra context or direction..."), {
+        target: { value: "Keep this aligned with mission MVP" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+
+      await waitFor(() => {
+        expect(mockRespondToMilestoneInterview).toHaveBeenCalledWith(
+          "session-123",
+          expect.objectContaining({ scope: "mvp", _comment: "Keep this aligned with mission MVP" }),
+          "test-project",
+          "test-tab-id",
+        );
+      });
+    });
+  });
+
   describe("resume session rehydration", () => {
     const mockSessionAwaitingInput = {
       id: "session-resume-123",

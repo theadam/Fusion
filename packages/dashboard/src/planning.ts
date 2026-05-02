@@ -1593,17 +1593,23 @@ function formatResponseForAgent(
   responses: Record<string, unknown>
 ): string {
   const responseValue = responses[question.id];
+  const comment = typeof responses._comment === "string" ? responses._comment.trim() : "";
+
+  let formatted: string;
 
   switch (question.type) {
     case "text":
-      return `Question: ${question.question}\n\nAnswer: ${responseValue}`;
+      formatted = `Question: ${question.question}\n\nAnswer: ${responseValue}`;
+      break;
 
     case "single_select":
       if (typeof responseValue === "string") {
         const option = question.options?.find((o) => o.id === responseValue);
-        return `Question: ${question.question}\n\nSelected: ${option?.label || responseValue}`;
+        formatted = `Question: ${question.question}\n\nSelected: ${option?.label || responseValue}`;
+        break;
       }
-      return `Question: ${question.question}\n\nAnswer: ${responseValue}`;
+      formatted = `Question: ${question.question}\n\nAnswer: ${responseValue}`;
+      break;
 
     case "multi_select":
       if (Array.isArray(responseValue)) {
@@ -1611,16 +1617,22 @@ function formatResponseForAgent(
           const option = question.options?.find((o) => o.id === id);
           return option?.label || id;
         });
-        return `Question: ${question.question}\n\nSelected: ${selected.join(", ")}`;
+        formatted = `Question: ${question.question}\n\nSelected: ${selected.join(", ")}`;
+        break;
       }
-      return `Question: ${question.question}\n\nAnswer: ${responseValue}`;
+      formatted = `Question: ${question.question}\n\nAnswer: ${responseValue}`;
+      break;
 
     case "confirm":
-      return `Question: ${question.question}\n\nAnswer: ${responseValue === true ? "Yes" : "No"}`;
+      formatted = `Question: ${question.question}\n\nAnswer: ${responseValue === true ? "Yes" : "No"}`;
+      break;
 
     default:
-      return `Question: ${question.question}\n\nAnswer: ${JSON.stringify(responseValue)}`;
+      formatted = `Question: ${question.question}\n\nAnswer: ${JSON.stringify(responseValue)}`;
+      break;
   }
+
+  return comment.length > 0 ? `${formatted}\n\nAdditional context: ${comment}` : formatted;
 }
 
 function coerceResponseRecord(question: PlanningQuestion, response: unknown): Record<string, unknown> {
@@ -1692,12 +1704,15 @@ export function formatInterviewQA(
   }
 
   const entries = history.map(({ question, response }) => {
-    const responseValue =
+    const responseRecord =
       response && typeof response === "object" && !Array.isArray(response)
-        ? (response as Record<string, unknown>)[question.id]
-        : response;
+        ? (response as Record<string, unknown>)
+        : undefined;
+    const responseValue = responseRecord ? responseRecord[question.id] : response;
+    const comment = typeof responseRecord?._comment === "string" ? responseRecord._comment.trim() : "";
 
-    return `**Q: ${question.question}**\nA: ${formatInterviewAnswer(question, responseValue)}`;
+    const answerLine = `**Q: ${question.question}**\nA: ${formatInterviewAnswer(question, responseValue)}`;
+    return comment.length > 0 ? `${answerLine}\nComment: ${comment}` : answerLine;
   });
 
   return `## Planning Interview Context\n\n${entries.join("\n\n")}`;

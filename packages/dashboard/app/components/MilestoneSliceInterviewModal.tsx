@@ -627,20 +627,31 @@ interface InterviewQuestionFormProps {
 function InterviewQuestionForm({ question, progress, historyEntries, onSubmit }: InterviewQuestionFormProps) {
   const [response, setResponse] = useState<QuestionResponse>({});
   const [textValue, setTextValue] = useState("");
+  const [commentValue, setCommentValue] = useState("");
 
   const handleSubmit = useCallback(() => {
+    let nextResponse: QuestionResponse;
+
     if (question.type === "text") {
-      onSubmit({ [question.id]: textValue });
+      nextResponse = { [question.id]: textValue };
     } else if (question.type === "confirm") {
-      onSubmit({ [question.id]: response[question.id] === true });
+      nextResponse = { [question.id]: response[question.id] === true };
     } else {
-      onSubmit(response);
+      nextResponse = response;
     }
-  }, [question, response, textValue, onSubmit]);
+
+    const trimmedComment = commentValue.trim();
+    if (trimmedComment.length > 0) {
+      nextResponse = { ...nextResponse, _comment: trimmedComment };
+    }
+
+    onSubmit(nextResponse);
+  }, [commentValue, question, response, textValue, onSubmit]);
 
   useEffect(() => {
     setResponse({});
     setTextValue("");
+    setCommentValue("");
   }, [question.id]);
 
   const isValid = () => {
@@ -774,6 +785,22 @@ function InterviewQuestionForm({ question, progress, historyEntries, onSubmit }:
                 </div>
               )}
             </div>
+
+            {question.type !== "text" && (
+              <div className="planning-comment-section">
+                <label className="planning-comment-label" htmlFor={`planning-comment-${question.id}`}>
+                  Additional comments (optional)
+                </label>
+                <textarea
+                  id={`planning-comment-${question.id}`}
+                  className="planning-textarea"
+                  rows={2}
+                  placeholder="Add any extra context or direction..."
+                  value={commentValue}
+                  onChange={(e) => setCommentValue(e.target.value)}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>
