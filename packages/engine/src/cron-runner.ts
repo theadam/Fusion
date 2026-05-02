@@ -35,19 +35,31 @@ function execCommand(command: string, options: Parameters<typeof exec>[1]): Prom
 }
 
 /**
- * Recognize commands that the auto-backup feature schedules. These shell out
- * to whatever fusion binary is on PATH — which may be older than the running
- * process and still carry the pluginStore-rootDir bug that creates a stray
- * `.fusion/.fusion/` directory. We intercept and run the backup in-process.
+ * Recognize commands that the auto-backup feature schedules — specifically
+ * the `backup --create` form that the engine itself writes via
+ * `syncBackupAutomation`. Other backup subcommands (`--list`, `--cleanup`,
+ * `--restore <file>`) are intentionally NOT intercepted because the
+ * in-process replacement only performs a create+cleanup; intercepting them
+ * would silently execute the wrong operation.
+ *
+ * These commands shell out to whatever fusion binary is on PATH, which may
+ * be older than the running process and still carry the pluginStore-rootDir
+ * bug that creates a stray `.fusion/.fusion/` directory. Intercepting the
+ * `--create` form keeps the auto-backup self-contained inside the running
+ * engine.
  */
 export function isInProcessBackupCommand(command: string | undefined): boolean {
   if (!command) return false;
   const normalized = command.trim().toLowerCase();
+  // Allow the binary name + the `backup --create` subcommand, optionally
+  // followed by additional whitespace-separated flags. Reject any other
+  // backup subcommand (--list, --cleanup, --restore, etc.).
+  const tail = /\s+backup\s+--create(?:\s+.*)?$/;
   return (
-    /^(?:npx\s+)?runfusion(?:\.ai)?\s+backup\b/.test(normalized) ||
-    /^(?:npx\s+)?@runfusion\/fusion\s+backup\b/.test(normalized) ||
-    /^fn\s+backup\b/.test(normalized) ||
-    /^fusion\s+backup\b/.test(normalized)
+    new RegExp(`^(?:npx\\s+)?runfusion(?:\\.ai)?${tail.source}`).test(normalized) ||
+    new RegExp(`^(?:npx\\s+)?@runfusion\\/fusion${tail.source}`).test(normalized) ||
+    new RegExp(`^fn${tail.source}`).test(normalized) ||
+    new RegExp(`^fusion${tail.source}`).test(normalized)
   );
 }
 
@@ -361,35 +373,44 @@ export class CronRunner {
     schedule: ScheduledTask,
     startedAt: string,
   ): Promise<AutomationRunResult> {
+    const action = await this.runBackupActionInProcess();
+    if (action.success) {
+      log.log(`✓ ${schedule.name} completed in-process`);
+    } else {
+      log.warn(`✗ ${schedule.name} in-process backup ${action.error ? `threw: ${action.error}` : `reported failure: ${action.output}`}`);
+    }
+    return {
+      success: action.success,
+      output: action.output,
+      error: action.error,
+      startedAt,
+      completedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Shared in-process backup execution used by both the legacy-command path
+   * and the command-step path. Returns the success/output/error tuple in
+   * a shape that callers can wrap into either a run or a step result.
+   */
+  private async runBackupActionInProcess(): Promise<{
+    success: boolean;
+    output: string;
+    error: string | undefined;
+  }> {
     try {
       const { runBackupCommand } = await import("@fusion/core");
       const fusionDir = this.store.getFusionDir();
       const settings = await this.store.getSettings();
       const result = await runBackupCommand(fusionDir, settings);
-
-      if (result.success) {
-        log.log(`✓ ${schedule.name} completed in-process`);
-      } else {
-        log.warn(`✗ ${schedule.name} in-process backup reported failure: ${result.output}`);
-      }
-
       return {
         success: result.success,
         output: truncateOutput(result.output ?? "", ""),
         error: result.success ? undefined : result.output,
-        startedAt,
-        completedAt: new Date().toISOString(),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log.warn(`✗ ${schedule.name} in-process backup threw: ${message}`);
-      return {
-        success: false,
-        output: "",
-        error: message,
-        startedAt,
-        completedAt: new Date().toISOString(),
-      };
+      return { success: false, output: "", error: message };
     }
   }
 
@@ -506,6 +527,23 @@ export class CronRunner {
         success: false,
         output: "",
         error: "Command step has no command specified",
+        startedAt,
+        completedAt: new Date().toISOString(),
+      };
+    }
+
+    // Step-based automations can also carry the auto-backup command. Mirror
+    // the legacy-command interception so step-form schedules don't fall back
+    // to spawning a stale `runfusion.ai` binary.
+    if (isInProcessBackupCommand(step.command)) {
+      const action = await this.runBackupActionInProcess();
+      return {
+        stepId: step.id,
+        stepName: step.name,
+        stepIndex,
+        success: action.success,
+        output: action.output,
+        error: action.error,
         startedAt,
         completedAt: new Date().toISOString(),
       };

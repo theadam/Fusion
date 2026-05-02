@@ -13,7 +13,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { platform } from "node:os";
+import { platform, tmpdir } from "node:os";
 
 interface ProbeResult {
   exitCode: number | null;
@@ -31,7 +31,15 @@ function runProbe(command: string, args: string[], timeoutMs: number): Promise<P
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], shell: false });
+    // Run probes from the OS temp directory so a buggy CLI version (older
+    // `runfusion.ai` releases initialise an engine — and a fresh
+    // `.fusion/<project>/.fusion/` tree — even on `--version`) cannot leave
+    // artefacts under whichever project happens to be the parent's cwd.
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+      cwd: tmpdir(),
+    });
     const timer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch { /* ignore */ }
     }, timeoutMs);

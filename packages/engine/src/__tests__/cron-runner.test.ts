@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { CronRunner, createAiPromptExecutor } from "../cron-runner.js";
+import { CronRunner, createAiPromptExecutor, isInProcessBackupCommand } from "../cron-runner.js";
 import type { AiPromptExecutor } from "../cron-runner.js";
 import type { TaskStore, AutomationStore, ScheduledTask, AutomationRunResult, AutomationStep, Settings } from "@fusion/core";
 import { randomUUID } from "node:crypto";
@@ -1777,5 +1777,48 @@ describe("CronRunner", () => {
       expect(calls[0][0]).toBe("global-boundary");
       expect(calls[1][0]).toBe("project-boundary");
     });
+  });
+
+  describe("isInProcessBackupCommand", () => {
+    const positives = [
+      "fn backup --create",
+      "fusion backup --create",
+      "runfusion.ai backup --create",
+      "runfusion backup --create",
+      "@runfusion/fusion backup --create",
+      "npx runfusion.ai backup --create",
+      "npx @runfusion/fusion backup --create",
+      "FN BACKUP --CREATE",
+      "fn backup --create --some-other-flag",
+      "  fn backup --create  ",
+    ];
+
+    const negatives = [
+      // Wrong subcommand — must not be intercepted, the in-process path
+      // only does create+cleanup and would silently swallow these.
+      "fn backup --list",
+      "fn backup --restore /tmp/old.db",
+      "fn backup --cleanup",
+      "fn backup",
+      "fn task list",
+      "echo hello",
+      "fn-other backup --create",
+      "fnbackup --create",
+      "fnext backup --create",
+      "",
+      undefined,
+    ];
+
+    for (const cmd of positives) {
+      it(`intercepts: ${cmd}`, () => {
+        expect(isInProcessBackupCommand(cmd)).toBe(true);
+      });
+    }
+
+    for (const cmd of negatives) {
+      it(`does NOT intercept: ${JSON.stringify(cmd)}`, () => {
+        expect(isInProcessBackupCommand(cmd)).toBe(false);
+      });
+    }
   });
 });
