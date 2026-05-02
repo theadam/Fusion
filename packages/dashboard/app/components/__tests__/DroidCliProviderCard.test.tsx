@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { DroidCliProviderCard } from "../DroidCliProviderCard";
 
 const fetchDroidCliStatus = vi.fn();
@@ -63,10 +63,10 @@ describe("DroidCliProviderCard", () => {
     const enable = await screen.findByRole("button", { name: "Enable" });
     expect(enable).toBeDisabled();
 
+    cleanup();
     fetchDroidCliStatus.mockResolvedValue({ ...baseStatus, binary: { ...baseStatus.binary, available: true } });
     render(<DroidCliProviderCard authenticated={false} />);
-    const secondEnable = await screen.findAllByRole("button", { name: "Enable" });
-    fireEvent.click(secondEnable[1]);
+    fireEvent.click(await screen.findByRole("button", { name: "Enable" }));
     await waitFor(() => expect(setDroidCliEnabled).toHaveBeenCalledWith(true));
   });
 

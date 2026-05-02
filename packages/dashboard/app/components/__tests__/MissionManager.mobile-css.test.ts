@@ -41,4 +41,20 @@ describe("MissionManager mobile styles", () => {
     expect(section).toContain("overflow-wrap: anywhere;");
     expect(section).toContain("word-break: break-word;");
   });
+
+  it("hides desktop split layout on mobile", () => {
+    const css = loadAllAppCss();
+    const section = getMissionMobileSection(css);
+
+    expect(section).toContain(".mission-manager__split {");
+    expect(section).toContain("display: none;");
+  });
+
+  it("restores stacked body on mobile", () => {
+    const css = loadAllAppCss();
+    const section = getMissionMobileSection(css);
+
+    expect(section).toContain(".mission-manager__body--stacked {");
+    expect(section).toContain("display: block;");
+  });
 });

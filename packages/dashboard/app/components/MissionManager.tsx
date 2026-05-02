@@ -436,6 +436,10 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
   const [selectedMission, setSelectedMission] = useState<MissionWithHierarchy | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [isMobileLayout, setIsMobileLayout] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth <= 768;
+  });
 
   // Form states
   const [isCreatingMission, setIsCreatingMission] = useState(false);
@@ -487,6 +491,17 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
     enrichedDescription: string;
   } | null>(null);
   const [triagePreviewLoading, setTriagePreviewLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const update = () => setIsMobileLayout(window.innerWidth <= 768);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
 
   // Auto-open interview modal when resuming a session
   useEffect(() => {
@@ -1983,62 +1998,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
 
   if (!isActive) return null;
 
-  const manager = (
-    <div
-      ref={modalRef}
-      className={`mission-manager${isInline ? " mission-manager--inline" : ""}`}
-      role={isInline ? undefined : "dialog"}
-      aria-modal={isInline ? undefined : true}
-      aria-label={isInline ? undefined : "Mission Manager"}
-      data-testid="mission-manager-dialog"
-    >
-        {/* ── Header ── */}
-        <div className={`mission-manager__header${isInline ? " mission-manager__header--inline" : ""}`}>
-          <div className="mission-manager__header-title">
-            {selectedMission ? (
-              <button
-                className="mission-manager__back-btn"
-                onClick={handleBackToList}
-                title="Back to missions"
-                aria-label="Back to missions list"
-                data-testid="mission-back-btn"
-              >
-                <ChevronLeft size={18} />
-              </button>
-            ) : null}
-            <Target size={18} className="mission-manager__header-icon" />
-            <h2 className="mission-manager__title">
-              {selectedMission ? selectedMission.title : "Missions"}
-            </h2>
-          </div>
-          {!isInline && (
-            /* Modal mode: show close button */
-            <button
-              className="modal-close"
-              onClick={onClose}
-              title="Close"
-              aria-label="Close Mission Manager"
-              data-testid="mission-close-btn"
-            >
-              <X size={18} />
-            </button>
-          )}
-        </div>
-
-        {/* ── Body ── */}
-        <div className="mission-manager__body">
-          {loading ? (
-            <div className="mission-manager__loading">
-              <Loader2 size={24} className="spinner" />
-              <span>Loading missions...</span>
-            </div>
-          ) : detailLoading ? (
-            <div className="mission-manager__loading">
-              <Loader2 size={24} className="spinner" />
-              <span>Loading mission details...</span>
-            </div>
-          ) : selectedMission ? (
-            /* ── Detail View ── */
+  const renderMissionDetailContent = (selectedMission: MissionWithHierarchy) => (
             <div className="mission-detail">
               <div className="mission-detail__header">
                 <div className="mission-detail__title-row">
@@ -3423,8 +3383,10 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
                 </div>
               )}
             </div>
-          ) : (
-            /* ── List View ── */
+
+  );
+
+  const renderMissionListContent = () => (
             <div className="mission-list">
               {/* Create mission form */}
               {isCreatingMission && (
@@ -3653,7 +3615,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
               )}
 
               {!isCreatingMission && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <div className="mission-list__footer">
                   {pendingInterviewSessions.length > 0 && (
                     <div className="mission-resume-prompt">
                       <AlertCircle size={16} />
@@ -3662,7 +3624,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
                           ? `Resume "${pendingInterviewSessions[0].title}"?`
                           : `${pendingInterviewSessions.length} interview sessions pending`}
                       </span>
-                      <div style={{ display: "flex", gap: "4px", marginLeft: "auto" }}>
+                      <div className="mission-list__resume-actions">
                         {pendingInterviewSessions.map((s) => (
                           <button
                             key={s.id}
@@ -3680,7 +3642,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
                       </div>
                     </div>
                   )}
-                  <div style={{ display: "flex", gap: "8px" }}>
+                  <div className="mission-list__footer-actions">
                     <button className="mission-add-btn" onClick={() => setShowInterviewModal(true)}>
                       <Sparkles size={16} />
                       Plan with AI
@@ -3693,78 +3655,181 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
                 </div>
               )}
             </div>
-          )}
-        </div>
+  );
 
-        {/* ── Delete confirmation panel ── */}
-        {deleteConfirmId && (
-          <div className="mission-confirm-panel mission-confirm-panel--danger">
-            <div className="mission-confirm-panel__content">
-              <p>
-                Delete this {deleteConfirmId.type}? This cannot be undone.
-              </p>
-              <div className="mission-confirm-panel__actions">
+  const renderDeleteConfirmationPanel = () => (
+    <div className="mission-confirm-panel mission-confirm-panel--danger">
+      <div className="mission-confirm-panel__content">
+        <p>
+          Delete this {deleteConfirmId?.type}? This cannot be undone.
+        </p>
+        <div className="mission-confirm-panel__actions">
+          <button
+            className="mission-btn mission-btn--danger"
+            onClick={async () => {
+              if (!deleteConfirmId) return;
+              if (deleteConfirmId.type === "mission") {
+                await handleDeleteMission(deleteConfirmId.id);
+              } else if (deleteConfirmId.type === "milestone") {
+                await handleDeleteMilestone(deleteConfirmId.id);
+              } else if (deleteConfirmId.type === "slice") {
+                await handleDeleteSlice(deleteConfirmId.id);
+              } else if (deleteConfirmId.type === "feature") {
+                await handleDeleteFeature(deleteConfirmId.id);
+              }
+            }}
+          >
+            Delete
+          </button>
+          <button className="mission-btn mission-btn--ghost" onClick={() => setDeleteConfirmId(null)}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderLinkTaskPanel = () => (
+    <div className="mission-confirm-panel mission-confirm-panel--link">
+      <div className="mission-confirm-panel__content">
+        <p>Link feature to task:</p>
+        <input
+          type="text"
+          placeholder="Task ID (e.g., FN-001)"
+          value={selectedTaskId}
+          onChange={(e) => setSelectedTaskId(e.target.value)}
+          autoFocus
+        />
+        {availableTasks.length > 0 && (
+          <div className="mission-task-suggestions">
+            <small>Or select:</small>
+            <div className="mission-task-suggestions__list">
+              {availableTasks.slice(0, 5).map((task) => (
                 <button
-                  className="mission-btn mission-btn--danger"
-                  onClick={async () => {
-                    if (deleteConfirmId.type === "mission") {
-                      await handleDeleteMission(deleteConfirmId.id);
-                    } else if (deleteConfirmId.type === "milestone") {
-                      await handleDeleteMilestone(deleteConfirmId.id);
-                    } else if (deleteConfirmId.type === "slice") {
-                      await handleDeleteSlice(deleteConfirmId.id);
-                    } else if (deleteConfirmId.type === "feature") {
-                      await handleDeleteFeature(deleteConfirmId.id);
-                    }
-                  }}
+                  key={task.id}
+                  className="mission-task-suggestions__item"
+                  onClick={() => setSelectedTaskId(task.id)}
                 >
-                  Delete
+                  {task.id}: {task.title || "Untitled"}
                 </button>
-                <button className="mission-btn mission-btn--ghost" onClick={() => setDeleteConfirmId(null)}>
-                  Cancel
-                </button>
-              </div>
+              ))}
             </div>
           </div>
         )}
+        <div className="mission-confirm-panel__actions">
+          <button className="mission-btn mission-btn--primary" onClick={handleLinkTask}>
+            Link
+          </button>
+          <button className="mission-btn mission-btn--ghost" onClick={() => { setLinkTaskFeatureId(null); setSelectedTaskId(""); }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
-        {/* ── Link task panel ── */}
-        {linkTaskFeatureId && (
-          <div className="mission-confirm-panel mission-confirm-panel--link">
-            <div className="mission-confirm-panel__content">
-              <p>Link feature to task:</p>
-              <input
-                type="text"
-                placeholder="Task ID (e.g., FN-001)"
-                value={selectedTaskId}
-                onChange={(e) => setSelectedTaskId(e.target.value)}
-                autoFocus
-              />
-              {availableTasks.length > 0 && (
-                <div className="mission-task-suggestions">
-                  <small>Or select:</small>
-                  <div className="mission-task-suggestions__list">
-                    {availableTasks.slice(0, 5).map((task) => (
-                      <button
-                        key={task.id}
-                        className="mission-task-suggestions__item"
-                        onClick={() => setSelectedTaskId(task.id)}
-                      >
-                        {task.id}: {task.title || "Untitled"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div className="mission-confirm-panel__actions">
-                <button className="mission-btn mission-btn--primary" onClick={handleLinkTask}>
-                  Link
-                </button>
-                <button className="mission-btn mission-btn--ghost" onClick={() => { setLinkTaskFeatureId(null); setSelectedTaskId(""); }}>
-                  Cancel
-                </button>
+  const manager = (
+    <div
+      ref={modalRef}
+      className={`mission-manager mission-manager--desktop${isInline ? " mission-manager--inline" : ""}`}
+      role={isInline ? undefined : "dialog"}
+      aria-modal={isInline ? undefined : true}
+      aria-label={isInline ? undefined : "Mission Manager"}
+      data-testid="mission-manager-dialog"
+    >
+        {/* ── Header ── */}
+        <div className={`mission-manager__header${isInline ? " mission-manager__header--inline" : ""}`}>
+          <div className="mission-manager__header-title">
+            {isMobileLayout && selectedMission && (
+              <button
+                className="mission-manager__back-btn"
+                onClick={handleBackToList}
+                title="Back to missions"
+                aria-label="Back to missions list"
+                data-testid="mission-back-btn"
+              >
+                <ChevronLeft size={18} />
+              </button>
+            )}
+            <Target size={18} className="mission-manager__header-icon" />
+            <h2 className="mission-manager__title">
+              {selectedMission ? selectedMission.title : "Missions"}
+            </h2>
+          </div>
+          {!isInline && (
+            /* Modal mode: show close button */
+            <button
+              className="modal-close"
+              onClick={onClose}
+              title="Close"
+              aria-label="Close Mission Manager"
+              data-testid="mission-close-btn"
+            >
+              <X size={18} />
+            </button>
+          )}
+        </div>
+
+        {/* ── Body ── */}
+        {/* ── Desktop split layout (visible on desktop, hidden on mobile via CSS) ── */}
+        <div className="mission-manager__split">
+          <div className="mission-manager__sidebar">
+            {loading ? (
+              <div className="mission-manager__loading">
+                <Loader2 size={24} className="spinner" />
+                <span>Loading missions...</span>
               </div>
-            </div>
+            ) : (
+              renderMissionListContent()
+            )}
+          </div>
+
+          <div className="mission-manager__detail-pane">
+            {detailLoading ? (
+              <div className="mission-manager__loading">
+                <Loader2 size={24} className="spinner" />
+                <span>Loading mission details...</span>
+              </div>
+            ) : selectedMission ? (
+              renderMissionDetailContent(selectedMission)
+            ) : (
+              <div className="mission-manager__detail-pane-empty">
+                <Target size={24} />
+                <span>Select a mission to view details</span>
+              </div>
+            )}
+
+            {deleteConfirmId && renderDeleteConfirmationPanel()}
+            {linkTaskFeatureId && renderLinkTaskPanel()}
+          </div>
+        </div>
+
+        {/* ── Mobile stacked layout (hidden on desktop via CSS, shown on mobile) ── */}
+        <div className="mission-manager__body mission-manager__body--stacked">
+          {isMobileLayout ? (
+            loading ? (
+              <div className="mission-manager__loading">
+                <Loader2 size={24} className="spinner" />
+                <span>Loading missions...</span>
+              </div>
+            ) : detailLoading ? (
+              <div className="mission-manager__loading">
+                <Loader2 size={24} className="spinner" />
+                <span>Loading mission details...</span>
+              </div>
+            ) : selectedMission ? (
+              renderMissionDetailContent(selectedMission)
+            ) : (
+              renderMissionListContent()
+            )
+          ) : null}
+        </div>
+
+        {/* Delete/link panels for mobile stacked layout */}
+        {isMobileLayout && (
+          <div className="mission-manager__mobile-panels">
+            {deleteConfirmId && renderDeleteConfirmationPanel()}
+            {linkTaskFeatureId && renderLinkTaskPanel()}
           </div>
         )}
       </div>
