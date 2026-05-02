@@ -34,6 +34,10 @@ describe("PluginRunner", () => {
     getPluginRoutes: ReturnType<typeof vi.fn>;
     getPluginUiSlots: ReturnType<typeof vi.fn>;
     getPluginRuntimes: ReturnType<typeof vi.fn>;
+    getPluginSkills: ReturnType<typeof vi.fn>;
+    getPluginWorkflowSteps: ReturnType<typeof vi.fn>;
+    getPluginPromptContributions: ReturnType<typeof vi.fn>;
+    getPluginSetupInfo: ReturnType<typeof vi.fn>;
     getLoadedPlugins: ReturnType<typeof vi.fn>;
     getPlugin: ReturnType<typeof vi.fn>;
     loadPlugin: ReturnType<typeof vi.fn>;
@@ -87,6 +91,10 @@ describe("PluginRunner", () => {
       getPluginRoutes: vi.fn().mockReturnValue([]),
       getPluginUiSlots: vi.fn().mockReturnValue([]),
       getPluginRuntimes: vi.fn().mockReturnValue([]),
+      getPluginSkills: vi.fn().mockReturnValue([]),
+      getPluginWorkflowSteps: vi.fn().mockReturnValue([]),
+      getPluginPromptContributions: vi.fn().mockReturnValue([]),
+      getPluginSetupInfo: vi.fn().mockReturnValue([]),
       getLoadedPlugins: vi.fn().mockReturnValue([]),
       getPlugin: vi.fn(),
       loadPlugin: vi.fn().mockResolvedValue({}),
@@ -735,6 +743,85 @@ describe("PluginRunner", () => {
       // Next call should rebuild cache
       pluginRunner.getPluginRuntimes();
       expect(mockPluginLoader.getPluginRuntimes).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("new plugin contribution accessors", () => {
+    it("getPluginSkills returns empty array initially", async () => {
+      await pluginRunner.init();
+      expect(pluginRunner.getPluginSkills()).toEqual([]);
+    });
+
+    it("getPluginSkills returns cached skills after init", async () => {
+      const skills = [{ pluginId: "test-plugin", skill: { skillId: "s1", name: "Skill", description: "d", skillFiles: ["./skill.md"] } }];
+      mockPluginLoader.getPluginSkills.mockReturnValue(skills);
+      await pluginRunner.init();
+      const first = pluginRunner.getPluginSkills();
+      const second = pluginRunner.getPluginSkills();
+      expect(first).toEqual(skills);
+      expect(second).toBe(first);
+    });
+
+    it("returns workflow steps, prompt contributions, and setup info", async () => {
+      const steps = [{ pluginId: "test-plugin", step: { stepId: "ws1", name: "Step", description: "d", mode: "prompt", prompt: "Run checks" } }];
+      const prompts = [{ pluginId: "test-plugin", contribution: { surface: "executor-system", content: "extra" }, config: { enabledByDefault: true, contributions: [] } }];
+      const setups = [{ pluginId: "test-plugin", manifest: { binaryName: "agent-browser", description: "Do it" }, hooks: { checkSetup: vi.fn().mockResolvedValue({ status: "installed" }) } }];
+      mockPluginLoader.getPluginWorkflowSteps.mockReturnValue(steps);
+      mockPluginLoader.getPluginPromptContributions.mockReturnValue(prompts);
+      mockPluginLoader.getPluginSetupInfo.mockReturnValue(setups);
+      await pluginRunner.init();
+      expect(pluginRunner.getPluginWorkflowSteps()).toEqual(steps);
+      expect(pluginRunner.getPluginPromptContributions()).toEqual(prompts);
+      expect(pluginRunner.getPluginSetupInfo()).toEqual(setups);
+    });
+
+    it("getPromptContributionsForSurface filters by surface", async () => {
+      mockPluginLoader.getPluginPromptContributions.mockReturnValue([
+        { pluginId: "test-plugin", contribution: { surface: "executor-system", content: "ok" }, config: { enabledByDefault: true, contributions: [] } },
+        { pluginId: "test-plugin", contribution: { surface: "triage", content: "skip" }, config: { enabledByDefault: true, contributions: [] } },
+      ]);
+      mockPluginLoader.getPlugin.mockReturnValue(createMockPlugin({ state: "started" }));
+      await pluginRunner.init();
+      const filtered = pluginRunner.getPromptContributionsForSurface("executor-system");
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0].contribution.content).toBe("ok");
+    });
+
+    it("getPromptContributionsForSurface returns empty when no matches", async () => {
+      mockPluginLoader.getPluginPromptContributions.mockReturnValue([
+        { pluginId: "test-plugin", contribution: { surface: "executor-system", content: "disabled" }, config: { enabledByDefault: false, contributions: [] } },
+      ]);
+      mockPluginLoader.getPlugin.mockReturnValue(createMockPlugin({ state: "started" }));
+      await pluginRunner.init();
+      expect(pluginRunner.getPromptContributionsForSurface("reviewer")).toEqual([]);
+      expect(pluginRunner.getPromptContributionsForSurface("executor-system")).toEqual([]);
+    });
+
+    it("invalidates new contribution caches on state change and loader events", async () => {
+      await pluginRunner.init();
+      pluginRunner.getPluginSkills();
+      pluginRunner.getPluginWorkflowSteps();
+      pluginRunner.getPluginPromptContributions();
+      pluginRunner.getPluginSetupInfo();
+
+      const stateChanged = mockPluginStore.on.mock.calls.find((call) => call[0] === "plugin:stateChanged")?.[1];
+      stateChanged?.();
+      pluginRunner.getPluginSkills();
+      pluginRunner.getPluginWorkflowSteps();
+      pluginRunner.getPluginPromptContributions();
+      pluginRunner.getPluginSetupInfo();
+
+      const loaded = mockPluginLoader.on.mock.calls.find((call) => call[0] === "plugin:loaded")?.[1];
+      loaded?.({ pluginId: "test-plugin" });
+      pluginRunner.getPluginSkills();
+      pluginRunner.getPluginWorkflowSteps();
+      pluginRunner.getPluginPromptContributions();
+      pluginRunner.getPluginSetupInfo();
+
+      expect(mockPluginLoader.getPluginSkills).toHaveBeenCalledTimes(3);
+      expect(mockPluginLoader.getPluginWorkflowSteps).toHaveBeenCalledTimes(3);
+      expect(mockPluginLoader.getPluginPromptContributions).toHaveBeenCalledTimes(3);
+      expect(mockPluginLoader.getPluginSetupInfo).toHaveBeenCalledTimes(3);
     });
   });
 

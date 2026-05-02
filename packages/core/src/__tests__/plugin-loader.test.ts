@@ -1511,6 +1511,107 @@ describe("PluginLoader", () => {
     });
   });
 
+  // ── new plugin contribution accessors ───────────────────────────────
+
+  describe("new contribution accessors", () => {
+    it("returns empty arrays when no contribution types are present", async () => {
+      await pluginStore.init();
+      loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
+      expect(loader.getPluginSkills()).toEqual([]);
+      expect(loader.getPluginWorkflowSteps()).toEqual([]);
+      expect(loader.getPluginPromptContributions()).toEqual([]);
+      expect(loader.getPluginSetupInfo()).toEqual([]);
+    });
+
+    it("getPluginSkills returns skills with pluginId", async () => {
+      await pluginStore.init();
+      loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
+      (loader as any).plugins.set("skills-plugin", {
+        manifest: makeManifest({ id: "skills-plugin" }),
+        state: "started",
+        hooks: {},
+        skills: [{ skillId: "browser", name: "Browser", description: "Web", skillFiles: ["./SKILL.md"] }],
+      } as FusionPlugin);
+      expect(loader.getPluginSkills()).toEqual([
+        {
+          pluginId: "skills-plugin",
+          skill: { skillId: "browser", name: "Browser", description: "Web", skillFiles: ["./SKILL.md"] },
+        },
+      ]);
+    });
+
+    it("returns workflow steps, prompt contributions, and setup info", async () => {
+      await pluginStore.init();
+      loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
+      const checkSetup = vi.fn().mockResolvedValue({ status: "installed" });
+      (loader as any).plugins.set("contrib-plugin", {
+        manifest: makeManifest({ id: "contrib-plugin" }),
+        state: "started",
+        hooks: {},
+        workflowSteps: [{ stepId: "wf", name: "WF", description: "desc", mode: "prompt", prompt: "check" }],
+        promptContributions: {
+          enabledByDefault: true,
+          contributions: [{ surface: "executor-system", content: "inject" }],
+        },
+        setup: {
+          manifest: { binaryName: "agent-browser", description: "Binary" },
+          hooks: { checkSetup },
+        },
+      } as FusionPlugin);
+
+      expect(loader.getPluginWorkflowSteps()).toEqual([
+        {
+          pluginId: "contrib-plugin",
+          step: { stepId: "wf", name: "WF", description: "desc", mode: "prompt", prompt: "check" },
+        },
+      ]);
+      expect(loader.getPluginPromptContributions()).toEqual([
+        {
+          pluginId: "contrib-plugin",
+          contribution: { surface: "executor-system", content: "inject" },
+          config: {
+            enabledByDefault: true,
+            contributions: [{ surface: "executor-system", content: "inject" }],
+          },
+        },
+      ]);
+      expect(loader.getPluginSetupInfo()).toEqual([
+        {
+          pluginId: "contrib-plugin",
+          manifest: { binaryName: "agent-browser", description: "Binary" },
+          hooks: { checkSetup },
+        },
+      ]);
+    });
+
+    it("stopped or unloaded plugins are not included", async () => {
+      await pluginStore.init();
+      loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
+      (loader as any).plugins.set("started-plugin", {
+        manifest: makeManifest({ id: "started-plugin" }),
+        state: "started",
+        hooks: {},
+        skills: [{ skillId: "a", name: "A", description: "A", skillFiles: ["./a.md"] }],
+      } as FusionPlugin);
+      (loader as any).plugins.set("stopped-plugin", {
+        manifest: makeManifest({ id: "stopped-plugin" }),
+        state: "stopped",
+        hooks: {},
+        skills: [{ skillId: "b", name: "B", description: "B", skillFiles: ["./b.md"] }],
+      } as FusionPlugin);
+
+      const filtered = loader.getPluginSkills().filter((entry) => {
+        const plugin = loader.getPlugin(entry.pluginId);
+        return plugin?.state === "started";
+      });
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0].pluginId).toBe("started-plugin");
+
+      (loader as any).plugins.delete("stopped-plugin");
+      expect(loader.getPluginSkills().map((entry) => entry.pluginId)).toEqual(["started-plugin"]);
+    });
+  });
+
   // ── getLoadedPlugins ───────────────────────────────────────────────
 
   describe("getLoadedPlugins", () => {

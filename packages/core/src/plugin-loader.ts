@@ -24,6 +24,12 @@ import type {
   PluginUiSlotDefinition,
   PluginRuntimeRegistration,
   PluginInstallation,
+  PluginSkillContribution,
+  PluginWorkflowStepContribution,
+  PluginPromptContribution,
+  PluginPromptContributions,
+  PluginSetupManifest,
+  PluginSetupHooks,
 } from "./plugin-types.js";
 import { validatePluginManifest } from "./plugin-types.js";
 import { createLogger } from "./logger.js";
@@ -781,6 +787,72 @@ export class PluginLoader extends EventEmitter<{
       }
     }
     return runtimes;
+  }
+
+  /**
+   * Get all skill contributions from loaded plugins.
+   */
+  getPluginSkills(): Array<{ pluginId: string; skill: PluginSkillContribution }> {
+    const skills: Array<{ pluginId: string; skill: PluginSkillContribution }> = [];
+    for (const [pluginId, plugin] of this.plugins) {
+      if (plugin.skills) {
+        for (const skill of plugin.skills) {
+          skills.push({ pluginId, skill });
+        }
+      }
+    }
+    return skills;
+  }
+
+  /**
+   * Get all workflow step contributions from loaded plugins.
+   */
+  getPluginWorkflowSteps(): Array<{ pluginId: string; step: PluginWorkflowStepContribution }> {
+    const steps: Array<{ pluginId: string; step: PluginWorkflowStepContribution }> = [];
+    for (const [pluginId, plugin] of this.plugins) {
+      if (plugin.workflowSteps) {
+        for (const step of plugin.workflowSteps) {
+          steps.push({ pluginId, step });
+        }
+      }
+    }
+    return steps;
+  }
+
+  /**
+   * Get all prompt contributions from loaded plugins.
+   */
+  getPluginPromptContributions(): Array<{
+    pluginId: string;
+    contribution: PluginPromptContribution;
+    config: PluginPromptContributions;
+  }> {
+    const contributions: Array<{
+      pluginId: string;
+      contribution: PluginPromptContribution;
+      config: PluginPromptContributions;
+    }> = [];
+    for (const [pluginId, plugin] of this.plugins) {
+      if (plugin.promptContributions) {
+        for (const contribution of plugin.promptContributions.contributions) {
+          contributions.push({ pluginId, contribution, config: plugin.promptContributions });
+        }
+      }
+    }
+    return contributions;
+  }
+
+  /**
+   * Get all setup metadata and hooks from loaded plugins.
+   */
+  getPluginSetupInfo(): Array<{ pluginId: string; manifest: PluginSetupManifest; hooks: PluginSetupHooks }> {
+    const setups: Array<{ pluginId: string; manifest: PluginSetupManifest; hooks: PluginSetupHooks }> = [];
+    for (const [pluginId, plugin] of this.plugins) {
+      if (plugin.setup) {
+        setups.push({ pluginId, manifest: plugin.setup.manifest, hooks: plugin.setup.hooks });
+      }
+    }
+    return setups;
   }
 
   /**
