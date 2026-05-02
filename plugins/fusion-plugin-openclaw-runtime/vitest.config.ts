@@ -10,7 +10,6 @@ export default defineConfig({
     alias: {
       "@fusion/core": fileURLToPath(new URL("../../packages/core/src/index.ts", import.meta.url)),
       "@fusion/plugin-sdk": fileURLToPath(new URL("../../packages/plugin-sdk/src/index.ts", import.meta.url)),
-      "@fusion/engine": fileURLToPath(new URL("../../packages/engine/src/index.ts", import.meta.url)),
     },
   },
   test: {

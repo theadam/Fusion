@@ -36,12 +36,6 @@ vi.mock("../logger.js", () => ({
   },
 }));
 
-vi.mock("@fusion/engine", () => ({
-  createFnAgent: mockCreateFnAgent,
-  promptWithFallback: mockPromptWithFallback,
-  describeModel: mockDescribeModel,
-}));
-
 vi.mock("@mariozechner/pi-ai", () => ({
   getModel: mockGetModel,
   streamSimple: mockStreamSimple,

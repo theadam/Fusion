@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFile } from "node:fs/promises";
 import { OpenClawRuntimeAdapter } from "../runtime-adapter.js";
 
 const {
@@ -47,6 +48,12 @@ describe("OpenClawRuntimeAdapter — identity", () => {
     const adapter = new OpenClawRuntimeAdapter();
     expect(adapter.id).toBe("openclaw");
     expect(adapter.name).toBe("OpenClaw Runtime");
+  });
+
+  it("uses the local pi-module seam and does not import @fusion/engine", async () => {
+    const source = await readFile(new URL("../runtime-adapter.ts", import.meta.url), "utf8");
+    expect(source).toContain('from "./pi-module.js"');
+    expect(source).not.toContain("@fusion/engine");
   });
 });
 
