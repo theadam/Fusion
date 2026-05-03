@@ -332,6 +332,13 @@ function StatRow({ label, children }: { label: string; children: React.ReactNode
 
 function StatsPanel({ state, isFocused }: { state: DashboardState; isFocused: boolean }) {
   const sys = state.systemStats;
+  const systemMemUsed = sys ? sys.systemTotalMem - sys.systemFreeMem : 0;
+  const systemMemUsageColor = sys ? sysMemColor(systemMemUsed, sys.systemTotalMem) : undefined;
+  const systemMemUsagePct =
+    sys && sys.systemTotalMem > 0
+      ? `${((systemMemUsed / sys.systemTotalMem) * 100).toFixed(1)}%`
+      : null;
+
   return (
     <Panel title="Stats" isFocused={isFocused} flexGrow={1}>
       <Box flexDirection="column">
@@ -362,16 +369,12 @@ function StatsPanel({ state, isFocused }: { state: DashboardState; isFocused: bo
               <Text>{sys.loadAvg.map((n) => n.toFixed(2)).join(" ")}</Text>
             </StatRow>
             <StatRow label="MEM">
-              <Text color={sysMemColor(sys.systemTotalMem - sys.systemFreeMem, sys.systemTotalMem)}>
-                {formatBytes(sys.systemTotalMem - sys.systemFreeMem)}
-              </Text>
+              {systemMemUsagePct && (
+                <Text color={systemMemUsageColor}>{systemMemUsagePct}</Text>
+              )}
+              <Text color={systemMemUsageColor}>{formatBytes(systemMemUsed)}</Text>
               <Text dimColor>/</Text>
               <Text>{formatBytes(sys.systemTotalMem)}</Text>
-              {sys.systemTotalMem > 0 && (
-                <Text color={sysMemColor(sys.systemTotalMem - sys.systemFreeMem, sys.systemTotalMem)}>
-                  {((sys.systemTotalMem - sys.systemFreeMem) / sys.systemTotalMem * 100).toFixed(1)}%
-                </Text>
-              )}
             </StatRow>
           </>
         ) : (

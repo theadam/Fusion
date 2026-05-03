@@ -668,6 +668,45 @@ describe("StatusModeGrid layout stability", () => {
   });
 });
 
+describe("StatsPanel memory row", () => {
+  it("renders memory percentage before absolute values", async () => {
+    const controller = newController();
+    controller.setSystemInfo(makeSystemInfo());
+    controller.setActiveSection("stats");
+    controller.setSystemStats({
+      rss: 0,
+      heapUsed: 0,
+      heapTotal: 0,
+      heapLimit: 1,
+      external: 0,
+      arrayBuffers: 0,
+      cpuPercent: 0,
+      loadAvg: [0, 0, 0],
+      cpuCount: 1,
+      systemTotalMem: 8 * 1024 * 1024 * 1024,
+      systemFreeMem: 2 * 1024 * 1024 * 1024,
+      pid: process.pid,
+      nodeVersion: process.version,
+      platform: `${process.platform}/${process.arch}`,
+    });
+
+    const rendered = render(renderDashboardAppNode(controller));
+    setTerminalSize(rendered, 120, 24);
+    rendered.rerender(renderDashboardAppNode(controller));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const frame = rendered.lastFrame() ?? "";
+    const pctIndex = frame.indexOf("75.0%");
+    const usedIndex = frame.indexOf("6.00 GB");
+
+    expect(pctIndex).toBeGreaterThanOrEqual(0);
+    expect(usedIndex).toBeGreaterThanOrEqual(0);
+    expect(pctIndex).toBeLessThan(usedIndex);
+
+    rendered.unmount();
+  });
+});
+
 describe("LogsPanel narrow formatting", () => {
   it("shows a compact index instead of full timestamp in narrow terminals", async () => {
     const controller = newController();
