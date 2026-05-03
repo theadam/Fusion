@@ -40,7 +40,13 @@ export default defineConfig({
   // Native module: leave node-pty (aliased to @homebridge fork) out of the
   // bundle. esbuild can't statically resolve its conditional native require()s
   // (build/Release/pty.node, build/Debug/conpty.node, ...).
-  external: ["node-pty", "@homebridge/node-pty-prebuilt-multiarch"],
+  external: [
+    "node-pty",
+    "@homebridge/node-pty-prebuilt-multiarch",
+    "dockerode",
+    "ssh2",
+    "cpu-features",
+  ],
   splitting: false,
   clean: true,
   removeNodeProtocol: false,

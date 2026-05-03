@@ -1,7 +1,8 @@
 import { ChevronDown, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ManagedDockerNodeInput } from "@fusion/core";
+import type { DockerHostConfig, ManagedDockerNodeInput } from "@fusion/core";
 import type { ToastType } from "../hooks/useToast";
+import { DockerTargetSelector } from "./DockerTargetSelector";
 import "./DockerNodeOnboardingModal.css";
 
 interface DockerNodeOnboardingModalProps {
@@ -33,7 +34,7 @@ const DEFAULT_URL = "http://localhost:4040";
 
 export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast: _addToast }: DockerNodeOnboardingModalProps) {
   const [name, setName] = useState("");
-  const [location, setLocation] = useState<"local" | "remote">("local");
+  const [hostConfig, setHostConfig] = useState<DockerHostConfig>({});
   const [reachableUrl, setReachableUrl] = useState(DEFAULT_URL);
   const [apiKeyMode, setApiKeyMode] = useState<"auto" | "manual">("auto");
   const [apiKey, setApiKey] = useState("");
@@ -45,12 +46,7 @@ export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast:
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [imageName, setImageName] = useState("runfusion/fusion");
   const [imageTag, setImageTag] = useState("latest");
-  const [dockerContext, setDockerContext] = useState("");
-  const [dockerHost, setDockerHost] = useState("");
-  const [tlsVerify, setTlsVerify] = useState(true);
-  const [tlsCaPath, setTlsCaPath] = useState("");
-  const [tlsCertPath, setTlsCertPath] = useState("");
-  const [tlsKeyPath, setTlsKeyPath] = useState("");
+
   const [envRows, setEnvRows] = useState<KeyValueRow[]>([]);
   const [mountRows, setMountRows] = useState<MountRow[]>([]);
   const [errors, setErrors] = useState<FormErrors>({});
@@ -58,7 +54,7 @@ export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast:
 
   const resetForm = useCallback(() => {
     setName("");
-    setLocation("local");
+    setHostConfig({});
     setReachableUrl(DEFAULT_URL);
     setApiKeyMode("auto");
     setApiKey("");
@@ -70,12 +66,7 @@ export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast:
     setShowAdvanced(false);
     setImageName("runfusion/fusion");
     setImageTag("latest");
-    setDockerContext("");
-    setDockerHost("");
-    setTlsVerify(true);
-    setTlsCaPath("");
-    setTlsCertPath("");
-    setTlsKeyPath("");
+
     setEnvRows([]);
     setMountRows([]);
     setErrors({});
@@ -111,12 +102,12 @@ export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast:
     imageName: imageName.trim() || "runfusion/fusion",
     imageTag: imageTag.trim() || "latest",
     hostConfig: {
-      context: dockerContext.trim() || undefined,
-      host: location === "remote" ? dockerHost.trim() || undefined : undefined,
-      tlsVerify: location === "remote" ? tlsVerify : undefined,
-      tlsCaPath: location === "remote" ? tlsCaPath.trim() || undefined : undefined,
-      tlsCertPath: location === "remote" ? tlsCertPath.trim() || undefined : undefined,
-      tlsKeyPath: location === "remote" ? tlsKeyPath.trim() || undefined : undefined,
+      context: hostConfig.context?.trim() || undefined,
+      host: hostConfig.host?.trim() || undefined,
+      tlsVerify: hostConfig.tlsVerify,
+      tlsCaPath: hostConfig.tlsCaPath?.trim() || undefined,
+      tlsCertPath: hostConfig.tlsCertPath?.trim() || undefined,
+      tlsKeyPath: hostConfig.tlsKeyPath?.trim() || undefined,
     },
     envVars: Object.fromEntries(
       envRows
@@ -141,23 +132,17 @@ export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast:
     apiKey,
     apiKeyMode,
     cpus,
-    dockerContext,
-    dockerHost,
+    hostConfig,
     envRows,
     imageName,
     imageTag,
     includeClaudeCli,
     includeDroidCli,
-    location,
     memoryMB,
     mountRows,
     name,
     persistentStorage,
     reachableUrl,
-    tlsCaPath,
-    tlsCertPath,
-    tlsKeyPath,
-    tlsVerify,
   ]);
 
   const addEnvRow = useCallback(() => {
@@ -191,8 +176,8 @@ export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast:
     if (!input.name || input.name.length > 64) {
       nextErrors.name = "Name is required and must be 64 characters or fewer";
     }
-    if (location === "remote" && !input.reachableUrl) {
-      nextErrors.reachableUrl = "URL is required for remote Docker";
+    if (!input.reachableUrl) {
+      nextErrors.reachableUrl = "URL is required";
     }
     if (memoryMB < 512) {
       nextErrors.memoryMB = "Memory must be at least 512 MB";
@@ -215,7 +200,7 @@ export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast:
     } finally {
       setSubmitting(false);
     }
-  }, [closeModal, cpus, input, location, memoryMB, onSubmit, submitting]);
+  }, [closeModal, cpus, input, memoryMB, onSubmit, submitting]);
 
   if (!isOpen) return null;
 
@@ -252,26 +237,7 @@ export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast:
             </label>
             {errors.name && <div className="form-error">{errors.name}</div>}
 
-            <div className="docker-onboarding__type-toggle" role="tablist" aria-label="Target location">
-              <button
-                type="button"
-                className={`docker-onboarding__type-btn ${location === "local" ? "is-active" : ""}`}
-                onClick={() => setLocation("local")}
-                disabled={submitting}
-                aria-pressed={location === "local"}
-              >
-                Local Docker
-              </button>
-              <button
-                type="button"
-                className={`docker-onboarding__type-btn ${location === "remote" ? "is-active" : ""}`}
-                onClick={() => setLocation("remote")}
-                disabled={submitting}
-                aria-pressed={location === "remote"}
-              >
-                Remote Docker
-              </button>
-            </div>
+            <DockerTargetSelector value={hostConfig} onChange={setHostConfig} />
 
             <label className="docker-onboarding__field">
               <span>Reachable URL</span>
@@ -280,23 +246,11 @@ export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast:
                 value={reachableUrl}
                 onChange={(event) => setReachableUrl(event.target.value)}
                 disabled={submitting}
-                placeholder={location === "local" ? DEFAULT_URL : "http://192.168.1.50:4040"}
+                placeholder={DEFAULT_URL}
               />
             </label>
             {errors.reachableUrl && <div className="form-error">{errors.reachableUrl}</div>}
 
-            {location === "remote" && (
-              <label className="docker-onboarding__field">
-                <span>Docker Host</span>
-                <input
-                  className="input"
-                  value={dockerHost}
-                  onChange={(event) => setDockerHost(event.target.value)}
-                  disabled={submitting}
-                  placeholder="tcp://host:2376"
-                />
-              </label>
-            )}
 
             <div className="docker-onboarding__radio-group">
               <label className="checkbox-label">
@@ -428,73 +382,6 @@ export function DockerNodeOnboardingModal({ isOpen, onClose, onSubmit, addToast:
                   </label>
                 </div>
 
-                <label className="docker-onboarding__field">
-                  <span>Docker Context</span>
-                  <input
-                    className="input"
-                    value={dockerContext}
-                    onChange={(event) => setDockerContext(event.target.value)}
-                    disabled={submitting}
-                    placeholder="default"
-                  />
-                </label>
-
-                {location === "local" && (
-                  <label className="docker-onboarding__field">
-                    <span>Docker Host</span>
-                    <input
-                      className="input"
-                      value={dockerHost}
-                      onChange={(event) => setDockerHost(event.target.value)}
-                      disabled={submitting || Boolean(dockerContext.trim())}
-                      placeholder="tcp://host:2376"
-                    />
-                  </label>
-                )}
-
-                {location === "remote" && (
-                  <div className="docker-onboarding__tls-fields">
-                    <label className="docker-onboarding__field">
-                      <span>CA Cert Path</span>
-                      <input
-                        className="input"
-                        value={tlsCaPath}
-                        onChange={(event) => setTlsCaPath(event.target.value)}
-                        disabled={submitting}
-                        placeholder="/etc/docker/ca.pem"
-                      />
-                    </label>
-                    <label className="docker-onboarding__field">
-                      <span>Client Cert Path</span>
-                      <input
-                        className="input"
-                        value={tlsCertPath}
-                        onChange={(event) => setTlsCertPath(event.target.value)}
-                        disabled={submitting}
-                        placeholder="/etc/docker/cert.pem"
-                      />
-                    </label>
-                    <label className="docker-onboarding__field">
-                      <span>Client Key Path</span>
-                      <input
-                        className="input"
-                        value={tlsKeyPath}
-                        onChange={(event) => setTlsKeyPath(event.target.value)}
-                        disabled={submitting}
-                        placeholder="/etc/docker/key.pem"
-                      />
-                    </label>
-                    <label className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={tlsVerify}
-                        onChange={(event) => setTlsVerify(event.target.checked)}
-                        disabled={submitting}
-                      />
-                      TLS verify
-                    </label>
-                  </div>
-                )}
 
                 <div className="docker-onboarding__kv-list">
                   <h5>Environment Variables</h5>

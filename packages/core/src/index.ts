@@ -391,6 +391,7 @@ export { NodeConnection } from "./node-connection.js";
 export { NodeDiscovery } from "./node-discovery.js";
 export { collectSystemMetrics } from "./system-metrics.js";
 export { getAppVersion, parseSemver } from "./app-version.js";
+export { DockerClientService } from "./docker-client.js";
 export type {
   ConnectionErrorType,
   ConnectionOptions,
@@ -414,6 +415,9 @@ export type {
   DockerResourceSizing,
   DockerVolumeMount,
   DockerExtraCli,
+  DockerContextInfo,
+  DockerConnectivityResult,
+  DockerContainerInspectResult,
   ManagedDockerNode,
   ManagedDockerNodeInput,
   ManagedDockerNodeUpdate,

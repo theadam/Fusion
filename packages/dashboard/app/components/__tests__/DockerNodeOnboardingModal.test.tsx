@@ -26,7 +26,7 @@ describe("DockerNodeOnboardingModal", () => {
     render(<DockerNodeOnboardingModal {...defaultProps} />);
     expect(screen.getByPlaceholderText("my-docker-node")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Local Docker" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remote Docker" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remote Host" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Auto-generate" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Provide manually" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Claude CLI" })).toBeInTheDocument();
@@ -46,9 +46,8 @@ describe("DockerNodeOnboardingModal", () => {
     expect(advancedToggle).toHaveClass("is-expanded");
     expect(screen.getByPlaceholderText("runfusion/fusion")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("latest")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("default")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Remote Docker" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remote Host" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use TLS" }));
     expect(screen.getByPlaceholderText("/etc/docker/ca.pem")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add variable" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add mount" })).toBeInTheDocument();
@@ -60,10 +59,9 @@ describe("DockerNodeOnboardingModal", () => {
     expect(await screen.findByText("Name is required and must be 64 characters or fewer")).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("my-docker-node"), { target: { value: "n1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Remote Docker" }));
-    fireEvent.change(screen.getByPlaceholderText("http://192.168.1.50:4040"), { target: { value: "" } });
+    fireEvent.change(screen.getByPlaceholderText("http://localhost:4040"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Docker Node" }));
-    expect(await screen.findByText("URL is required for remote Docker")).toBeInTheDocument();
+    expect(await screen.findByText("URL is required")).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("spinbutton", { name: "Memory (MB)" }), { target: { value: "256" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "CPUs" }), { target: { value: "0.25" } });
@@ -75,8 +73,8 @@ describe("DockerNodeOnboardingModal", () => {
   it("shows remote host and manual api key controls", () => {
     render(<DockerNodeOnboardingModal {...defaultProps} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Remote Docker" }));
-    expect(screen.getAllByPlaceholderText("tcp://host:2376").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Remote Host" }));
+    expect(screen.getByPlaceholderText("tcp://host:2376")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("radio", { name: "Provide manually" }));
     expect(screen.getByPlaceholderText("Enter API key")).toBeInTheDocument();
@@ -86,8 +84,8 @@ describe("DockerNodeOnboardingModal", () => {
     render(<DockerNodeOnboardingModal {...defaultProps} />);
 
     fireEvent.change(screen.getByPlaceholderText("my-docker-node"), { target: { value: "docker-a" } });
-    fireEvent.click(screen.getByRole("button", { name: "Remote Docker" }));
-    fireEvent.change(screen.getByPlaceholderText("http://192.168.1.50:4040"), { target: { value: "http://10.0.0.2:4040" } });
+    fireEvent.click(screen.getByRole("button", { name: "Remote Host" }));
+    fireEvent.change(screen.getByPlaceholderText("http://localhost:4040"), { target: { value: "http://10.0.0.2:4040" } });
     fireEvent.change(screen.getByPlaceholderText("tcp://host:2376"), { target: { value: "tcp://10.0.0.2:2376" } });
     fireEvent.click(screen.getByRole("checkbox", { name: "Claude CLI" }));
     fireEvent.click(screen.getByRole("button", { name: "Advanced" }));

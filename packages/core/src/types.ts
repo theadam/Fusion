@@ -2581,6 +2581,60 @@ export type ManagedDockerNodeUpdate = Partial<
   Omit<ManagedDockerNode, "id" | "createdAt">
 >;
 
+/** Information about a discovered Docker context */
+export interface DockerContextInfo {
+  /** Context name (e.g., "default", "my-remote") */
+  name: string;
+  /** Human-readable description */
+  description?: string;
+  /** Docker host URI for this context (e.g., "tcp://192.168.1.50:2376") */
+  dockerHost?: string;
+  /** Whether this is the currently active context */
+  isCurrentContext: boolean;
+  /** Whether this context has a connection error */
+  isError?: boolean;
+  /** Error message if the context is unreachable */
+  errorMessage?: string;
+}
+
+/** Result of testing Docker daemon connectivity */
+export interface DockerConnectivityResult {
+  /** Whether the connection succeeded */
+  success: boolean;
+  /** Docker Engine version string */
+  dockerVersion?: string;
+  /** Docker API version string */
+  apiVersion?: string;
+  /** Docker Engine OS/arch info */
+  operatingSystem?: string;
+  /** Error message if connection failed */
+  error?: string;
+  /** Whether the target is the local Docker daemon */
+  isLocalDaemon: boolean;
+}
+
+/** Minimal container inspection result from Docker */
+export interface DockerContainerInspectResult {
+  /** Container ID */
+  id: string;
+  /** Container name (with leading / stripped) */
+  name: string;
+  /** Container status string (e.g., "running", "exited") */
+  status: string;
+  /** Image name/tag */
+  image: string;
+  /** Creation timestamp (Unix epoch) */
+  created: number;
+  /** Detailed container state */
+  state: {
+    running: boolean;
+    paused: boolean;
+    restarting: boolean;
+    dead: boolean;
+    error?: string;
+  };
+}
+
 /** A single plugin's version information for sync comparison */
 export interface PluginVersionEntry {
   /** Plugin ID (matches PluginManifest.id) */

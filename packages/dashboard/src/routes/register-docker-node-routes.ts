@@ -57,6 +57,50 @@ function sanitizeExtraClis(input: unknown): DockerExtraCli[] {
 export const registerDockerNodeRoutes: ApiRouteRegistrar = (ctx) => {
   const { router, rethrowAsApiError } = ctx;
 
+  router.get("/docker/contexts", async (_req, res) => {
+    try {
+      const { DockerClientService } = await import("@fusion/core");
+      const service = new DockerClientService();
+      const contexts = await service.listContexts();
+      res.json(contexts);
+    } catch (error: unknown) {
+      if (error instanceof ApiError) throw error;
+      rethrowAsApiError(error);
+    }
+  });
+
+  router.post("/docker/test-connection", async (req, res) => {
+    try {
+      const hostConfig = ((req.body ?? {}) as { hostConfig?: DockerHostConfig }).hostConfig;
+      if (hostConfig?.host && !/^(tcp|unix|npipe):\/\//.test(hostConfig.host)) {
+        throw badRequest("hostConfig.host must start with tcp://, unix://, or npipe://");
+      }
+      if (hostConfig?.context !== undefined && typeof hostConfig.context === "string" && hostConfig.context.trim() === "") {
+        throw badRequest("hostConfig.context must be a non-empty string");
+      }
+
+      const { DockerClientService } = await import("@fusion/core");
+      const service = new DockerClientService();
+      const result = await service.testConnection(hostConfig);
+      res.json(result);
+    } catch (error: unknown) {
+      if (error instanceof ApiError) throw error;
+      rethrowAsApiError(error);
+    }
+  });
+
+  router.get("/docker/local-available", async (_req, res) => {
+    try {
+      const { DockerClientService } = await import("@fusion/core");
+      const service = new DockerClientService();
+      const result = await service.testConnection();
+      res.json({ available: result.success, version: result.dockerVersion, error: result.error });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.json({ available: false, error: message });
+    }
+  });
+
   router.get("/docker-nodes", async (_req, res) => {
     try {
       const { CentralCore } = await import("@fusion/core");
