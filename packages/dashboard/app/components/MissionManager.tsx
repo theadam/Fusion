@@ -3830,7 +3830,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
               renderMissionDetailContent()
             ) : (
               <div className="mission-manager__detail-pane-empty">
-                <Target size={24} />
+                <Target size={32} />
                 <span>Select a mission to view details</span>
               </div>
             )}
