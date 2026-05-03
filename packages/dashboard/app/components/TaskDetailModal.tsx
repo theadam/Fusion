@@ -1,6 +1,6 @@
 import "./TaskDetailModal.css";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pencil, Bot, X, ChevronDown, ChevronRight, GitBranch } from "lucide-react";
+import { Pencil, Bot, X, ChevronDown, ChevronRight, GitBranch, ArrowLeft } from "lucide-react";
 import { useModalResizePersist } from "../hooks/useModalResizePersist";
 import { useOverlayDismiss } from "../hooks/useOverlayDismiss";
 import ReactMarkdown from "react-markdown";
@@ -167,6 +167,8 @@ export interface TaskDetailModalProps {
   prAuthAvailable?: boolean;
   /** Open the modal with this tab active instead of "definition" */
   initialTab?: TabId;
+  /** Mobile-only header affordance mode. */
+  mobileHeaderMode?: "close" | "back";
 }
 
 export type TaskDetailContentProps = Omit<TaskDetailModalProps, "onClose"> & {
@@ -332,6 +334,7 @@ export function TaskDetailContent({
   addToast,
   prAuthAvailable,
   initialTab = "definition",
+  mobileHeaderMode = "close",
   embedded = false,
   onRequestClose,
 }: TaskDetailContentProps) {
@@ -1578,8 +1581,19 @@ export function TaskDetailContent({
                 <Pencil size={14} />
               </button>
             )}
-            {!embedded && (
-              <button className="modal-close" onClick={requestClose} aria-label="Close">
+            {!embedded && mobileHeaderMode === "back" && (
+              <button
+                className="modal-close task-detail-mobile-back"
+                onClick={requestClose}
+                aria-label="Back to task list"
+                type="button"
+              >
+                <ArrowLeft aria-hidden="true" />
+                <span>Back</span>
+              </button>
+            )}
+            {!embedded && mobileHeaderMode !== "back" && (
+              <button className="modal-close" onClick={requestClose} aria-label="Close" type="button">
                 &times;
               </button>
             )}

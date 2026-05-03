@@ -164,6 +164,7 @@ export function AppModals({
             tasks={tasks}
             onClose={deepLink.handleDetailClose}
             onOpenDetail={modalManager.openDetailTask}
+            mobileHeaderMode={modalManager.detailTaskOrigin === "list-mobile" ? "back" : "close"}
             onMoveTask={taskOperations.moveTask}
             onDeleteTask={taskOperations.deleteTask}
             onMergeTask={taskOperations.mergeTask}

@@ -198,6 +198,18 @@ describe("core modals mobile css coverage", () => {
     expect(menuBlock).toContain("max-width: calc(100vw - 28px)");
   });
 
+  it("TaskDetailModal: mobile back control keeps token-based touch-target sizing", () => {
+    const css = loadAllAppCss();
+    const mobileBlock = getMainMobileBlock(css);
+
+    const backControlMatch = mobileBlock.match(
+      /\.task-detail-mobile-back\s*\{[^}]+\}/,
+    );
+    expect(backControlMatch).not.toBeNull();
+    expect(backControlMatch![0]).toContain("min-height: calc(var(--space-2xl) + var(--space-xs))");
+    expect(backControlMatch![0]).toContain("min-width: calc(var(--space-2xl) + var(--space-xs))");
+  });
+
   it("TaskDetailModal: footer dropdown menus anchor toward available horizontal space", () => {
     const css = loadAllAppCss();
 

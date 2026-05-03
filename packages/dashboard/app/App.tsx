@@ -884,7 +884,7 @@ function AppInner() {
           onMergeTask={mergeTask}
           onResetTask={resetTask}
           onDuplicateTask={duplicateTask}
-          onOpenDetail={modalManager.openDetailTask}
+          onOpenDetail={(task, options) => modalManager.openDetailTask(task, undefined, options)}
           addToast={addToast}
           globalPaused={globalPaused}
           onNewTask={modalManager.openNewTask}

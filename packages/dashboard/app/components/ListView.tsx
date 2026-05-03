@@ -164,7 +164,7 @@ interface ListViewProps {
   onMergeTask: (id: string) => Promise<MergeResult>;
   onResetTask?: (id: string) => Promise<Task>;
   onDuplicateTask?: (id: string) => Promise<Task>;
-  onOpenDetail: (task: Task | TaskDetail) => void;
+  onOpenDetail: (task: Task | TaskDetail, options?: { origin?: "list-mobile" }) => void;
   addToast: (message: string, type?: ToastType) => void;
   globalPaused?: boolean;
   onNewTask?: () => void;
@@ -755,7 +755,7 @@ export function ListView({
   const handleRowClick = useCallback(
     (task: Task) => {
       if (isMobile) {
-        onOpenDetail(task);
+        onOpenDetail(task, { origin: "list-mobile" });
         return;
       }
 

@@ -279,7 +279,7 @@ describe("ListView", () => {
     const card = document.querySelector('.list-card[data-id="FN-001"]');
     fireEvent.click(card!);
 
-    expect(mockOnOpenDetail).toHaveBeenCalledWith(tasks[0]);
+    expect(mockOnOpenDetail).toHaveBeenCalledWith(tasks[0], { origin: "list-mobile" });
     expect(mockOnOpenDetail).toHaveBeenCalledTimes(1);
     expect(fetchTaskDetail).not.toHaveBeenCalled();
     viewportSpy.mockRestore();
@@ -2748,7 +2748,7 @@ describe("ListView - Bulk Selection", () => {
       fireEvent.click(container.querySelector('.list-card[data-id="FN-001"]') as HTMLElement);
 
       // Should call onOpenDetail synchronously with the Task object (no fetch)
-      expect(mockOnOpenDetail).toHaveBeenCalledWith(task);
+      expect(mockOnOpenDetail).toHaveBeenCalledWith(task, { origin: "list-mobile" });
       expect(mockOnOpenDetail).toHaveBeenCalledTimes(1);
     });
 

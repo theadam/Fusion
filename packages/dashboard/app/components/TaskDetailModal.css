@@ -1208,6 +1208,21 @@
   gap: var(--space-sm);
 }
 
+.task-detail-mobile-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: calc(var(--space-2xl) + var(--space-xs));
+  padding: 0 var(--space-sm);
+  font-size: calc(var(--space-sm) + var(--space-xs) * 0.625);
+  line-height: 1;
+}
+
+.task-detail-mobile-back svg {
+  width: 1em;
+  height: 1em;
+}
+
 .modal-edit-btn {
   display: flex;
   align-items: center;
@@ -1515,6 +1530,11 @@
   .modal-edit-btn {
     min-width: 36px;
     min-height: 36px;
+  }
+
+  .task-detail-mobile-back {
+    min-height: calc(var(--space-2xl) + var(--space-xs));
+    min-width: calc(var(--space-2xl) + var(--space-xs));
   }
 
 }

@@ -11,6 +11,8 @@ export type DetailTaskTab =
   | "model"
   | "workflow";
 
+export type DetailTaskOrigin = "list-mobile";
+
 interface UseModalManagerOptions {
   projectId?: string;
   planningSessions: Array<{ id: string }>;
@@ -31,6 +33,7 @@ export interface ModalManager {
   // Can be Task (optimistic open) or TaskDetail (full data with prompt)
   detailTask: (Task | TaskDetail) | null;
   detailTaskInitialTab: DetailTaskTab;
+  detailTaskOrigin: DetailTaskOrigin | null;
   settingsOpen: boolean;
   settingsInitialSection: SectionId | undefined;
   schedulesOpen: boolean;
@@ -66,7 +69,11 @@ export interface ModalManager {
   openSubtaskWithSession: (sessionId: string) => void;
   closeSubtask: () => void;
 
-  openDetailTask: (task: Task | TaskDetail, initialTab?: DetailTaskTab) => void;
+  openDetailTask: (
+    task: Task | TaskDetail,
+    initialTab?: DetailTaskTab,
+    options?: { origin?: DetailTaskOrigin },
+  ) => void;
   openDetailWithChangesTab: (task: Task | TaskDetail) => void;
   updateDetailTask: (updated: Partial<TaskDetail>) => void;
   closeDetailTask: () => void;
@@ -141,6 +148,7 @@ export function useModalManager(options: UseModalManagerOptions): ModalManager {
   // Can be Task (optimistic open) or TaskDetail (full data with prompt)
   const [detailTask, setDetailTask] = useState<(Task | TaskDetail) | null>(null);
   const [detailTaskInitialTab, setDetailTaskInitialTab] = useState<DetailTaskTab>("definition");
+  const [detailTaskOrigin, setDetailTaskOrigin] = useState<DetailTaskOrigin | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SectionId | undefined>(undefined);
   const [schedulesOpen, setSchedulesOpen] = useState(false);
@@ -221,19 +229,26 @@ export function useModalManager(options: UseModalManagerOptions): ModalManager {
     setSubtaskResumeSessionId(undefined);
   }, []);
 
-  const openDetailTask = useCallback((task: Task | TaskDetail, initialTab: DetailTaskTab = "definition") => {
+  const openDetailTask = useCallback((
+    task: Task | TaskDetail,
+    initialTab: DetailTaskTab = "definition",
+    options?: { origin?: DetailTaskOrigin },
+  ) => {
     setDetailTask(task);
     setDetailTaskInitialTab(initialTab);
+    setDetailTaskOrigin(options?.origin ?? null);
   }, []);
   const openDetailWithChangesTab = useCallback((task: Task | TaskDetail) => {
     setDetailTask(task);
     setDetailTaskInitialTab("changes");
+    setDetailTaskOrigin(null);
   }, []);
   const updateDetailTask = useCallback((updated: Partial<TaskDetail>) => {
     setDetailTask((prev) => (prev ? { ...prev, ...updated } : prev));
   }, []);
   const closeDetailTask = useCallback(() => {
     setDetailTask(null);
+    setDetailTaskOrigin(null);
   }, []);
 
   const openSettings = useCallback((section?: SectionId) => {
@@ -335,6 +350,7 @@ export function useModalManager(options: UseModalManagerOptions): ModalManager {
     subtaskResumeSessionId,
     detailTask,
     detailTaskInitialTab,
+    detailTaskOrigin,
     settingsOpen,
     settingsInitialSection,
     schedulesOpen,
