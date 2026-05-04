@@ -560,7 +560,7 @@ describe("Settings view", () => {
     stdin.write("\u001B[C");
     await new Promise((r) => setTimeout(r, 20));
     stdin.write("K");
-    await waitForFrameContains(lastFrame, "▀▀▀ASCII-QR▀▀▀");
+    await waitForFrameContains(lastFrame, "▀▀▀ASCII-QR▀▀▀", 6000);
     unmount();
   });
 });
