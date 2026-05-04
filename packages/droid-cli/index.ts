@@ -1,18 +1,18 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { streamViaCli } from "./src/provider.js";
+import { streamViaCli } from "../../plugins/fusion-plugin-droid-runtime/src/provider.js";
 import {
+  discoverDroidModels,
   validateCliPresenceAsync,
   validateCliAuthAsync,
   killAllProcesses,
-  discoverDroidModels,
-} from "./src/process-manager.js";
+} from "../../plugins/fusion-plugin-droid-runtime/src/process-manager.js";
 import { createHash } from "node:crypto";
 import {
   getCustomToolDefs,
   toolsFromContext,
   writeMcpConfig,
   type McpToolDef,
-} from "./src/mcp-config.js";
+} from "../../plugins/fusion-plugin-droid-runtime/src/mcp-config.js";
 
 process.on("exit", killAllProcesses);
 
@@ -21,6 +21,7 @@ const PROVIDER_ID = "droid-cli";
 let cliValidationPromise: Promise<void> | undefined;
 type DiscoveredModel = { id: string; name: string; reasoning: boolean; input: Array<"text" | "image">; cost: { input: number; output: number; cacheRead: number; cacheWrite: number }; contextWindow: number; maxTokens: number };
 let discoveredModelsPromise: Promise<DiscoveredModel[]> | undefined;
+type StreamSimpleHandler = NonNullable<Parameters<ExtensionAPI["registerProvider"]>[1]["streamSimple"]>;
 
 function runCliValidationOnce(): Promise<void> {
   if (cliValidationPromise) return cliValidationPromise;
@@ -112,13 +113,17 @@ export default function (pi: ExtensionAPI) {
         apiKey: "unused",
         api: "droid-cli",
         models,
-        streamSimple: (model, context, options) => {
+        streamSimple: ((model, context, options) => {
           const configPath = ensureMcpConfig(
             pi,
             (context as { tools?: ReadonlyArray<{ name: string; description: string; parameters: Record<string, unknown> }> }).tools,
           );
-          return streamViaCli(model, context, { ...options, mcpConfigPath: configPath });
-        },
+          return streamViaCli(
+            model,
+            context as never,
+            { ...(options ?? {}), mcpConfigPath: configPath } as never,
+          ) as unknown as ReturnType<StreamSimpleHandler>;
+        }) as StreamSimpleHandler,
       });
     } catch (err) {
       console.error("[droid-cli] Failed to register provider:", err);

@@ -158,14 +158,23 @@ Concrete references:
 
 - `InsightStore` (`insight-store.ts`, `insight-types.ts`) persists extracted project learnings
 - Uses fingerprint-based deduplication and run tracking
-- Backed by `project_insights` and `project_insight_runs`
+- Run lifecycle is hardened through `insight-run-executor.ts` + `InsightStore` transition guards:
+  - single active run per `projectId + trigger` (`pending|running` conflict)
+  - terminal-state immutability for run rows
+  - persisted failure classification (`cancelled`, `timed_out`, `retryable_transient`, `non_retryable`) and retry lineage metadata
+  - append-only durable event trail in `project_insight_run_events`
+- Dashboard routes (`insights-routes.ts`) consume the core executor/store APIs for run start, cancel, retry, and event inspection (`/api/insights/runs/:id/events`)
+- `POST /api/insights/:id/create-task` remains a draft-payload endpoint (returns `suggestedTitle`/`suggestedDescription`); the dashboard `InsightsView` now uses that payload to create a real task through the normal app task-creation path (`column: triage`, `sourceType: dashboard_ui`, source metadata indicating insights origin)
+- Backed by `project_insights`, `project_insight_runs`, and `project_insight_run_events`
 
 ### Research Runs
 
 - `ResearchStore` (`research-store.ts`, `research-types.ts`, `research-settings.ts`) persists bounded research runs, sources/events, and exports
-- Backed by `research_runs` and `research_exports`
+- Backed by `research_runs`, `research_exports`, and `research_run_events`
 - Engine orchestration is implemented in `packages/engine/src/research-orchestrator.ts` + `research-step-runner.ts`
 - Dashboard/API surface is implemented under `/api/research` (`packages/dashboard/src/research-routes.ts`) with `ResearchView.tsx` in the app
+- CLI surface is implemented in `packages/cli/src/commands/research.ts` with six subcommands (create, list, show, export, cancel, retry)
+- Agent tool surface is exposed via `packages/cli/src/extension.ts` (fn_research_run, fn_research_list, fn_research_get, fn_research_cancel)
 - **Boundary note:** research and insights are parallel subsystems sharing host infrastructure, not one table/store family
 
 ### Plugin System
@@ -483,7 +492,9 @@ Key server capabilities:
 - App entry: `packages/dashboard/app/main.tsx`
 - Root composition: `packages/dashboard/app/App.tsx`
 - Core board components: `Board.tsx`, `Column.tsx`, `TaskCard.tsx`, `TaskDetailModal.tsx`, `ListView.tsx`
+- **Board column ordering (board view only)**: task cards within each board column are sorted by priority descending (`urgent` → `high` → `normal` → `low`) and then by numeric task ID ascending (lower ID first). Missing or invalid priority values normalize to `normal`. In the `in-review` column, tasks with `status === "merging"` or `status === "merging-pr"` are pinned above non-merging tasks, with the priority-then-ID ordering applied within each pinned/non-pinned group.
 - Task detail surface is shared through `TaskDetailContent` (exported from `TaskDetailModal.tsx`): desktop/tablet `ListView` renders it inline in the split right pane, while mobile and non-list entry points continue using `TaskDetailModal`.
+- In desktop split mode, `ListView` now uses a compact sidebar-first control layout (count/actions/summary chips + collapsible "View options" panel) to keep list controls dense alongside the inline detail pane; mobile keeps the card-first flow with a toolbar "View options" entry point for the same visibility/filter toggles.
 - Chat system UI: `ChatView.tsx`, `QuickChatFAB.tsx`
 - Planning/roadmap/insight UI: `MissionManager.tsx`, `RoadmapsView.tsx`, `TodoView.tsx`, `InsightsView.tsx`, `DocumentsView.tsx`
 - Dev server UI: `DevServerView.tsx` (controls + status/log panel + embedded preview with iframe fallback messaging)

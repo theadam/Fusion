@@ -41,7 +41,7 @@ import {
 import { promptForPort } from "./port-prompt.js";
 import { createReadOnlyProviderSettingsView } from "./provider-settings.js";
 import { createReadOnlyAuthFileStorage, mergeAuthStorageReads, wrapAuthStorageWithApiKeyProviders } from "./provider-auth.js";
-import { getFusionAuthPath, getLegacyAuthPaths, getModelRegistryModelsPath, getPackageManagerAgentDir } from "./auth-paths.js";
+import { getCodexCliAuthPath, getFusionAuthPath, getLegacyAuthPaths, getModelRegistryModelsPath, getPackageManagerAgentDir } from "./auth-paths.js";
 import { resolveProject } from "../project-context.js";
 import {
   ensureClaudeSkillsForAllProjectsOnStartup,
@@ -223,7 +223,16 @@ export async function runServe(
   serveStartTime = Date.now();
   ensureProcessDiagnostics();
 
+  // Port resolution priority: CLI --port arg > process.env.PORT > default (4040)
+  // The env var fallback is critical for Docker containers where the mesh config
+  // injects PORT as an environment variable to control the container's listen port.
   let selectedPort = port;
+  if (!opts.interactive && (port === 4040 || port === 0) && process.env.PORT) {
+    const envPort = Number(process.env.PORT);
+    if (Number.isFinite(envPort) && envPort > 0) {
+      selectedPort = envPort;
+    }
+  }
   if (opts.interactive) {
     try {
       selectedPort = await promptForPort(port);
@@ -469,8 +478,11 @@ export async function runServe(
   const automationStore = cwdEngine.getAutomationStore();
 
   const authStorage = AuthStorage.create(getFusionAuthPath());
-  const legacyAuthStorage = createReadOnlyAuthFileStorage(getLegacyAuthPaths());
-  const mergedAuthStorage = mergeAuthStorageReads(authStorage, [legacyAuthStorage]);
+  const supplementalAuthStorage = createReadOnlyAuthFileStorage([
+    ...getLegacyAuthPaths(),
+    getCodexCliAuthPath(),
+  ]);
+  const mergedAuthStorage = mergeAuthStorageReads(authStorage, [supplementalAuthStorage]);
   const modelRegistry = ModelRegistry.create(mergedAuthStorage, getModelRegistryModelsPath());
   const dashboardAuthStorage = wrapAuthStorageWithApiKeyProviders(mergedAuthStorage, modelRegistry);
 

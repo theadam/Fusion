@@ -2348,6 +2348,49 @@ describe("resizable sidebar", () => {
   });
 });
 
+describe("thread header New Chat button", () => {
+  const activeSession = { id: "session-001", agentId: "agent-001", status: "active", title: "Test Chat", createdAt: "2026-04-08T00:00:00.000Z", updatedAt: "2026-04-08T00:00:00.000Z" };
+
+  it("renders New Chat button in thread header on desktop when session is active", () => {
+    const viewportSpy = mockViewportMode("desktop");
+    setupMockChat({ activeSession });
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    const btn = screen.getByTestId("chat-thread-new-chat-btn");
+    expect(btn).toBeInTheDocument();
+    expect(btn).toHaveTextContent("New Chat");
+    expect(btn).toHaveClass("btn", "btn-sm", "btn-primary");
+
+    viewportSpy.mockRestore();
+  });
+
+  it("clicking thread header New Chat button opens the NewChatDialog", () => {
+    const viewportSpy = mockViewportMode("desktop");
+    setupMockChat({ activeSession });
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    const btn = screen.getByTestId("chat-thread-new-chat-btn");
+    fireEvent.click(btn);
+
+    expect(screen.getByTestId("chat-new-dialog-mode-toggle")).toBeInTheDocument();
+
+    viewportSpy.mockRestore();
+  });
+
+  it("does not render New Chat button in thread header on mobile", () => {
+    const viewportSpy = mockViewportMode("mobile");
+    setupMockChat({ activeSession });
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    expect(screen.queryByTestId("chat-thread-new-chat-btn")).toBeNull();
+
+    viewportSpy.mockRestore();
+  });
+});
+
 describe("ChatView mobile behavior", () => {
   let savedVisualViewport: typeof window.visualViewport;
   let savedInnerHeight: number;
@@ -2546,6 +2589,7 @@ describe("ChatView mobile behavior", () => {
 
   it("mobile mode: sets and clears keyboard overlap CSS vars on chat thread", async () => {
     const restoreMatchMedia = mockMobileViewport();
+    _resetInitialViewportHeight();
     const { listeners, mockVV } = mockMobileVisualViewport({
       innerHeight: 844,
       vvHeight: 844,
@@ -2562,6 +2606,11 @@ describe("ChatView mobile behavior", () => {
       const thread = document.querySelector(".chat-thread") as HTMLDivElement;
       expect(thread).toBeInTheDocument();
       expect(thread.style.getPropertyValue("--keyboard-overlap")).toBe("");
+
+      // Focus the chat textarea so the hook treats the active element as a
+      // keyboard-focusable target.
+      const textarea = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+      textarea.focus();
 
       Object.defineProperty(window, "innerHeight", {
         value: 560,
@@ -2582,6 +2631,9 @@ describe("ChatView mobile behavior", () => {
         expect(thread.style.getPropertyValue("--keyboard-overlap")).toBe("284px");
         expect(thread.style.getPropertyValue("--vv-height")).toBe("560px");
       });
+
+      // Blur to signal keyboard dismissal
+      textarea.blur();
 
       Object.defineProperty(mockVV, "height", {
         value: 844,
@@ -2674,7 +2726,23 @@ describe("ChatView mobile behavior", () => {
         value: 900,
         configurable: true,
       });
-      messagesContainer.scrollTop = 0;
+      // In jsdom, scrollTop on a non-scrollable div may not reflect writes.
+      // Intercept the setter so the assertion can read back the value the effect wrote.
+      let capturedScrollTop = 0;
+      Object.defineProperty(messagesContainer, "scrollTop", {
+        get() { return capturedScrollTop; },
+        set(v: number) { capturedScrollTop = v; },
+        configurable: true,
+      });
+
+      // Focus the chat input so the hook treats the viewport shrink as a keyboard-open event.
+      const chatInput = screen.getByTestId("chat-input");
+      chatInput.focus();
+
+      // Focus the chat textarea so the hook treats the active element as a
+      // keyboard-focusable target.
+      const textarea = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+      textarea.focus();
 
       Object.defineProperty(window, "innerHeight", {
         value: 560,
@@ -2876,6 +2944,22 @@ describe("ChatView mobile CSS contract", () => {
 
   it("mobile does not override assistant render toggle visibility", () => {
     expect(mobileRuleNotContains(".chat-message-render-toggle", "display: inline-flex")).toBe(true);
+  });
+
+  it("mobile keeps ChatView dialog backdrop centered with safe-area padding", () => {
+    expect(mobileRuleContains(".chat-view-dialog-backdrop", "align-items: center")).toBe(true);
+    expect(mobileRuleContains(".chat-view-dialog-backdrop", "padding-top: max(var(--space-md), env(safe-area-inset-top, 0px))")).toBe(true);
+    expect(mobileRuleContains(".chat-view-dialog-backdrop", "padding-bottom: max(var(--space-md), env(safe-area-inset-bottom, 0px))")).toBe(true);
+  });
+
+  it("mobile constrains ChatView dialog height and allows internal scrolling", () => {
+    expect(mobileRuleContains(".chat-view-dialog", "max-height: calc(100dvh - (var(--space-md) * 2) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))")).toBe(true);
+    expect(mobileRuleContains(".chat-view-dialog", "overflow-y: auto")).toBe(true);
+  });
+
+  it("mobile ChatView dialog rules do not set full-screen heights", () => {
+    expect(mobileRuleNotContains(".chat-view-dialog", "height: 100vh")).toBe(true);
+    expect(mobileRuleNotContains(".chat-view-dialog", "height: 100dvh")).toBe(true);
   });
 
   it("mobile includes keyboard-aware chat-thread height rule", () => {

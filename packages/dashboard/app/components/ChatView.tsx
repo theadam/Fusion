@@ -31,10 +31,11 @@ import { AgentMentionPopup } from "./AgentMentionPopup";
 import { FileMentionPopup } from "./FileMentionPopup";
 import { useFileMention } from "../hooks/useFileMention";
 import { useMobileKeyboard } from "../hooks/useMobileKeyboard";
+import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
 
 export interface ChatViewProps {
   projectId?: string;
-  addToast: (msg: string, type?: "success" | "error") => void;
+  addToast: (msg: string, type?: "success" | "error" | "warning") => void;
 }
 
 function formatRelativeTime(dateStr: string): string {
@@ -445,8 +446,8 @@ function NewChatDialog({ projectId, onClose, onCreate }: NewChatDialogProps) {
     chatMode === "agent" ? !selectedAgentId : !selectedModel;
 
   return (
-    <div className="chat-new-dialog-backdrop" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="chat-new-dialog" onClick={(e) => e.stopPropagation()}>
+    <div className="chat-new-dialog-backdrop chat-view-dialog-backdrop" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="chat-new-dialog chat-view-dialog" onClick={(e) => e.stopPropagation()}>
         <h3>New Chat</h3>
         <div className="chat-new-dialog-mode-toggle" data-testid="chat-new-dialog-mode-toggle">
           <button
@@ -711,7 +712,7 @@ export function ChatView({ projectId, addToast }: ChatViewProps) {
     searchQuery,
     setSearchQuery,
     filteredSessions,
-  } = useChat(projectId);
+  } = useChat(projectId, addToast);
 
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [messageInput, setMessageInput] = useState("");
@@ -858,20 +859,9 @@ export function ChatView({ projectId, addToast }: ChatViewProps) {
   }, [keyboardOverlap]);
 
   // Lock body scroll on mobile while the keyboard is up so iOS can't shift
-  // the visual viewport (offsetTop > 0). Avoid forcing window.scrollTo(0, 0),
-  // which can jump the page when send briefly toggles focus.
-  useEffect(() => {
-    if (!isMobile || !keyboardOpen) return;
-    const html = document.documentElement;
-    const body = document.body;
-    const prev = { htmlOverflow: html.style.overflow, bodyOverflow: body.style.overflow };
-    html.style.overflow = "hidden";
-    body.style.overflow = "hidden";
-    return () => {
-      html.style.overflow = prev.htmlOverflow;
-      body.style.overflow = prev.bodyOverflow;
-    };
-  }, [isMobile, keyboardOpen]);
+  // the visual viewport (offsetTop > 0). Shared hook also restores
+  // window.scrollTo(0, 0) on cleanup to recover from any iOS drift.
+  useMobileScrollLock(isMobile && keyboardOpen);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -1652,10 +1642,10 @@ export function ChatView({ projectId, addToast }: ChatViewProps) {
 
       {/* Confirm Delete Dialog */}
       {confirmDelete && (
-        <div className="chat-new-dialog-backdrop" onClick={() => setConfirmDelete(null)}>
-          <div className="chat-new-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="chat-new-dialog-backdrop chat-view-dialog-backdrop" onClick={() => setConfirmDelete(null)}>
+          <div className="chat-new-dialog chat-view-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Delete Conversation?</h3>
-            <p style={{ fontSize: "14px", color: "var(--text-secondary)", marginBottom: "16px" }}>
+            <p className="chat-view-delete-dialog-copy">
               This action cannot be undone. All messages in this conversation will be permanently deleted.
             </p>
             <div className="chat-new-dialog-actions">
@@ -1686,6 +1676,16 @@ export function ChatView({ projectId, addToast }: ChatViewProps) {
             <Bot size={16} />
             <span className="chat-thread-header-title">{threadHeaderTitle}</span>
             {showThreadHeaderModelTag && <span className="chat-model-tag">{activeModelTag}</span>}
+            {!isMobile && (
+              <button
+                className="btn btn-sm btn-primary chat-thread-header-new-chat"
+                onClick={() => setShowNewDialog(true)}
+                data-testid="chat-thread-new-chat-btn"
+              >
+                <Plus size={14} />
+                New Chat
+              </button>
+            )}
 
           </div>
         )}

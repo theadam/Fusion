@@ -39,9 +39,18 @@ vi.mock("../../api", () => ({
 }));
 
 vi.mock("../AgentLogViewer", () => ({
-  AgentLogViewer: ({ entries }: { entries: Array<{ text: string }> }) => (
+  AgentLogViewer: ({ entries }: { entries: Array<{ text: string; detail?: string }> }) => (
     <div data-testid="agent-log-viewer">
-      {entries.map((e, i) => <span key={i}>{e.text}</span>)}
+      {entries.map((e, i) => (
+        <div key={i}>
+          <span>{e.text}</span>
+          {e.detail ? (
+            <button type="button" data-testid="tool-detail-toggle" aria-expanded="false">
+              Show output
+            </button>
+          ) : null}
+        </div>
+      ))}
     </div>
   ),
 }));
@@ -808,7 +817,7 @@ describe("AgentDetailView", () => {
     });
   });
 
-  it("renders lifecycle controls in compact layout with agent-detail-controls container", async () => {
+  it("groups lifecycle and utility controls under a shared header action cluster", async () => {
     render(
       <AgentDetailView
         agentId="agent-001"
@@ -818,30 +827,28 @@ describe("AgentDetailView", () => {
     );
 
     await waitFor(() => {
-      // Verify lifecycle controls are in the compact controls container
-      const controlsContainer = document.querySelector(".agent-detail-controls");
+      const headerActions = document.querySelector(".agent-detail-header-actions");
+      expect(headerActions).toBeTruthy();
+
+      const controlsContainer = headerActions?.querySelector(".agent-detail-controls");
       expect(controlsContainer).toBeTruthy();
       expect(controlsContainer?.querySelector(".btn--compact")).toBeTruthy();
-    });
-  });
 
-  it("renders utility actions in separate container", async () => {
-    render(
-      <AgentDetailView
-        agentId="agent-001"
-        onClose={vi.fn()}
-        addToast={vi.fn()}
-      />
-    );
-
-    await waitFor(() => {
-      // Verify utility actions are in the separate utility container
-      const utilityContainer = document.querySelector(".agent-detail-utility-actions");
+      const utilityContainer = headerActions?.querySelector(".agent-detail-utility-actions");
       expect(utilityContainer).toBeTruthy();
-      // Refresh and Close buttons should be in utility container
       expect(utilityContainer?.querySelector('[title="Refresh"]')).toBeTruthy();
       expect(utilityContainer?.querySelector('[title="Close"]')).toBeTruthy();
     });
+  });
+
+  it("keeps desktop header actions on one row and mobile wraps them safely", () => {
+    const stylesContent = loadAllAppCss();
+
+    expect(stylesContent).toContain(".agent-detail-header-actions {");
+    expect(stylesContent).toContain("justify-content: flex-end;");
+
+    const mobileHeaderActionsBlock = /@media \(max-width: 768px\)\s*\{[\s\S]*?\.agent-detail-header-actions\s*\{[\s\S]*?flex-wrap: wrap;[\s\S]*?\}/;
+    expect(stylesContent).toMatch(mobileHeaderActionsBlock);
   });
 
   it("shows statistics section on dashboard", async () => {
@@ -1243,9 +1250,92 @@ describe("AgentDetailView", () => {
       });
 
       expect(screen.getByText("Latest run · run-1001")).toBeInTheDocument();
-      expect(
-        Array.from(document.querySelectorAll(".log-text")).map((node) => node.textContent?.trim()),
-      ).toEqual(["Second entry", "First entry"]);
+      await waitFor(() => {
+        expect(screen.getByText("First entry")).toBeInTheDocument();
+        expect(screen.getByText("Second entry")).toBeInTheDocument();
+      });
+    });
+
+    it("renders log entries in chronological order (oldest first)", async () => {
+      const latestRun = {
+        id: "run-1002",
+        agentId: "agent-001",
+        startedAt: "2024-01-01T00:00:00.000Z",
+        endedAt: null,
+        status: "active",
+      } as AgentHeartbeatRun;
+      mockFetchAgent.mockResolvedValue(createMockAgent({
+        taskId: undefined,
+        activeRun: latestRun,
+        completedRuns: [],
+      }));
+      mockFetchAgentRuns.mockResolvedValue([latestRun]);
+      mockFetchAgentRunLogs.mockResolvedValue([
+        { timestamp: "2024-01-01T00:01:00.000Z", taskId: "agent-run", text: "Oldest entry", type: "text" },
+        { timestamp: "2024-01-01T00:02:00.000Z", taskId: "agent-run", text: "Middle entry", type: "text" },
+        { timestamp: "2024-01-01T00:03:00.000Z", taskId: "agent-run", text: "Newest entry", type: "text" },
+      ]);
+
+      render(
+        <AgentDetailView
+          agentId="agent-001"
+          onClose={vi.fn()}
+          addToast={vi.fn()}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Dashboard")).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText("Logs"));
+
+      await waitFor(() => {
+        expect(screen.getByText("Oldest entry")).toBeInTheDocument();
+      });
+
+      const viewerText = screen.getByTestId("agent-log-viewer").textContent ?? "";
+      expect(viewerText.indexOf("Oldest entry")).toBeLessThan(viewerText.indexOf("Middle entry"));
+      expect(viewerText.indexOf("Middle entry")).toBeLessThan(viewerText.indexOf("Newest entry"));
+    });
+
+    it("renders tool details collapsed by default", async () => {
+      const latestRun = {
+        id: "run-1003",
+        agentId: "agent-001",
+        startedAt: "2024-01-01T00:00:00.000Z",
+        endedAt: null,
+        status: "active",
+      } as AgentHeartbeatRun;
+      mockFetchAgent.mockResolvedValue(createMockAgent({
+        taskId: undefined,
+        activeRun: latestRun,
+        completedRuns: [],
+      }));
+      mockFetchAgentRuns.mockResolvedValue([latestRun]);
+      mockFetchAgentRunLogs.mockResolvedValue([
+        {
+          timestamp: "2024-01-01T00:00:00.000Z",
+          taskId: "agent-run",
+          type: "tool",
+          text: "ls -la packages/",
+          detail: "very long tool output",
+        },
+      ]);
+
+      render(
+        <AgentDetailView
+          agentId="agent-001"
+          onClose={vi.fn()}
+          addToast={vi.fn()}
+        />
+      );
+
+      fireEvent.click(await screen.findByText("Logs"));
+      await screen.findByText("ls -la packages/");
+      const toggle = await screen.findByTestId("tool-detail-toggle");
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(screen.getByTestId("agent-log-viewer")).toBeInTheDocument();
     });
   });
 

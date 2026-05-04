@@ -18,6 +18,7 @@ vi.mock("../logger.js", () => ({
 
 import {
   resolveSessionSkills,
+  resolveProjectRoot,
   createSkillsOverrideFromSelection,
   type SkillSelectionResult,
 } from "../skill-resolver.js";
@@ -26,13 +27,14 @@ import {
 
 // In-memory file system for tests - using a proxy to intercept fs calls
 const mockFiles = new Map<string, string>();
+const mockDirs = new Set<string>();
 let mockDirCounter = 0;
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return {
     ...actual,
-    existsSync: (path: unknown) => mockFiles.has(String(path)),
+    existsSync: (path: unknown) => mockFiles.has(String(path)) || mockDirs.has(String(path)),
     readFileSync: (path: unknown) => mockFiles.get(String(path)) ?? "{}",
     mkdtempSync: () => `/tmp/skill-resolver-mock-${++mockDirCounter}`,
     writeFileSync: (path: unknown, content: unknown) => mockFiles.set(String(path), String(content)),
@@ -50,6 +52,7 @@ vi.mock("node:fs", async () => {
 function createMockProjectDir(settings: Record<string, unknown> | null): string {
   const dir = `/tmp/skill-resolver-mock-${++mockDirCounter}`;
   if (settings !== null) {
+    mockDirs.add(`${dir}/.fusion`);
     mockFiles.set(`${dir}/.fusion/settings.json`, JSON.stringify(settings));
   }
   return dir;
@@ -57,9 +60,58 @@ function createMockProjectDir(settings: Record<string, unknown> | null): string 
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
+describe("resolveProjectRoot", () => {
+  beforeEach(() => {
+    mockFiles.clear();
+    mockDirs.clear();
+    mockDirCounter = 0;
+  });
+
+  it("returns cwd directly when cwd contains .fusion", () => {
+    const dir = `/tmp/skill-resolver-mock-${++mockDirCounter}`;
+    mockDirs.add(`${dir}/.fusion`);
+
+    expect(resolveProjectRoot(dir)).toBe(dir);
+  });
+
+  it("walks up from worktree path to find project root", () => {
+    const projectDir = `/tmp/skill-resolver-mock-${++mockDirCounter}`;
+    const worktreeDir = `${projectDir}/.worktrees/swift-falcon`;
+    mockDirs.add(`${projectDir}/.fusion`);
+
+    expect(resolveProjectRoot(worktreeDir)).toBe(projectDir);
+  });
+
+  it("walks up from deeply nested path", () => {
+    const projectDir = `/tmp/skill-resolver-mock-${++mockDirCounter}`;
+    const nestedDir = `${projectDir}/.worktrees/task-branch/src/components`;
+    mockDirs.add(`${projectDir}/.fusion`);
+
+    expect(resolveProjectRoot(nestedDir)).toBe(projectDir);
+  });
+
+  it("returns cwd when no .fusion directory found anywhere", () => {
+    const dir = `/tmp/skill-resolver-mock-${++mockDirCounter}`;
+
+    // No .fusion set up anywhere
+    expect(resolveProjectRoot(dir)).toBe(dir);
+  });
+
+  it("returns cwd when .fusion is in a sibling directory (not ancestor)", () => {
+    const parentDir = `/tmp/skill-resolver-mock-${++mockDirCounter}`;
+    const dir = `${parentDir}/my-project`;
+    const siblingDir = `${parentDir}/other-project`;
+    mockDirs.add(`${siblingDir}/.fusion`);
+
+    // Walking up from dir should not find sibling's .fusion
+    expect(resolveProjectRoot(dir)).toBe(dir);
+  });
+});
+
 describe("resolveSessionSkills", () => {
   beforeEach(() => {
     mockFiles.clear();
+    mockDirs.clear();
     mockDirCounter = 0;
   });
 
@@ -321,6 +373,45 @@ describe("resolveSessionSkills", () => {
       });
 
       expect(result.allowedSkillPaths.has("skills/fusion/SKILL.md")).toBe(true);
+    });
+
+    it("resolves project root from worktree path", () => {
+      const projectDir = `/tmp/skill-resolver-mock-${++mockDirCounter}`;
+      const worktreeDir = `${projectDir}/.worktrees/branch-name`;
+
+      // Set up project root with .fusion directory and settings
+      mockDirs.add(`${projectDir}/.fusion`);
+      mockFiles.set(`${projectDir}/.fusion/settings.json`, JSON.stringify({
+        skills: ["+skills/fusion/SKILL.md"],
+      }));
+
+      // Call with the worktree path (not the project root)
+      const result = resolveSessionSkills({
+        projectRootDir: worktreeDir,
+      });
+
+      // Should have resolved to the project root and read settings correctly
+      expect(result.filterActive).toBe(true);
+      expect(result.allowedSkillPaths.has("skills/fusion/SKILL.md")).toBe(true);
+    });
+
+    it("resolves project root from deeply nested worktree subdirectory", () => {
+      const projectDir = `/tmp/skill-resolver-mock-${++mockDirCounter}`;
+      const worktreeSubdir = `${projectDir}/.worktrees/task-branch/src/components`;
+
+      mockDirs.add(`${projectDir}/.fusion`);
+      mockFiles.set(`${projectDir}/.fusion/settings.json`, JSON.stringify({
+        skills: ["+skills/review/SKILL.md", "+skills/lint/SKILL.md"],
+      }));
+
+      const result = resolveSessionSkills({
+        projectRootDir: worktreeSubdir,
+      });
+
+      expect(result.filterActive).toBe(true);
+      expect(result.allowedSkillPaths.size).toBe(2);
+      expect(result.allowedSkillPaths.has("skills/review/SKILL.md")).toBe(true);
+      expect(result.allowedSkillPaths.has("skills/lint/SKILL.md")).toBe(true);
     });
   });
 
@@ -869,6 +960,84 @@ describe("createSkillsOverrideFromSelection", () => {
         d.type === "warning" && d.message.includes("not found")
       );
       expect(missingWarnings).toHaveLength(0);
+    });
+
+    it("matches Fusion two-segment patterns against pi-coding-agent bare skill names", () => {
+      // Fusion's toggleExecutionSkill saves patterns like "+web-research/SKILL.md"
+      // and normalizeAgentSkills extracts "web-research/SKILL.md" from full IDs.
+      // But pi-coding-agent sets Skill.name to just the directory name: "web-research".
+      // This test verifies the cross-format matching works.
+      const dir = createMockProjectDir({
+        skills: ["+web-research/SKILL.md"],
+      });
+
+      const resolvedSkills = resolveSessionSkills({
+        projectRootDir: dir,
+        // Simulates what normalizeAgentSkills produces from "auto::skills/web-research/SKILL.md"
+        requestedSkillNames: ["web-research/SKILL.md"],
+        sessionPurpose: "triage",
+      });
+
+      const override = createSkillsOverrideFromSelection(resolvedSkills, {
+        requestedSkillNames: resolvedSkills.allowedSkillPaths.size > 0
+          ? ["web-research/SKILL.md"]
+          : undefined,
+        sessionPurpose: "triage",
+      });
+
+      // pi-coding-agent discovers skills with bare directory names
+      const base = {
+        skills: [
+          { name: "web-research", filePath: "/home/user/.pi/agent/skills/web-research/SKILL.md", description: "Web search", baseDir: "/home/user/.pi/agent/skills/web-research", sourceInfo: {} as any, disableModelInvocation: false },
+          { name: "paperclip", filePath: "/home/user/.pi/agent/skills/paperclip/SKILL.md", description: "Paperclip", baseDir: "/home/user/.pi/agent/skills/paperclip", sourceInfo: {} as any, disableModelInvocation: false },
+        ],
+        diagnostics: [],
+      };
+
+      const result = override(base);
+
+      // web-research should match despite the naming mismatch
+      expect(result.skills).toHaveLength(1);
+      expect(result.skills[0].name).toBe("web-research");
+
+      // No spurious "not found" warnings
+      const notFoundWarnings = result.diagnostics.filter(d =>
+        d.type === "warning" && d.message.includes("not found")
+      );
+      expect(notFoundWarnings).toHaveLength(0);
+    });
+
+    it("exclusion patterns with /SKILL.md suffix correctly exclude pi-discovered skills", () => {
+      const dir = createMockProjectDir({
+        skills: ["+web-research/SKILL.md", "-paperclip/SKILL.md"],
+      });
+
+      const resolvedSkills = resolveSessionSkills({
+        projectRootDir: dir,
+      });
+
+      const override = createSkillsOverrideFromSelection(resolvedSkills, {
+        sessionPurpose: "executor",
+      });
+
+      const base = {
+        skills: [
+          { name: "web-research", filePath: "/home/user/.pi/agent/skills/web-research/SKILL.md", description: "Web search", baseDir: "", sourceInfo: {} as any, disableModelInvocation: false },
+          { name: "paperclip", filePath: "/home/user/.pi/agent/skills/paperclip/SKILL.md", description: "Paperclip", baseDir: "", sourceInfo: {} as any, disableModelInvocation: false },
+        ],
+        diagnostics: [],
+      };
+
+      const result = override(base);
+
+      expect(result.skills).toHaveLength(1);
+      expect(result.skills[0].name).toBe("web-research");
+
+      // Should have a "disabled" diagnostic for paperclip (exists but excluded)
+      const disabledWarning = result.diagnostics.find(d =>
+        d.message.includes("disabled") && d.message.includes("paperclip")
+      );
+      expect(disabledWarning).toBeDefined();
     });
   });
 });

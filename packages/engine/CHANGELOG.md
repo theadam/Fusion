@@ -1,5 +1,33 @@
 # @fusion/engine
 
+## 0.17.2
+
+### Patch Changes
+
+- 17a6634: Fix pre-merge workflow steps stalling on tasks with no relevant changes (FN-3327 post-mortem).
+
+  - **`@fusion/engine`**: `executeWorkflowStep` now computes the diff scope (`git diff --name-only` plus `--shortstat` against `task.baseCommitSha`) before spawning the reviewer agent and injects a "Diff Scope" block into the system prompt. The block lists every file the task actually changed and adds explicit scoping rules: review only those files, and if none match the step's category respond immediately with a short approval line and stop. Without this, an open-ended review prompt (e.g. WS-005 "Frontend UX Design") would drift into pre-existing files matching the task description's keywords, exhaust the 360 s timeout, and trigger the auto-revive → re-finalize → re-fail loop that had FN-3327 wedged in `in-review`. Both git calls are best-effort; failures degrade to a "no modified files detected" notice rather than blocking the step.
+  - **`@fusion/core`**: The built-in `frontend-ux-design` workflow step template (WS-005) now opens with a FAST-BAIL rule telling the reviewer to inspect the Diff Scope first and return an immediate one-line approval when no UI/CSS/component files are present. New installs and freshly-materialized templates pick this up automatically; existing DB rows are unaffected but are still rescued by the executor-side scope injection above.
+
+- Updated dependencies [17a6634]
+  - @fusion/core@0.17.2
+  - @fusion/pi-claude-cli@0.17.2
+
+## 0.17.1
+
+### Patch Changes
+
+- c2f6dd3: Fix heartbeat and manual agent runs ignoring the agent's configured model. The dashboard saves `runtimeConfig.model` as a combined `"provider/modelId"` string, but heartbeat was reading non-existent split `modelProvider`/`modelId` fields, causing sessions to fall through to pi's default model (often `openai-codex`) and fail with "No API key for provider: openai-codex".
+  - @fusion/core@0.17.1
+  - @fusion/pi-claude-cli@0.17.1
+
+## 0.17.0
+
+### Patch Changes
+
+- @fusion/core@0.17.0
+- @fusion/pi-claude-cli@0.17.0
+
 ## 0.16.0
 
 ### Patch Changes

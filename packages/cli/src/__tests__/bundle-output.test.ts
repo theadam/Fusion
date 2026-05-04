@@ -42,6 +42,12 @@ describe("CLI bundle output", () => {
     expect(content).not.toContain('"@fusion/engine"');
   });
 
+  it("does not contain runtime memory-backend side-load imports", () => {
+    const content = readFileSync(bundlePath, "utf-8");
+    expect(content).not.toMatch(/await\s+import\(\s*["']\.\/memory-backend\.js["']\s*\)/);
+    expect(content).not.toMatch(/await\s+import\(\s*["']\.\.\/memory-backend\.js["']\s*\)/);
+  });
+
   it("contains inlined workspace code", () => {
     const content = readFileSync(bundlePath, "utf-8");
     // TaskStore from @fusion/core
@@ -74,6 +80,14 @@ describe("CLI bundle output", () => {
     expect(tsupConfig).toContain("cpSync(dashboardClientSrc, dashboardClientDest, { recursive: true });");
   });
 
+  it("keeps native module loaders externalized in tsup config", () => {
+    const tsupConfig = readFileSync(tsupConfigPath, "utf-8");
+
+    expect(tsupConfig).toContain('"dockerode"');
+    expect(tsupConfig).toContain('"ssh2"');
+    expect(tsupConfig).toContain('"cpu-features"');
+  });
+
   it("loads sqlite from Node built-ins and never from bare sqlite npm package", () => {
     const content = readFileSync(bundlePath, "utf-8");
     // The bundle must resolve sqlite through Node's built-in module.
@@ -81,6 +95,12 @@ describe("CLI bundle output", () => {
     // Bun-native sqlite support is optional in this artifact depending on runtime-targeted code paths.
     // No bare "sqlite" import (we never want to pull in an npm package named sqlite).
     expect(content).not.toMatch(/from\s+["']sqlite["'][^s]/);
+  });
+
+  it("does not inline native artifact filenames into the bundled CLI", () => {
+    const content = readFileSync(bundlePath, "utf-8");
+    expect(content).not.toContain("sshcrypto.node");
+    expect(content).not.toContain("cpufeatures.node");
   });
 
   it("provides require via createRequire banner", () => {
@@ -136,6 +156,17 @@ describe("CLI bundle output", () => {
     expect(existsSync(join(stagedRoot, "package.json"))).toBe(true);
     expect(existsSync(join(stagedRoot, "index.ts"))).toBe(true);
     expect(existsSync(join(stagedRoot, "src", "process-manager.ts"))).toBe(true);
+  });
+
+  it("dist/plugins/fusion-plugin-dependency-graph/ is staged with a valid manifest", () => {
+    const stagedRoot = join(cliRoot, "dist", "plugins", "fusion-plugin-dependency-graph");
+    const manifestPath = join(stagedRoot, "manifest.json");
+
+    expect(existsSync(manifestPath)).toBe(true);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { id?: string; name?: string };
+    expect(manifest.id).toBe("fusion-plugin-dependency-graph");
+    expect(typeof manifest.name).toBe("string");
+    expect(manifest.name?.length).toBeGreaterThan(0);
   });
 
   it("pi-claude-cli source imports child process helpers from node:child_process", () => {

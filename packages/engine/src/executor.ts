@@ -14,6 +14,12 @@ import {
   type RunCommandResult,
 } from "@fusion/core";
 import { findWorktreeUser } from "./merger.js";
+import {
+  runVerificationCommand,
+  summarizeVerificationOutput,
+  VERIFICATION_LOG_MAX_CHARS,
+  type VerificationResult,
+} from "./verification-utils.js";
 import { generateWorktreeName, slugify } from "./worktree-names.js";
 import { Type, type Static } from "@mariozechner/pi-ai";
 import { describeModel, promptWithFallback, compactSessionContext } from "./pi.js";
@@ -55,7 +61,7 @@ import {
 import { getTaskCompletionBlockerForStore } from "./task-completion.js";
 import { createFusionAuthStorage, getModelRegistryModelsPath } from "./auth-storage.js";
 import { createRunVerificationTool } from "./run-verification-tool.js";
-import { notifyFallbackUsed } from "./notifier.js";
+import { createFallbackModelObserver } from "./fallback-model-observer.js";
 
 // Re-export for backward compatibility (tests import from executor.ts)
 export { summarizeToolArgs } from "./agent-logger.js";
@@ -1168,7 +1174,8 @@ export class TaskExecutor {
       || (task.mergeRetries ?? 0) > 0
       || (task.verificationFailureCount ?? 0) > 0
       || task.status === "merging"
-      || task.status === "merging-pr";
+      || task.status === "merging-pr"
+      || task.status === "merging-fix";
 
     if (!hasMergeEvidence) {
       return task;
@@ -1177,14 +1184,24 @@ export class TaskExecutor {
     return this.cleanupMergeStateForReverification(
       task,
       `Task returned to in-progress from ${from} column — resetting verification steps and merge state for re-verification`,
+      {
+        // Keep deterministic merge-verification bounce budget across remediation
+        // cycles. Status may be cleared by intermediate paths, so the counter is
+        // the canonical signal once a bounce has started.
+        preserveVerificationFailureCount: (task.verificationFailureCount ?? 0) > 0,
+      },
     );
   }
 
-  private async cleanupMergeStateForReverification(task: Task, logMessage: string): Promise<Task> {
+  private async cleanupMergeStateForReverification(
+    task: Task,
+    logMessage: string,
+    options?: { preserveVerificationFailureCount?: boolean },
+  ): Promise<Task> {
     await this.store.updateTask(task.id, {
       mergeDetails: null,
       mergeRetries: 0,
-      verificationFailureCount: 0,
+      verificationFailureCount: options?.preserveVerificationFailureCount ? task.verificationFailureCount ?? 0 : 0,
       workflowStepResults: [],
     });
 
@@ -1984,7 +2001,7 @@ export class TaskExecutor {
     // Skip for tasks that are already in-progress, in-review, merging, or done —
     // these should not be interrupted and sent back to triage for re-planning.
     const activeColumns = new Set(["in-progress", "in-review", "done"]);
-    const activeMergeStatuses = new Set(["merging", "merging-pr"]);
+    const activeMergeStatuses = new Set(["merging", "merging-pr", "merging-fix"]);
     const isActiveTask = activeColumns.has(task.column) || activeMergeStatuses.has(task.status ?? "");
     if (!isActiveTask) {
       const tasksDir = join(this.store.getFusionDir(), "tasks");
@@ -2402,6 +2419,94 @@ export class TaskExecutor {
               return;
             }
 
+            // ── Deterministic verification gate (FN-3345) ──────────
+            // Run testCommand/buildCommand after all steps succeed but BEFORE
+            // workflow steps and the in-review transition. Skipped in fast mode
+            // and when no verification commands are configured.
+            if (executionMode !== "fast") {
+              if (settings.testCommand?.trim() || settings.buildCommand?.trim()) {
+                const verificationResult = await this.runExecutorDeterministicVerification(task, worktreePath, settings);
+
+                if (!verificationResult.allPassed) {
+                  const failedType = verificationResult.failedCommand === "testCommand" ? "test" : "build";
+                  const failedResult = failedType === "test" ? verificationResult.testResult! : verificationResult.buildResult!;
+                  const failedCommand = failedResult.command;
+                  const failureOutput = failedResult.stderr || failedResult.stdout || "Unknown error";
+                  const summary = summarizeVerificationOutput(failureOutput, failedType);
+
+                  executorLog.log(`${task.id}: [verification] ${failedType} failed — attempting fix agent`);
+                  await this.store.logEntry(
+                    task.id,
+                    `[verification] ${failedType} command failed (exit ${failedResult.exitCode}). Attempting fix agent...`,
+                    summary,
+                    this.currentRunContext,
+                  );
+
+                  const maxFixRetries = Math.min(settings.verificationFixRetries ?? 3, 3);
+
+                  if (maxFixRetries === 0) {
+                    executorLog.log(`${task.id}: [verification] fix retries set to 0 — sending task back immediately`);
+                    await this.sendTaskBackForFix(
+                      task, worktreePath,
+                      `${failedType} command \`${failedCommand}\` failed (exit ${failedResult.exitCode}):\n${summary}`,
+                      `Verification (${failedType})`,
+                      `Deterministic verification failed (${failedType})`,
+                      true,
+                      true,
+                    );
+                    return;
+                  }
+
+                  let fixSucceeded = false;
+                  for (let attempt = 1; attempt <= maxFixRetries; attempt++) {
+                    const fixed = await this.attemptExecutorVerificationFix(
+                      task, worktreePath,
+                      {
+                        command: failedCommand,
+                        exitCode: failedResult.exitCode,
+                        output: failureOutput,
+                        type: failedType,
+                      },
+                      settings,
+                      attempt,
+                      maxFixRetries,
+                    );
+                    if (fixed) {
+                      fixSucceeded = true;
+                      executorLog.log(`${task.id}: [verification] fix agent succeeded on attempt ${attempt}/${maxFixRetries}`);
+                      await this.store.logEntry(
+                        task.id,
+                        `[verification] Fix agent succeeded on attempt ${attempt}/${maxFixRetries}. Verification now passing.`,
+                        undefined,
+                        this.currentRunContext,
+                      );
+                      break;
+                    }
+                    executorLog.log(`${task.id}: [verification] fix agent attempt ${attempt}/${maxFixRetries} failed`);
+                    await this.store.logEntry(
+                      task.id,
+                      `[verification] Fix agent attempt ${attempt}/${maxFixRetries} failed`,
+                      undefined,
+                      this.currentRunContext,
+                    );
+                  }
+
+                  if (!fixSucceeded) {
+                    executorLog.log(`${task.id}: [verification] all fix attempts exhausted (${maxFixRetries}/${maxFixRetries}) — sending task back`);
+                    await this.sendTaskBackForFix(
+                      task, worktreePath,
+                      `${failedType} command \`${failedCommand}\` failed (exit ${failedResult.exitCode}) after ${maxFixRetries} fix attempts:\n${summary}`,
+                      `Verification (${failedType})`,
+                      `Deterministic verification failed after ${maxFixRetries} fix attempts`,
+                      true,
+                      true,
+                    );
+                    return;
+                  }
+                }
+              }
+            }
+
             // Run workflow steps before moving to in-review — skip in fast mode
             if (executionMode !== "fast") {
               const workflowResult = await this.runWorkflowSteps(task, worktreePath, settings);
@@ -2749,7 +2854,13 @@ export class TaskExecutor {
           ...(skillContext.skillSelectionContext ? { skillSelection: skillContext.skillSelectionContext } : {}),
           taskId: task.id,
           taskTitle: detail.title,
-          onFallbackModelUsed: notifyFallbackUsed,
+          onFallbackModelUsed: createFallbackModelObserver({
+            agent: "executor",
+            label: "executor",
+            store: this.store,
+            taskId: task.id,
+            taskTitle: detail.title,
+          }),
         });
 
         if (isResuming) {
@@ -4208,6 +4319,246 @@ ${feedback}
    *
    * @returns true if a retry was scheduled, false if retries are exhausted
    */
+  /**
+   * Run deterministic verification (test + build commands) in the task's worktree.
+   * Returns a structured result indicating whether all commands passed.
+   */
+  private async runExecutorDeterministicVerification(
+    task: Task,
+    worktreePath: string,
+    settings: Settings,
+  ): Promise<VerificationResult> {
+    const testCommand = settings.testCommand?.trim();
+    const buildCommand = settings.buildCommand?.trim();
+
+    if (!testCommand && !buildCommand) {
+      executorLog.log(`${task.id}: no test/build commands configured — skipping verification`);
+      return { allPassed: true };
+    }
+
+    const parts: string[] = [];
+    if (testCommand) parts.push(`test: ${testCommand}`);
+    if (buildCommand) parts.push(`build: ${buildCommand}`);
+    executorLog.log(`${task.id}: [verification] running deterministic verification (${parts.join(", ")})`);
+    await this.store.logEntry(
+      task.id,
+      `[verification] Running deterministic verification (${parts.join(", ")})`,
+      undefined,
+      this.currentRunContext,
+    );
+
+    const result: VerificationResult = { allPassed: true };
+
+    // Run test command first if configured
+    if (testCommand) {
+      const testResult = await runVerificationCommand(
+        this.store, worktreePath, task.id, testCommand, "test", undefined, executorLog, "executor",
+      );
+      result.testResult = testResult;
+
+      if (!testResult.success) {
+        result.allPassed = false;
+        result.failedCommand = "testCommand";
+        executorLog.log(`${task.id}: [verification] test failed (exit ${testResult.exitCode})`);
+        return result;
+      }
+    }
+
+    // Run build command second if configured
+    if (buildCommand) {
+      const buildResult = await runVerificationCommand(
+        this.store, worktreePath, task.id, buildCommand, "build", undefined, executorLog, "executor",
+      );
+      result.buildResult = buildResult;
+
+      if (!buildResult.success) {
+        result.allPassed = false;
+        result.failedCommand = "buildCommand";
+        executorLog.log(`${task.id}: [verification] build failed (exit ${buildResult.exitCode})`);
+        return result;
+      }
+    }
+
+    executorLog.log(`${task.id}: [verification] passed`);
+    await this.store.logEntry(
+      task.id,
+      `[verification] Deterministic verification passed`,
+      undefined,
+      this.currentRunContext,
+    );
+    return result;
+  }
+
+  /**
+   * Attempt to fix verification failures by spawning a dedicated AI fix agent.
+   * Follows the pattern established by the merger's attemptInMergeVerificationFix.
+   * Returns true if verification passes after the fix attempt, false otherwise.
+   */
+  private async attemptExecutorVerificationFix(
+    task: Task,
+    worktreePath: string,
+    failureContext: {
+      command: string;
+      exitCode: number | null;
+      output: string;
+      type: "test" | "build";
+    },
+    settings: Settings,
+    retryNumber: number,
+    maxRetries: number,
+  ): Promise<boolean> {
+    try {
+      executorLog.log(`${task.id}: spawning executor verification fix agent (attempt ${retryNumber}/${maxRetries})`);
+
+      const logger = new AgentLogger({
+        store: this.store,
+        taskId: task.id,
+        agent: "executor",
+        persistAgentToolOutput: settings.persistAgentToolOutput,
+        onAgentText: this.options.onAgentText,
+        onAgentTool: this.options.onAgentTool,
+      });
+
+      // Build skill selection context
+      let skillContext: Awaited<ReturnType<typeof buildSessionSkillContext>> | undefined;
+      if (this.options.agentStore) {
+        try {
+          skillContext = await buildSessionSkillContext({
+            agentStore: this.options.agentStore,
+            task,
+            sessionPurpose: "executor",
+            projectRootDir: worktreePath,
+            pluginRunner: this.options.pluginRunner,
+          });
+        } catch {
+          // Graceful fallback - no skill selection
+        }
+      }
+
+      // Resolve model using the executor's model hierarchy
+      const { provider: executorProvider, modelId: executorModelId } = resolveExecutorModelPair(
+        task.modelProvider,
+        task.modelId,
+        settings,
+      );
+
+      // Create the fix agent session
+      const { session } = await createResolvedAgentSession({
+        sessionPurpose: "executor",
+        pluginRunner: this.options.pluginRunner,
+        cwd: worktreePath, // Run in the task's worktree
+        systemPrompt: `You are a verification fix agent running during task execution in a worktree.
+
+All step-session steps completed successfully but the deterministic verification command failed. Your job is to fix the failing code directly in the working directory.
+
+## Scope
+Only fix what is required to make the failing verification pass.
+Do not refactor, rename broadly, or make opportunistic improvements.
+
+## Rules
+1. Read the error output carefully to understand what is failing before editing anything
+2. Before assuming a code fix is needed, check whether the failure is caused by stale/missing build artifacts in a sibling workspace package — typical signatures: \`Failed to resolve import "./X.js"\` pointing into another package's \`dist/\`, \`Cannot find module\`, or \`ERR_MODULE_NOT_FOUND\` referencing a workspace-internal path. In that case, rebuild the affected package(s) (e.g. \`pnpm --filter <pkg> build\`, or \`pnpm --filter "<scope>/*" build\` for a group) and re-run verification before editing source files.
+3. Make targeted fixes to the failing code path
+4. After fixing, run the verification command to confirm the fix works
+5. Do NOT make any git commits — just fix the code
+6. You MAY modify any files needed to make the verification pass, including files unrelated to this task's original change. Pre-existing build/test breakage is in scope: fix it. Prefer the smallest change that makes verification green.
+7. If you cannot fix the issue within scope, explain why and what evidence indicates a deeper/root problem`,
+        tools: "coding",
+        onText: logger.onText,
+        onThinking: logger.onThinking,
+        onToolStart: logger.onToolStart,
+        onToolEnd: logger.onToolEnd,
+        defaultProvider: executorProvider,
+        defaultModelId: executorModelId,
+        defaultThinkingLevel: settings.defaultThinkingLevel,
+        ...(skillContext?.skillSelectionContext ? { skillSelection: skillContext.skillSelectionContext } : {}),
+      });
+
+      await this.store.logEntry(
+        task.id,
+        `Executor verification fix agent started (model: ${describeModel(session)}, attempt ${retryNumber}/${maxRetries})`,
+        undefined,
+        this.currentRunContext,
+      );
+      await this.store.appendAgentLog(
+        task.id,
+        `Fix agent started (model: ${describeModel(session)}, attempt ${retryNumber}/${maxRetries})`,
+        "text",
+        undefined,
+        "executor",
+      );
+
+      try {
+        // Build the fix prompt
+        const fixPrompt = `Fix the failing ${failureContext.type} verification for task ${task.id}.
+
+## Failed command
+Command: \`${failureContext.command}\`
+Exit code: ${failureContext.exitCode}
+
+## Error output
+${failureContext.output.slice(0, VERIFICATION_LOG_MAX_CHARS)}
+
+## Instructions
+1. Read the error output and identify the root cause
+2. Make targeted fixes to resolve the failure
+3. Run the verification command \`${failureContext.command}\` to confirm your fix works
+4. If the fix doesn't work, try a different approach
+5. Do NOT make any git commits`;
+
+        // Run the agent with rate limit retry
+        await withRateLimitRetry(async () => {
+          await promptWithFallback(session, fixPrompt);
+        }, {
+          onRetry: (attempt, delayMs, error) => {
+            const delaySec = Math.round(delayMs / 1000);
+            executorLog.warn(`⏳ ${task.id} executor fix agent rate limited — retry ${attempt} in ${delaySec}s: ${error.message}`);
+          },
+        });
+        await accumulateSessionTokenUsage(this.store, task.id, session);
+
+        // Re-run full deterministic verification (test AND build) after the fix attempt
+        executorLog.log(`${task.id}: re-running deterministic verification after fix attempt ${retryNumber}/${maxRetries}`);
+        await this.store.logEntry(
+          task.id,
+          `Re-running deterministic verification (attempt ${retryNumber}/${maxRetries})`,
+          undefined,
+          this.currentRunContext,
+        );
+        await this.store.appendAgentLog(
+          task.id,
+          `Re-running verification (attempt ${retryNumber}/${maxRetries})`,
+          "text",
+          undefined,
+          "executor",
+        );
+        const reRunResult = await this.runExecutorDeterministicVerification(task, worktreePath, settings);
+
+        return reRunResult.allPassed;
+      } finally {
+        await logger.flush();
+        await session.dispose();
+      }
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      executorLog.warn(`${task.id}: executor verification fix agent error: ${errorMessage}`);
+      await this.store.logEntry(
+        task.id,
+        `Executor verification fix agent encountered an error`,
+        errorMessage,
+        this.currentRunContext,
+      );
+      await this.store.appendAgentLog(
+        task.id,
+        "Fix agent encountered an error",
+        "tool_error",
+        errorMessage,
+        "executor",
+      );
+      return false;
+    }
+  }
+
   private async handleWorkflowStepFailure(
     task: Task,
     worktreePath: string,
@@ -4268,6 +4619,7 @@ ${feedback}
     stepName: string,
     reason: string,
     preserveResumeState: boolean = true,
+    mergeVerificationFailure: boolean = false,
   ): Promise<void> {
     const taskId = task.id;
     this.clearCompletedTaskWatchdog(taskId);
@@ -4298,7 +4650,7 @@ ${feedback}
 
     // 5. Clear error/status/session fields and reset workflow step retries
     await this.store.updateTask(taskId, {
-      status: null,
+      status: mergeVerificationFailure ? "merging-fix" : null,
       error: null,
       sessionFile: null,
       workflowStepRetries: 0,
@@ -4401,36 +4753,36 @@ ${failureFeedback}
    * Uses git diff against the stored baseCommitSha to determine what changed.
    * Returns an empty array if no changes or if git commands fail.
    */
+  private async resolveDiffBaseRef(worktreePath: string, baseCommitSha?: string): Promise<string | undefined> {
+    if (baseCommitSha) return baseCommitSha;
+
+    try {
+      const { stdout } = await execAsync(
+        "git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main",
+        { cwd: worktreePath, encoding: "utf-8" },
+      );
+      const ref = stdout.trim();
+      if (ref) return ref;
+    } catch (mergeBaseErr: unknown) {
+      const mergeBaseMsg = mergeBaseErr instanceof Error ? mergeBaseErr.message : String(mergeBaseErr);
+      executorLog.warn(`Failed merge-base lookup for diff base in ${worktreePath}, trying HEAD~1 fallback: ${mergeBaseMsg}`);
+    }
+
+    try {
+      const { stdout } = await execAsync("git rev-parse HEAD~1", {
+        cwd: worktreePath,
+        encoding: "utf-8",
+      });
+      return stdout.trim() || undefined;
+    } catch {
+      executorLog.log(`Could not determine base commit for diff in ${worktreePath}`);
+      return undefined;
+    }
+  }
+
   private async captureModifiedFiles(worktreePath: string, baseCommitSha?: string): Promise<string[]> {
     try {
-      // Determine the base reference for diff
-      // If baseCommitSha is stored, use it; otherwise fall back to merge-base with HEAD
-      let baseRef = baseCommitSha;
-      if (!baseRef) {
-        // Try to find merge-base with main/master as fallback
-        try {
-          const { stdout } = await execAsync("git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main", {
-            cwd: worktreePath,
-            encoding: "utf-8",
-          });
-          baseRef = stdout.trim();
-        } catch (mergeBaseErr: unknown) {
-          const mergeBaseMsg = mergeBaseErr instanceof Error ? mergeBaseErr.message : String(mergeBaseErr);
-          executorLog.warn(`Failed merge-base lookup for diff base in ${worktreePath}, trying HEAD~1 fallback: ${mergeBaseMsg}`);
-          // If merge-base fails, use HEAD~1 as last resort
-          try {
-            const { stdout } = await execAsync("git rev-parse HEAD~1", {
-              cwd: worktreePath,
-              encoding: "utf-8",
-            });
-            baseRef = stdout.trim();
-          } catch {
-            executorLog.log(`Could not determine base commit for diff in ${worktreePath}`);
-            return [];
-          }
-        }
-      }
-
+      const baseRef = await this.resolveDiffBaseRef(worktreePath, baseCommitSha);
       if (!baseRef) {
         return [];
       }
@@ -4720,12 +5072,50 @@ ${failureFeedback}
     settings: Settings,
   ): Promise<WorkflowStepOutcome> {
     const toolMode: "coding" | "readonly" = workflowStep.toolMode || "readonly";
+
+    // Compute the diff scope so the workflow step agent reviews only what THIS
+    // task changed — not unrelated files it might wander into. Without this,
+    // open-ended review prompts (e.g. "verify visual polish") have been
+    // observed to spend the entire timeout budget reading pre-existing files
+    // that match the task description's keywords. See FN-3327 post-mortem.
+    const scopedFiles = await this.captureModifiedFiles(worktreePath, task.baseCommitSha);
+    let diffShortstat: string | undefined;
+    try {
+      const baseRef = await this.resolveDiffBaseRef(worktreePath, task.baseCommitSha);
+      if (baseRef) {
+        const { stdout } = await execAsync(`git diff --shortstat ${baseRef}..HEAD`, {
+          cwd: worktreePath,
+          encoding: "utf-8",
+        });
+        diffShortstat = stdout.trim() || undefined;
+      }
+    } catch {
+      // best-effort — fall through with no shortstat
+    }
+
+    const MAX_SCOPE_FILES = 100;
+    const scopeFileBlock = scopedFiles.length === 0
+      ? "(no modified files detected for this task — review the worktree directly, but do NOT browse unrelated files)"
+      : scopedFiles.length > MAX_SCOPE_FILES
+        ? `${scopedFiles.slice(0, MAX_SCOPE_FILES).map((f) => `- ${f}`).join("\n")}\n- ... (${scopedFiles.length - MAX_SCOPE_FILES} more files truncated)`
+        : scopedFiles.map((f) => `- ${f}`).join("\n");
+
+    const scopeBlock = `Diff Scope (files changed by THIS task vs base):
+${scopeFileBlock}${diffShortstat ? `\nDiff stat: ${diffShortstat}` : ""}
+
+CRITICAL SCOPING RULES — read before doing anything else:
+- Review ONLY the files listed above. Do NOT analyze unmodified files or unrelated parts of the codebase.
+- If NONE of the files in the diff scope are relevant to your review category (e.g. a UX/design reviewer with no UI/CSS/component files in scope, a security reviewer with no auth/network code in scope, an a11y reviewer with no markup changes), respond IMMEDIATELY with a single short approval line such as "No relevant changes in scope — approved." and STOP. Do not start exploring the codebase.
+- Your wall-clock budget is short. Spending it browsing unmodified files will cause this step to time out and block merge.`;
+
     const systemPrompt = `You are a workflow step agent executing: ${workflowStep.name}
 
 Task Context:
 - Task ID: ${task.id}
 - Task Description: ${task.description}
 - Worktree: ${worktreePath}
+
+${scopeBlock}
 
 Your role:
 - Execute this workflow step exactly as scoped.
@@ -5564,7 +5954,11 @@ and show an appropriate message to the user.\`
     if (shouldGenerateNewName) {
       // Conflicting worktree belongs to an active task — generate new path AND
       // use a suffixed branch name so git doesn't conflict with the branch
-      // already checked out in the existing worktree.
+      // already checked out in the existing worktree. Branch conflicts here
+      // mean the original task branch already exists and is checked out
+      // elsewhere, so suffix retries must branch from that task branch tip
+      // rather than the stale base ref to preserve the task's commits.
+      const conflictStartPoint = branch;
       const newPath = join(this.rootDir, ".worktrees", generateWorktreeName(this.rootDir));
       for (let suffix = 2; suffix <= 6; suffix++) {
         const suffixedBranch = `${branch}-${suffix}`;
@@ -5574,7 +5968,7 @@ and show an appropriate message to the user.\`
             `Conflicting worktree in use by active task, trying new path with branch ${suffixedBranch}`,
             newPath,
           );
-          return await this.tryCreateWorktree(suffixedBranch, newPath, taskId, startPoint, attemptNumber);
+          return await this.tryCreateWorktree(suffixedBranch, newPath, taskId, conflictStartPoint, attemptNumber);
         } catch (suffixErr: unknown) {
           const info = this.extractWorktreeConflictInfo(suffixErr);
           if (info.type === "already-used") {

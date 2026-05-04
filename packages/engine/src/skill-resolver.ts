@@ -10,9 +10,34 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ResourceDiagnostic, Skill } from "@mariozechner/pi-coding-agent";
 import { piLog } from "./logger.js";
+
+// ── Project Root Resolution ──────────────────────────────────────────────────
+
+/**
+ * Resolve the project root directory by walking up from `cwd` looking for
+ * a directory containing `.fusion/`. This handles worktree paths (e.g.,
+ * `/project/.worktrees/task-branch`) and any other subdirectory by walking
+ * up to the actual project root.
+ *
+ * Falls back to `cwd` if no `.fusion/` directory is found (mirrors
+ * `resolvePiExtensionProjectRoot` from `@fusion/core`).
+ */
+export function resolveProjectRoot(cwd: string): string {
+  let current = resolve(cwd);
+  while (true) {
+    if (existsSync(join(current, ".fusion"))) {
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return resolve(cwd);
+    }
+    current = parent;
+  }
+}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -142,6 +167,24 @@ function isExclusionPattern(pattern: string): boolean {
   return pattern.startsWith("-");
 }
 
+/**
+ * Extract the bare skill name for matching purposes.
+ *
+ * Fusion conventions use two-segment names like "web-research/SKILL.md" (from
+ * extractSkillName and normalizeAgentSkills), but pi-coding-agent sets Skill.name
+ * to just the parent directory (e.g. "web-research"). This helper strips common
+ * suffixes so both sides can be compared:
+ *
+ *   "web-research/SKILL.md"           → "web-research"
+ *   "skills/web-research/SKILL.md"    → "web-research"
+ *   "web-research"                    → "web-research"
+ *   "/abs/path/skills/web-research/SKILL.md" → left unchanged (absolute paths
+ *     are matched by filePath comparison, not by this helper)
+ */
+function bareSkillName(name: string): string {
+  return name.replace(/\/SKILL\.md$/i, "");
+}
+
 // ── Main Resolution Logic ────────────────────────────────────────────────────
 
 /**
@@ -161,7 +204,12 @@ function isExclusionPattern(pattern: string): boolean {
  *    - Requested names not matching any discovered skill (warning)
  */
 export function resolveSessionSkills(context: SkillSelectionContext): SkillSelectionResult {
-  const { projectRootDir, requestedSkillNames } = context;
+  const { requestedSkillNames } = context;
+
+  // Resolve project root from the given projectRootDir — it may be a
+  // worktree path (e.g., /project/.worktrees/task-branch) which doesn't
+  // contain .fusion/settings.json. Walk up to find the real project root.
+  const projectRootDir = resolveProjectRoot(context.projectRootDir);
 
   // Read project settings
   const settings = readProjectSettings(projectRootDir);
@@ -327,20 +375,45 @@ export function createSkillsOverrideFromSelection(
     // Skills must match the inclusion criteria AND not be in the exclusion list
     const hasExcluded = excludedSkillPaths.size > 0;
     let filteredSkills: Skill[];
+    // Build a name-based lookup for pattern/exclusion matching.
+    // Settings patterns are relative (e.g. "web-research/SKILL.md") but
+    // skill.filePath is absolute. Match against skill.name instead so
+    // that patterns written by toggleExecutionSkill() actually resolve.
+    //
+    // pi-coding-agent sets Skill.name to the parent directory name
+    // (e.g. "web-research") while Fusion uses two-segment names
+    // (e.g. "web-research/SKILL.md"). bareSkillName() normalizes
+    // both sides so the comparison succeeds.
+    const skillNameMatches = (skill: Skill, pattern: string): boolean =>
+      bareSkillName(skill.name).toLowerCase() === bareSkillName(pattern).toLowerCase()
+      || skill.filePath === pattern;
+    const isExcluded = (skill: Skill): boolean => {
+      for (const ep of excludedSkillPaths) {
+        if (skillNameMatches(skill, ep)) return true;
+      }
+      return false;
+    };
+    const isAllowed = (skill: Skill): boolean => {
+      for (const ap of allowedSkillPaths) {
+        if (skillNameMatches(skill, ap)) return true;
+      }
+      return false;
+    };
+
     if (hasRequestedNames) {
-      // Filter by requested names (case-insensitive match)
-      const requestedNamesLower = new Set(requestedSkillNames!.map((n) => n.toLowerCase()));
+      // Filter by requested names (case-insensitive match, normalize away /SKILL.md suffix)
+      const requestedBareNamesLower = new Set(requestedSkillNames!.map((n) => bareSkillName(n).toLowerCase()));
       filteredSkills = base.skills.filter(
-        (skill) => requestedNamesLower.has(skill.name.toLowerCase()) && !excludedSkillPaths.has(skill.filePath)
+        (skill) => requestedBareNamesLower.has(bareSkillName(skill.name).toLowerCase()) && !isExcluded(skill)
       );
     } else if (hasPatterns) {
-      // Filter by file path (in allowed set AND not in excluded set)
+      // Filter by pattern (allowed AND not excluded)
       filteredSkills = base.skills.filter(
-        (skill) => allowedSkillPaths.has(skill.filePath) && !excludedSkillPaths.has(skill.filePath)
+        (skill) => isAllowed(skill) && !isExcluded(skill)
       );
     } else if (hasExcluded) {
       // Only exclusions set - filter out excluded skills
-      filteredSkills = base.skills.filter((skill) => !excludedSkillPaths.has(skill.filePath));
+      filteredSkills = base.skills.filter((skill) => !isExcluded(skill));
     } else {
       // No filter criteria - this shouldn't happen if filterActive is true
       filteredSkills = base.skills;
@@ -350,28 +423,25 @@ export function createSkillsOverrideFromSelection(
     const newDiagnostics: ResourceDiagnostic[] = [];
 
     // Check for excluded paths that DO match a discovered skill (disabled)
-    // These are skills that exist but were explicitly excluded by project patterns
     const purpose = sessionPurpose ? ` [${sessionPurpose}]` : "";
-    const discoveredPaths = new Set(base.skills.map((s) => s.filePath));
+    const discoveredBareNames = new Set(base.skills.map((s) => bareSkillName(s.name).toLowerCase()));
+    const discoveredFilePaths = new Set(base.skills.map((s) => s.filePath));
+    const hasDiscoveredMatch = (pattern: string): boolean =>
+      discoveredBareNames.has(bareSkillName(pattern).toLowerCase()) || discoveredFilePaths.has(pattern);
 
     for (const excludedPath of excludedSkillPaths) {
-      if (discoveredPaths.has(excludedPath)) {
-        // Skill exists but was disabled by project patterns
-        // Use "warning" type since ResourceDiagnostic only supports warning|error|collision
+      if (hasDiscoveredMatch(excludedPath)) {
         newDiagnostics.push({
           type: "warning",
           message: `Skill at '${excludedPath}' exists but is disabled by project execution settings${purpose}`,
           path: excludedPath,
         });
       }
-      // If the path doesn't match any discovered skill, it's not a disabled skill - it's just not relevant
     }
 
     // Check for configured patterns (allowed paths) that don't match any discovered skill
-    // Note: At this point, we have access to base.skills for validation
     for (const allowedPath of allowedSkillPaths) {
-      if (!discoveredPaths.has(allowedPath)) {
-        // Allowed path doesn't match any discovered skill - this is a missing/invalid pattern
+      if (!hasDiscoveredMatch(allowedPath)) {
         newDiagnostics.push({
           type: "warning",
           message: `Configured skill pattern '${allowedPath}' not found in discovered skills${purpose}`,
@@ -382,10 +452,10 @@ export function createSkillsOverrideFromSelection(
 
     // Check for requested names that don't match any discovered skill
     if (requestedSkillNames) {
-      const discoveredNamesLower = new Set(base.skills.map((s) => s.name.toLowerCase()));
+      const discoveredBareNamesLower = new Set(base.skills.map((s) => bareSkillName(s.name).toLowerCase()));
       for (const requestedName of requestedSkillNames) {
         if (
-          !discoveredNamesLower.has(requestedName.toLowerCase())
+          !discoveredBareNamesLower.has(bareSkillName(requestedName).toLowerCase())
           && !isBuiltInFallbackRequest(requestedName)
         ) {
           const purpose = sessionPurpose ? ` [${sessionPurpose}]` : "";

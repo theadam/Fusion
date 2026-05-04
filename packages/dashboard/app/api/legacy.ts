@@ -39,7 +39,6 @@ import type {
   AgentRating,
   AgentRatingSummary,
   AgentRatingInput,
-  ChatSession,
   ChatMessage,
   EnrichedChatSession,
   Roadmap,
@@ -1204,6 +1203,8 @@ export interface ModelsResponse {
   favoriteModels: string[];
   defaultProvider?: string;
   defaultModelId?: string;
+  resolvedPlanningProvider?: string;
+  resolvedPlanningModelId?: string;
 }
 
 /** Fetch available AI models from the model registry along with favoriteProviders */
@@ -1268,6 +1269,12 @@ export interface AuthProvider {
   type?: "oauth" | "api_key" | "cli";
   /** Masked hint of the stored API key (first 3 + bullets + last 4 chars) */
   keyHint?: string;
+}
+
+export interface ManualOAuthCodeInfo {
+  prompt: string;
+  placeholder?: string;
+  helpText?: string;
 }
 
 /**
@@ -1733,10 +1740,26 @@ export function fetchAuthStatus(): Promise<{
 }
 
 /** Initiate OAuth login for a provider. Returns the auth URL to open in a new tab. */
-export function loginProvider(provider: string): Promise<{ url: string; instructions?: string }> {
-  return api<{ url: string; instructions?: string }>("/auth/login", {
+export function loginProvider(provider: string): Promise<{
+  url: string;
+  instructions?: string;
+  manualCode?: ManualOAuthCodeInfo;
+}> {
+  return api<{
+    url: string;
+    instructions?: string;
+    manualCode?: ManualOAuthCodeInfo;
+  }>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ provider, origin: window.location.origin }),
+  });
+}
+
+/** Submit a pasted OAuth callback URL or authorization code for an active login. */
+export function submitProviderManualCode(provider: string, code: string): Promise<{ success: boolean; submitted: boolean }> {
+  return api<{ success: boolean; submitted: boolean }>("/auth/manual-code", {
+    method: "POST",
+    body: JSON.stringify({ provider, code }),
   });
 }
 
@@ -3844,10 +3867,10 @@ export function connectAgentOnboardingStream(
           try { handlers.onThinking?.(JSON.parse(event.data)); } catch { handlers.onThinking?.(event.data); }
         },
         question: (event) => {
-          try { handlers.onQuestion?.(JSON.parse(event.data) as PlanningQuestion); } catch {}
+          try { handlers.onQuestion?.(JSON.parse(event.data) as PlanningQuestion); } catch { /* ignore parse error */ }
         },
         summary: (event) => {
-          try { handlers.onSummary?.(JSON.parse(event.data) as AgentOnboardingSummary); } catch {}
+          try { handlers.onSummary?.(JSON.parse(event.data) as AgentOnboardingSummary); } catch { /* ignore parse error */ }
         },
         error: (event) => {
           try {
@@ -5288,6 +5311,41 @@ export interface DockerNodeInfo {
   updatedAt: string;
 }
 
+export interface ManagedDockerNodeInfo {
+  id: string;
+  nodeId?: string;
+  name: string;
+  containerId?: string;
+  status: string;
+  hostConfig: {
+    type: "local" | "remote";
+    host?: string;
+    context?: string;
+    tlsOptions?: Record<string, unknown>;
+  };
+  envVars: Record<string, string>;
+  reachableUrl?: string;
+  imageName: string;
+  imageTag: string;
+  volumeMounts: Array<{ hostPath: string; containerPath: string; readOnly?: boolean }>;
+  persistentStorage: boolean;
+  resourceSizing?: { cpuLimit?: string; memoryLimit?: string };
+  errorMessage?: string;
+  linkedNode?: NodeInfo;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContainerStatusInfo {
+  running: boolean;
+  status: string;
+  startedAt?: string;
+  finishedAt?: string;
+  exitCode?: number;
+  error?: string;
+  ports?: Record<string, string>;
+}
+
 /** Node discovered over local network mDNS/DNS-SD */
 export interface DiscoveredNodeInfo {
   name: string;
@@ -5432,6 +5490,27 @@ export function fetchDiscoveryStatus(): Promise<{ active: boolean; config: Disco
 /** Fetch all managed Docker nodes */
 export function listManagedDockerNodes(): Promise<DockerNodeInfo[]> {
   return api<DockerNodeInfo[]>("/docker-nodes");
+}
+
+export function fetchManagedDockerNodes(): Promise<ManagedDockerNodeInfo[]> {
+  return api<ManagedDockerNodeInfo[]>("/docker/nodes");
+}
+
+export function fetchManagedDockerNode(id: string): Promise<ManagedDockerNodeInfo> {
+  return api<ManagedDockerNodeInfo>(`/docker/nodes/${encodeURIComponent(id)}`);
+}
+
+export function fetchManagedDockerNodeContainerStatus(id: string): Promise<ContainerStatusInfo> {
+  return api<ContainerStatusInfo>(`/docker/nodes/${encodeURIComponent(id)}/container-status`);
+}
+
+export function fetchDockerNodeLogs(id: string, options?: { tail?: number }): Promise<{ logs: string }> {
+  const params = new URLSearchParams();
+  if (typeof options?.tail === "number") {
+    params.set("tail", String(options.tail));
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return api<{ logs: string }>(`/docker/nodes/${encodeURIComponent(id)}/logs${suffix}`);
 }
 
 /** Create a managed Docker node */
@@ -7671,7 +7750,7 @@ export interface ChatSessionListResponse {
 }
 
 export interface ChatSessionResponse {
-  session: ChatSession;
+  session: EnrichedChatSession;
 }
 
 export interface ChatMessageListResponse {
@@ -7807,7 +7886,7 @@ export function cancelChatResponse(
 /** Send a chat message and receive the AI response via SSE streaming.
  *
  *  The backend exposes `POST /api/chat/sessions/:id/messages` which returns an SSE
- *  stream (not JSON). Events: `thinking`, `text`, `done`, `error`.
+ *  stream (not JSON). Events: `thinking`, `text`, `fallback`, `done`, `error`.
  *
  *  Since `EventSource` only supports GET requests, this function uses `fetch()`
  *  with a ReadableStream to parse SSE events from the POST response body.
@@ -7822,6 +7901,7 @@ export function streamChatResponse(
     onText?: (data: string) => void;
     onToolStart?: (data: { toolName: string; args?: Record<string, unknown> }) => void;
     onToolEnd?: (data: { toolName: string; isError: boolean; result?: unknown }) => void;
+    onFallback?: (data: { primaryModel: string; fallbackModel: string; triggerPoint: "session-creation" | "prompt-time" }) => void;
     onDone?: (data: { messageId: string }) => void;
     onError?: (data: string) => void;
     onConnectionStateChange?: (state: StreamConnectionState) => void;
@@ -7867,6 +7947,13 @@ export function streamChatResponse(
       case "tool_end":
         try {
           handlers.onToolEnd?.(JSON.parse(rawData));
+        } catch {
+          // skip malformed event
+        }
+        break;
+      case "fallback":
+        try {
+          handlers.onFallback?.(JSON.parse(rawData));
         } catch {
           // skip malformed event
         }

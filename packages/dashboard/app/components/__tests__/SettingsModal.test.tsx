@@ -49,6 +49,9 @@ const mockGenerateShortLivedRemoteToken = vi.fn();
 const mockFetchRemoteQr = vi.fn();
 const mockFetchRemoteUrl = vi.fn();
 const mockTriggerMemoryDreams = vi.fn();
+const mockFetchPluginUiSlots = vi.fn();
+const mockFetchDroidCliStatus = vi.fn();
+const mockSetDroidCliEnabled = vi.fn();
 const mockUseWorkspaceFileBrowser = vi.fn();
 
 vi.mock("../../api", async (importOriginal) => {
@@ -98,6 +101,9 @@ vi.mock("../../api", async (importOriginal) => {
     fetchRemoteQr: (...args: unknown[]) => mockFetchRemoteQr(...args),
     fetchRemoteUrl: (...args: unknown[]) => mockFetchRemoteUrl(...args),
     triggerMemoryDreams: (...args: unknown[]) => mockTriggerMemoryDreams(...args),
+    fetchPluginUiSlots: (...args: unknown[]) => mockFetchPluginUiSlots(...args),
+    fetchDroidCliStatus: (...args: unknown[]) => mockFetchDroidCliStatus(...args),
+    setDroidCliEnabled: (...args: unknown[]) => mockSetDroidCliEnabled(...args),
   });
 });
 
@@ -107,6 +113,14 @@ vi.mock("../../hooks/useMemoryBackendStatus", () => ({
   useMemoryBackendStatus: (...args: unknown[]) => mockUseMemoryBackendStatus(...args),
 }));
 
+const mockUseMobileKeyboard = vi.fn();
+vi.mock("../../hooks/useMobileKeyboard", () => ({
+  useMobileKeyboard: (...args: unknown[]) => mockUseMobileKeyboard(...args),
+}));
+
+vi.mock("../../hooks/useViewportMode", () => ({
+  useViewportMode: () => "mobile",
+}));
 vi.mock("lucide-react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("lucide-react")>();
   return {
@@ -128,9 +142,6 @@ vi.mock("../PiExtensionsManager", () => ({
   PiExtensionsManager: () => <div data-testid="pi-extensions-manager">Pi extensions content</div>,
 }));
 
-vi.mock("../PluginSlot", () => ({
-  PluginSlot: () => <div data-testid="plugin-slot">Plugin slot content</div>,
-}));
 
 vi.mock("../../hooks/useWorkspaceFileBrowser", () => ({
   useWorkspaceFileBrowser: (...args: unknown[]) => mockUseWorkspaceFileBrowser(...args),
@@ -191,6 +202,23 @@ const MODEL_FIXTURE = [
 ];
 
 describe("SettingsModal", () => {
+  it("applies keyboard CSS variables when mobile keyboard is open", async () => {
+    mockUseMobileKeyboard.mockReturnValue({
+      keyboardOpen: true,
+      keyboardOverlap: 250,
+      viewportHeight: 400,
+      viewportOffsetTop: 50,
+    });
+
+    const { container } = renderModal();
+    await waitForSettingsModalReady();
+    const modal = container.querySelector(".settings-modal");
+
+    expect(mockUseMobileKeyboard).toHaveBeenCalledWith({ enabled: true });
+    expect(modal?.getAttribute("style")).toContain("--keyboard-overlap: 250px");
+    expect(modal?.getAttribute("style")).toContain("--vv-height: 400px");
+  });
+
   it("renders section headings with the shared settings-section-heading class", async () => {
     const { container } = renderModal();
     await waitForSettingsModalReady();
@@ -207,6 +235,12 @@ describe("SettingsModal", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseMobileKeyboard.mockReturnValue({
+      keyboardOpen: false,
+      keyboardOverlap: 0,
+      viewportHeight: null,
+      viewportOffsetTop: 0,
+    });
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: vi.fn().mockImplementation((query: string) => ({
@@ -330,6 +364,14 @@ describe("SettingsModal", () => {
     mockFetchRemoteQr.mockResolvedValue({ url: "https://remote.example.com", tokenType: "persistent", expiresAt: null, format: "image/svg", data: "<svg></svg>" });
     mockFetchRemoteUrl.mockResolvedValue({ url: "https://remote.example.com", tokenType: "persistent", expiresAt: null });
     mockTriggerMemoryDreams.mockResolvedValue({ success: true, summary: "done" });
+    mockFetchPluginUiSlots.mockResolvedValue([]);
+    mockFetchDroidCliStatus.mockResolvedValue({
+      binary: { available: true, version: "1.2.3", binaryPath: "/usr/local/bin/droid", probeDurationMs: 9 },
+      enabled: false,
+      extension: { status: "ok" },
+      ready: false,
+    });
+    mockSetDroidCliEnabled.mockResolvedValue({ enabled: true, restartRequired: true });
     mockUseWorkspaceFileBrowser.mockReturnValue({
       entries: [],
       currentPath: ".",
@@ -1025,6 +1067,78 @@ describe("SettingsModal", () => {
     });
   });
 
+  describe("Droid plugin Settings integration", () => {
+    it.each([
+      {
+        name: "unavailable/not enabled",
+        status: {
+          binary: { available: false, reason: "`droid` not found on PATH", probeDurationMs: 9 },
+          enabled: false,
+          extension: { status: "ok" },
+          ready: false,
+        },
+        expectedText: "not found on PATH",
+      },
+      {
+        name: "enabled but not ready",
+        status: {
+          binary: { available: true, version: "1.2.3", binaryPath: "/usr/local/bin/droid", probeDurationMs: 9 },
+          enabled: true,
+          extension: { status: "ok" },
+          ready: false,
+        },
+        expectedText: "Enabled. Validating…",
+      },
+      {
+        name: "connected and ready",
+        status: {
+          binary: { available: true, version: "1.2.3", binaryPath: "/usr/local/bin/droid", probeDurationMs: 9 },
+          enabled: true,
+          extension: { status: "ok" },
+          ready: true,
+        },
+        expectedText: "✓ Connected — 1.2.3",
+      },
+    ])("renders plugin-driven droid card state: $name", async ({ status, expectedText }) => {
+      mockFetchAuthStatus.mockResolvedValueOnce({
+        providers: [{ id: "droid-cli", name: "Factory AI (via Droid CLI)", authenticated: false, type: "cli" }],
+      });
+      mockFetchPluginUiSlots.mockResolvedValueOnce([
+        {
+          pluginId: "fusion-plugin-droid-runtime",
+          slot: {
+            slotId: "settings-provider-card",
+            label: "Droid CLI Provider",
+            componentPath: "./components/settings-provider-card.js",
+          },
+        },
+      ]);
+      mockFetchDroidCliStatus.mockResolvedValueOnce(status);
+
+      renderModal();
+      await waitForSettingsModalReady();
+
+      expect(screen.getByRole("heading", { name: "Authentication" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+      expect(await screen.findByTestId("droid-cli-provider-card")).toBeInTheDocument();
+      expect(screen.getAllByTestId("droid-cli-provider-card")).toHaveLength(1);
+      expect(screen.getByText(new RegExp(expectedText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeInTheDocument();
+    });
+
+    it("renders legacy droid auth card only when plugin slot is not present", async () => {
+      mockFetchAuthStatus.mockResolvedValueOnce({
+        providers: [{ id: "droid-cli", name: "Factory AI (via Droid CLI)", authenticated: false, type: "cli" }],
+      });
+      mockFetchPluginUiSlots.mockResolvedValueOnce([]);
+
+      renderModal();
+      await waitForSettingsModalReady();
+
+      expect(await screen.findByTestId("droid-cli-provider-card")).toBeInTheDocument();
+      expect(screen.getAllByTestId("droid-cli-provider-card")).toHaveLength(1);
+    });
+  });
+
   describe("Plugins section navigation", () => {
     it("does not render a standalone Pi Extensions sidebar item", async () => {
       renderModal();
@@ -1059,7 +1173,6 @@ describe("SettingsModal", () => {
       await userEvent.click(await screen.findByRole("button", { name: /Plugins$/ }));
 
       expect(await screen.findByTestId("plugin-manager")).toBeInTheDocument();
-      expect(screen.getByTestId("plugin-slot")).toBeInTheDocument();
       expect(screen.queryByTestId("pi-extensions-manager")).not.toBeInTheDocument();
 
       await userEvent.click(screen.getByRole("tab", { name: "Pi Extensions" }));
@@ -1068,7 +1181,6 @@ describe("SettingsModal", () => {
         expect(screen.getByTestId("pi-extensions-manager")).toBeInTheDocument();
       });
       expect(screen.queryByTestId("plugin-manager")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("plugin-slot")).not.toBeInTheDocument();
       expect(screen.getByRole("tabpanel", { name: "Pi Extensions" })).toBeVisible();
       expect(document.getElementById("plugins-panel-fusion-plugins")).toHaveAttribute("hidden");
     });
@@ -1994,6 +2106,30 @@ describe("SettingsModal", () => {
       const summary = screen.getByText("Advanced Settings");
       await userEvent.click(summary);
     };
+
+    it("renders remote-status-bar with stopped state and omits share block when not running", async () => {
+      mockFetchRemoteStatus.mockResolvedValue({ provider: null, state: "stopped", url: null, lastError: null });
+      const { container } = renderModal();
+      await waitForSettingsModalReady();
+      await openRemoteSection();
+
+      const statusBar = container.querySelector(".remote-status-bar");
+      expect(statusBar).toBeInTheDocument();
+      expect(statusBar?.className).toContain("remote-status-bar--stopped");
+      expect(container.querySelector(".remote-share-block")).not.toBeInTheDocument();
+    });
+
+    it("renders remote-share-block when tunnel is running with a URL", async () => {
+      mockFetchRemoteStatus.mockResolvedValue({ provider: "tailscale", state: "running", url: "https://machine.ts.net/", lastError: null });
+      const { container } = renderModal();
+      await waitForSettingsModalReady();
+      await openRemoteSection();
+
+      const statusBar = container.querySelector(".remote-status-bar");
+      expect(statusBar).toBeInTheDocument();
+      expect(statusBar?.className).toContain("remote-status-bar--running");
+      expect(container.querySelector(".remote-share-block")).toBeInTheDocument();
+    });
 
     it("shows provider-specific settings when provider selected and auto-saves on Start Tunnel", async () => {
       renderModal();

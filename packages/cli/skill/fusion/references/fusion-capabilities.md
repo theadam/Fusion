@@ -5,7 +5,7 @@
 Fusion is an AI-orchestrated task board. Tasks flow through columns:
 Triage → Todo → In Progress → In Review → Done → Archived
 
-## Pi Extension Tools (Available to Agents)
+## Extension Tools (Available to Agents)
 
 All skill/extension tool invocations in this catalog use the public `fn_*` namespace. Engine runtime sessions also have additional runtime-only `fn_*` tools that are intentionally not listed here (see `references/engine-tools.md`).
 
@@ -19,7 +19,7 @@ All skill/extension tool invocations in this catalog use the public `fn_*` names
 | `fn_task_attach` | Attach a file to a task. Supports images (png, jpg, gif, webp) and text files (txt, log, json, yaml, yml, toml, csv, xml). |
 | `fn_task_pause` | Pause a task — stops all automated agent and scheduler interaction for this task. |
 | `fn_task_unpause` | Unpause a task — resumes automated agent and scheduler interaction. |
-| `fn_task_retry` | Retry a failed task — clears the error state and moves it back to the todo column for re-execution. |
+| `fn_task_retry` | Retry a failed task — clears the error state. Tasks in other columns move to todo; tasks in in-review stay in-place for auto-merge retry. |
 | `fn_task_duplicate` | Duplicate an existing task, creating a fresh copy in planning. Copies the title and description but resets all execution state. The AI planning agent will replan the new task. |
 | `fn_task_refine` | Request a refinement of a completed or in-review task. Creates a new follow-up task in planning that references the original task as a dependency. Use this when a done or in-review task needs additional work, improvements, or follow-up changes. |
 | `fn_task_archive` | Archive a done task (move from done → archived). Archived tasks are preserved for historical reference but moved out of the main board view. |
@@ -48,6 +48,10 @@ All skill/extension tool invocations in this catalog use the public `fn_*` names
 | `fn_feature_link_task` | Link a feature to a fn task for implementation. Updates the feature status to 'triaged' and associates it with the task. |
 | `fn_agent_stop` | Stop a running agent — pauses its execution. Transitions the agent from running/active to paused state. |
 | `fn_agent_start` | Start a stopped agent — resumes its execution. Transitions the agent from paused to active state. |
+| `fn_list_agents` | List all available agents in the system. Shows each agent's name, role, state, personality (soul), and current assignment. Use this to discover which agents exist and what they specialize in before delegating work. |
+| `fn_delegate_task` | Create a new task and assign it to a specific agent for execution. The task goes to 'todo' and will be picked up by the target agent on their next heartbeat cycle. Use fn_list_agents first to find available agents and their capabilities. |
+| `fn_agent_show` | Show detailed information about a single agent, including their role, state, position in the org hierarchy (reports-to, direct reports), skills, and current assignment. |
+| `fn_agent_org_chart` | Show the organizational tree of agents, displaying the role hierarchy. Optionally filter to a subtree rooted at a specific agent. |
 | `fn_skills_search` | Search the skills.sh directory for agent skills. Returns matching skills with names, sources (owner/repo), install counts, and install commands. Use fn_skills_install to install a selected skill. |
 | `fn_skills_install` | Install an agent skill from skills.sh into the current project. Downloads skill files into the project's skill directories (.fusion/skills/, legacy .pi/skills/, .agents/skills/). The skill becomes available to AI agents in subsequent sessions. |
 <!-- END: fusion-capabilities-tool-table -->

@@ -108,7 +108,7 @@ export function ResearchView({ projectId, addToast, onOpenSettings, readinessVer
 
   const statusDotClass = useMemo(() => {
     if (!selectedRun) return "status-dot";
-    if (selectedRun.status === "pending") return "status-dot status-dot--pending";
+    if (selectedRun.status === "queued" || selectedRun.status === "retry_waiting") return "status-dot status-dot--pending";
     if (selectedRun.status === "running") return "status-dot status-dot--connecting";
     if (selectedRun.status === "completed") return "status-dot status-dot--online";
     if (selectedRun.status === "failed" || selectedRun.status === "cancelled") return "status-dot status-dot--error";
@@ -307,7 +307,7 @@ export function ResearchView({ projectId, addToast, onOpenSettings, readinessVer
               <button
                 key={run.id}
                 type="button"
-                className={`research-view__history-item${selectedRunId === run.id ? " research-view__history-item--active" : ""}`}
+                className={`research-view__history-item card${selectedRunId === run.id ? " research-view__history-item--active" : ""}`}
                 onClick={() => setSelectedRunId(run.id)}
               >
                 <span className="card-id">{run.id}</span>

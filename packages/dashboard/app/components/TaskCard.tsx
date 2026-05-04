@@ -83,8 +83,8 @@ function abbreviateBadge(text: string, max: number): string {
 
 const EDITABLE_COLUMNS: Set<Column> = new Set(["triage", "todo"]);
 
-const ACTIVE_STATUSES = new Set(["planning", "researching", "executing", "finalizing", "merging"]);
-const ACTIVE_MERGE_STATUSES = new Set(["merging", "merging-pr"]);
+const ACTIVE_STATUSES = new Set(["planning", "researching", "executing", "finalizing", "merging", "merging-fix"]);
+const ACTIVE_MERGE_STATUSES = new Set(["merging", "merging-pr", "merging-fix"]);
 
 const COLUMN_PROGRESS_COLOR_MAP: Record<Column, string> = {
   triage: "var(--triage)",
@@ -101,6 +101,11 @@ const TIME_INDICATOR_COLUMNS = new Set<Column>([
   "done",
 ]);
 const LIVE_TIME_INDICATOR_POLL_MS = 30_000;
+
+function getTaskStatusLabel(status: string): string {
+  if (status === "merging-fix") return "Merging fixes…";
+  return status;
+}
 
 function parseTimestampToMs(value?: string): number | null {
   if (!value) return null;
@@ -709,6 +714,7 @@ function TaskCardComponent({
 
   const isFailed = task.status === "failed";
   const isPaused = task.paused === true;
+  const pausedByAgent = Boolean(task.paused && task.pausedByAgentId);
   const normalizedPriority = normalizeTaskPriorityValue(task.priority);
   const showPriorityBadge = normalizedPriority !== DEFAULT_TASK_PRIORITY;
   const isStuck = isTaskStuck(task, taskStuckTimeoutMs, lastFetchTimeMs);
@@ -1315,14 +1321,14 @@ function TaskCardComponent({
           <span
             className="card-status-badge paused"
           >
-            paused
+            {pausedByAgent ? "paused by agent" : "paused"}
           </span>
         )}
         {!isPaused && task.status && task.status !== "queued" && (
           <span
             className={`card-status-badge card-status-badge--${task.column}${isAwaitingApproval ? " awaiting-approval" : ""}${ACTIVE_STATUSES.has(task.status) ? " pulsing" : ""}${isFailed ? " failed" : ""}${isStuck ? " stuck" : ""}`}
           >
-            {isStuck ? "Stuck" : isAwaitingApproval ? "Awaiting Approval" : task.status}
+            {isStuck ? "Stuck" : isAwaitingApproval ? "Awaiting Approval" : getTaskStatusLabel(task.status)}
           </span>
         )}
         {isStuck && (isPaused || !task.status || task.status === "queued") && (

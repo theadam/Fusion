@@ -16,6 +16,7 @@ Features:
 - Inline quick entry creation
 - PR/issue badges with live updates
 - GitHub provenance marker on task cards imported from GitHub (`sourceType: github_import`), shown alongside existing footer metadata like timers
+- Column ordering semantics: `triage`, `todo`, `in-progress`, `in-review`, and `archived` stay priority-ordered; `done` is ordered by most recent completion first (`columnMovedAt`, then `updatedAt`, then `createdAt` fallback)
 
 ![Board view](./screenshots/dashboard-overview.png)
 
@@ -37,6 +38,8 @@ Features:
 Chat view provides project-scoped conversations with agents.
 
 - Entering `/clear` (exact match after trimming) in the composer starts a fresh thread for the current chat target instead of sending the literal command to the model
+- On mobile, the New Chat and Delete Conversation dialogs use a compact inset treatment (centered, viewport-bounded, internally scrollable) instead of the app's default full-height mobile modal chrome.
+- Full Chat and Quick Chat both consume the same streamed `/api/chat/sessions/:id/messages` response contract, so assistant text/chunk/done events are restored consistently across both surfaces
 
 ![Chat view](./screenshots/chat-view.png)
 
@@ -132,6 +135,8 @@ Navigation:
 - Desktop: **Header → More views** overflow menu
 - Mobile: **More** sheet in `MobileNavBar`
 - Research is intentionally not shown in the primary board/list/agents/missions/chat toggle row
+
+For the full research workflow, provider setup, CLI commands, API reference, and agent integration, see the canonical [Research guide](./research.md).
 
 ## Memory View
 

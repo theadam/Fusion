@@ -7,6 +7,7 @@ import { FN_AGENT_ID, useQuickChat } from "../useQuickChat";
 vi.mock("../../api", () => ({
   fetchResumeChatSession: vi.fn(),
   fetchChatSessions: vi.fn(),
+  fetchChatSession: vi.fn(),
   createChatSession: vi.fn(),
   fetchChatMessages: vi.fn(),
   streamChatResponse: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock("../../api", () => ({
 
 const mockFetchResumeChatSession = vi.mocked(apiModule.fetchResumeChatSession);
 const mockFetchChatSessions = vi.mocked(apiModule.fetchChatSessions);
+const mockFetchChatSession = vi.mocked(apiModule.fetchChatSession);
 const mockCreateChatSession = vi.mocked(apiModule.createChatSession);
 const mockFetchChatMessages = vi.mocked(apiModule.fetchChatMessages);
 const mockStreamChatResponse = vi.mocked(apiModule.streamChatResponse);
@@ -43,6 +45,9 @@ describe("useQuickChat", () => {
       session: makeSession({ id: "session-001", agentId: "agent-001" }),
     });
     mockFetchChatMessages.mockResolvedValue({ messages: [] });
+    mockFetchChatSession.mockResolvedValue({
+      session: { ...makeSession({ id: "session-001", agentId: "agent-001" }), isGenerating: false },
+    });
     mockStreamChatResponse.mockReturnValue({ close: vi.fn(), isConnected: () => true });
     mockCancelChatResponse.mockResolvedValue({ success: true });
   });
@@ -462,6 +467,55 @@ describe("useQuickChat", () => {
     expect(mockStreamChatResponse).toHaveBeenCalledTimes(1);
   });
 
+  it("starts a fresh stream and shows active state on second turn after first turn completes", async () => {
+    const existingSession = makeSession({ id: "session-existing", agentId: "agent-001" });
+    const handlers: Array<Parameters<typeof mockStreamChatResponse>[2]> = [];
+
+    mockFetchResumeChatSession.mockResolvedValueOnce({ session: existingSession });
+    mockFetchChatMessages.mockResolvedValue({ messages: [] });
+    mockStreamChatResponse.mockImplementation((_sessionId, _content, nextHandlers) => {
+      handlers.push(nextHandlers);
+      return { close: vi.fn(), isConnected: () => true };
+    });
+
+    const { result } = renderHook(() => useQuickChat("proj-123"));
+
+    await act(async () => {
+      await result.current.switchSession("agent-001");
+    });
+
+    act(() => {
+      void result.current.sendMessage("Turn 1");
+    });
+
+    expect(mockStreamChatResponse).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      handlers[0]?.onDone?.({ messageId: "msg-001" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.isStreaming).toBe(false);
+    });
+
+    act(() => {
+      void result.current.sendMessage("Turn 2");
+    });
+
+    await waitFor(() => {
+      expect(mockStreamChatResponse).toHaveBeenCalledTimes(2);
+      expect(result.current.isStreaming).toBe(true);
+    });
+
+    act(() => {
+      handlers[1]?.onError?.("second turn failed");
+    });
+
+    await waitFor(() => {
+      expect(result.current.isStreaming).toBe(false);
+    });
+  });
+
   it("queued message is auto-sent after streaming onDone", async () => {
     const existingSession = makeSession({ id: "session-existing", agentId: "agent-001" });
     const handlers: Array<Parameters<typeof mockStreamChatResponse>[2]> = [];
@@ -626,7 +680,7 @@ describe("useQuickChat", () => {
     });
   });
 
-  it("onError shows toast with failed response message", async () => {
+  it("onError shows the backend error message in the toast", async () => {
     const existingSession = makeSession({ id: "session-existing", agentId: "agent-001" });
     const addToast = vi.fn();
     let onErrorHandler: ((data: string) => void) | undefined;
@@ -647,11 +701,148 @@ describe("useQuickChat", () => {
 
     act(() => {
       result.current.sendMessage("Hello");
-      onErrorHandler?.("Connection aborted");
+      onErrorHandler?.("No API key for provider: openai-codex");
     });
 
     await waitFor(() => {
-      expect(addToast).toHaveBeenCalledWith("Failed to get response", "error");
+      expect(addToast).toHaveBeenCalledWith("No API key for provider: openai-codex", "error");
+    });
+  });
+
+  it("onFallback updates the active model, persists fallback metadata, and shows a warning toast", async () => {
+    const existingSession = makeSession({
+      id: "session-existing",
+      agentId: FN_AGENT_ID,
+      modelProvider: "openai-codex",
+      modelId: "gpt-5.3-codex",
+    });
+    const addToast = vi.fn();
+    let onFallbackHandler:
+      | ((data: { primaryModel: string; fallbackModel: string; triggerPoint: "session-creation" | "prompt-time" }) => void)
+      | undefined;
+    let onTextHandler: ((data: string) => void) | undefined;
+    let onDoneHandler: ((data: { messageId: string }) => void) | undefined;
+
+    mockFetchResumeChatSession.mockResolvedValueOnce({ session: existingSession });
+    mockFetchChatMessages.mockResolvedValue({ messages: [] });
+
+    mockStreamChatResponse.mockImplementation((_sessionId, _content, handlers) => {
+      onFallbackHandler = handlers.onFallback;
+      onTextHandler = handlers.onText;
+      onDoneHandler = handlers.onDone;
+      return { close: vi.fn(), isConnected: () => true };
+    });
+
+    const { result } = renderHook(() => useQuickChat("proj-123", addToast));
+
+    await act(async () => {
+      await result.current.switchSession(FN_AGENT_ID, "openai-codex", "gpt-5.3-codex");
+    });
+
+    act(() => {
+      result.current.sendMessage("Hello");
+      onFallbackHandler?.({
+        primaryModel: "openai-codex/gpt-5.3-codex",
+        fallbackModel: "zai/glm-5.1",
+        triggerPoint: "prompt-time",
+      });
+      onTextHandler?.("Fallback reply");
+      onDoneHandler?.({ messageId: "msg-fallback" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeSession?.modelProvider).toBe("zai");
+      expect(result.current.activeSession?.modelId).toBe("glm-5.1");
+      expect(addToast).toHaveBeenCalledWith(
+        "Primary model unavailable. Switched to fallback zai/glm-5.1.",
+        "warning",
+      );
+      expect(result.current.messages.at(-1)).toEqual(expect.objectContaining({
+        id: "msg-fallback",
+        role: "assistant",
+        content: "Fallback reply",
+        fallbackInfo: {
+          primaryModel: "openai-codex/gpt-5.3-codex",
+          fallbackModel: "zai/glm-5.1",
+          triggerPoint: "prompt-time",
+        },
+      }));
+    });
+  });
+
+  describe("FN-3336: streaming state recovery on reload", () => {
+    it("sets isStreaming=true when initializing a session with isGenerating=true", async () => {
+      const session = { ...makeSession({ id: "session-001", agentId: "agent-001" }), isGenerating: true };
+      mockFetchResumeChatSession.mockResolvedValue({ session });
+      mockFetchChatMessages.mockResolvedValue({ messages: [] });
+
+      const { result } = renderHook(() => useQuickChat("proj-123"));
+
+      await act(async () => {
+        await result.current.switchSession("agent-001");
+      });
+
+      await waitFor(() => {
+        expect(result.current.isStreaming).toBe(true);
+        expect(result.current.streamingText).toBe("");
+      });
+    });
+
+    it("does not set isStreaming when isGenerating is false", async () => {
+      const session = { ...makeSession({ id: "session-001", agentId: "agent-001" }), isGenerating: false };
+      mockFetchResumeChatSession.mockResolvedValue({ session });
+      mockFetchChatMessages.mockResolvedValue({ messages: [] });
+
+      const { result } = renderHook(() => useQuickChat("proj-123"));
+
+      await act(async () => {
+        await result.current.switchSession("agent-001");
+      });
+
+      await waitFor(() => {
+        expect(result.current.isStreaming).toBe(false);
+      });
+    });
+
+    it("clears recovery streaming state when polling detects generation complete", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+
+      const session = { ...makeSession({ id: "session-001", agentId: "agent-001" }), isGenerating: true };
+      mockFetchResumeChatSession.mockResolvedValue({ session });
+      mockFetchChatMessages.mockResolvedValue({ messages: [] });
+
+      // After first poll, server reports generation is done and has a new assistant message
+      mockFetchChatSession.mockResolvedValue({
+        session: { ...makeSession({ id: "session-001", agentId: "agent-001" }), isGenerating: false },
+      });
+      mockFetchChatMessages.mockResolvedValue({
+        messages: [
+          { id: "msg-1", sessionId: "session-001", role: "assistant", content: "Done", thinkingOutput: null, metadata: null, createdAt: new Date().toISOString() },
+        ],
+      });
+
+      const { result } = renderHook(() => useQuickChat("proj-123"));
+
+      await act(async () => {
+        await result.current.switchSession("agent-001");
+      });
+
+      await waitFor(() => {
+        expect(result.current.isStreaming).toBe(true);
+      });
+
+      // Advance time to trigger the polling interval (3s)
+      await act(async () => {
+        vi.advanceTimersByTime(3500);
+      });
+
+      await waitFor(() => {
+        expect(result.current.isStreaming).toBe(false);
+        expect(result.current.streamingText).toBe("");
+        expect(result.current.messages.some((m) => m.id === "msg-1")).toBe(true);
+      });
+
+      vi.useRealTimers();
     });
   });
 });

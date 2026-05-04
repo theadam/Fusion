@@ -749,16 +749,14 @@ describe("InsightStore Run CRUD", () => {
       expect(fromDb).toEqual(updated);
     });
 
-    it("preserves existing completedAt on later updates", () => {
+    it("rejects updates after terminal completion", () => {
       const run = store.createRun("proj", { trigger: "manual" });
       const completed = store.updateRun(run.id, { status: "failed", error: "boom" });
-      const firstCompletedAt = completed?.completedAt;
+      expect(completed?.completedAt).toBeTruthy();
 
-      const patched = store.updateRun(run.id, { summary: "postmortem" });
-
-      expect(firstCompletedAt).toBeTruthy();
-      expect(patched?.completedAt).toBe(firstCompletedAt);
-      expect(patched?.summary).toBe("postmortem");
+      expect(() => store.updateRun(run.id, { summary: "postmortem" })).toThrow(
+        /terminal and immutable/i,
+      );
     });
 
     it("does not override completedAt if already provided", () => {
@@ -871,7 +869,7 @@ describe("Migration: pre-33 DB upgrade", () => {
       // Step 1: Create a fresh database at v33 (runs all migrations up to 33)
       const db1 = createDatabase(legacyDir);
       db1.init();
-      expect(db1.getSchemaVersion()).toBe(59);
+      expect(db1.getSchemaVersion()).toBe(60);
       db1.close();
 
       // Step 2: Manually downgrade to version 32 and drop insight tables
@@ -906,7 +904,7 @@ describe("Migration: pre-33 DB upgrade", () => {
       expect(tableNamesBefore).not.toContain("project_insight_runs");
       // Now run init — this triggers the v32→v33 migration
       db3.init();
-      expect(db3.getSchemaVersion()).toBe(59);
+      expect(db3.getSchemaVersion()).toBe(60);
 
       // Step 4: Verify insight tables exist after migration
       const tablesAfter = db3.prepare(
@@ -937,12 +935,12 @@ describe("Migration: pre-33 DB upgrade", () => {
     try {
       const db1 = createDatabase(testDir);
       db1.init();
-      expect(db1.getSchemaVersion()).toBe(59);
+      expect(db1.getSchemaVersion()).toBe(60);
       db1.close();
 
       const db2 = createDatabase(testDir);
       expect(() => db2.init()).not.toThrow();
-      expect(db2.getSchemaVersion()).toBe(59);
+      expect(db2.getSchemaVersion()).toBe(60);
       db2.close();
     } finally {
       rmSync(testDir, { recursive: true, force: true });

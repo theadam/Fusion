@@ -12,6 +12,7 @@ import { getAgentHealthStatus } from "../utils/agentHealth";
 import { getErrorMessage } from "@fusion/core";
 import type { AgentHealthStatus } from "../utils/agentHealth";
 import { useConfirm } from "../hooks/useConfirm";
+import { CollapsibleErrorDisplay } from "./AgentsView";
 
 interface AgentListModalProps {
   isOpen: boolean;
@@ -349,7 +350,7 @@ export function AgentListModal({ isOpen, onClose, addToast, projectId }: AgentLi
                       >
                         {agent.state}
                       </span>
-                      <span className="agent-board-health" data-health={healthTone} title={health.label}>
+                      <span className="agent-board-health" data-health={healthTone} title={health.reason ?? health.label}>
                         {health.icon}
                       </span>
                     </div>
@@ -523,7 +524,7 @@ export function AgentListModal({ isOpen, onClose, addToast, projectId }: AgentLi
                         >
                           {agent.state}
                         </span>
-                        <span className="badge agent-list-health-badge" data-health={healthTone} title={health.label}>
+                        <span className="badge agent-list-health-badge" data-health={healthTone} title={health.reason ?? health.label}>
                           {health.icon}{!health.stateDerived && ` ${health.label}`}
                         </span>
                         <span className="badge text-secondary">
@@ -533,6 +534,9 @@ export function AgentListModal({ isOpen, onClose, addToast, projectId }: AgentLi
                     </div>
 
                     <div className="agent-card-body">
+                      {agent.state === "error" && agent.lastError ? (
+                        <CollapsibleErrorDisplay errorText={agent.lastError} />
+                      ) : null}
                       {agent.taskId && (
                         <div className="agent-task">
                           <span className="text-secondary">Working on:</span>

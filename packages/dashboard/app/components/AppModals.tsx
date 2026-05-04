@@ -54,7 +54,7 @@ interface AppModalsProps {
   taskHandlers: Pick<UseTaskHandlersResult, "handleModalCreate" | "handlePlanningTaskCreated" | "handlePlanningTasksCreated" | "handleSubtaskTasksCreated" | "handleGitHubImport">;
   taskOperations: {
     moveTask: (taskId: string, column: Column, optionsOrPosition?: { preserveProgress?: boolean } | number) => Promise<Task>;
-    deleteTask: (taskId: string) => Promise<Task>;
+    deleteTask: (taskId: string, options?: { removeDependencyReferences?: boolean }) => Promise<Task>;
     mergeTask: (taskId: string) => Promise<MergeResult>;
     retryTask: (taskId: string) => Promise<Task>;
     resetTask: (taskId: string) => Promise<Task>;
@@ -164,6 +164,7 @@ export function AppModals({
             tasks={tasks}
             onClose={deepLink.handleDetailClose}
             onOpenDetail={modalManager.openDetailTask}
+            mobileHeaderMode={modalManager.detailTaskOrigin === "list-mobile" ? "back" : "close"}
             onMoveTask={taskOperations.moveTask}
             onDeleteTask={taskOperations.deleteTask}
             onMergeTask={taskOperations.mergeTask}

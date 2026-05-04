@@ -1,12 +1,20 @@
-import { existsSync, readFileSync } from "node:fs";
 import type {
   AuthStorage,
   ModelRegistry,
+  AuthCredential,
 } from "@mariozechner/pi-coding-agent";
+import {
+  choosePreferredStoredCredential,
+  readStoredCredentialsFromAuthFile,
+  shouldHydrateStoredCredential,
+  type StoredAuthCredential,
+} from "@fusion/core";
 import { getOAuthProvider } from "@mariozechner/pi-ai/oauth";
 import type { OAuthCredentials } from "@mariozechner/pi-ai/oauth";
 
-export type LoginCallbacks = Parameters<AuthStorage["login"]>[1];
+export type LoginCallbacks = Parameters<AuthStorage["login"]>[1] & {
+  onManualCodeInput?: () => Promise<string>;
+};
 
 export interface DashboardAuthStorage {
   reload(): void;
@@ -31,16 +39,20 @@ interface ReadFallbackAuthStorage {
   list(): string[];
 }
 
-type StoredCredential = {
-  type?: string;
-  key?: string;
-  access?: string;
-  refresh?: string;
-  expires?: number;
-  [key: string]: unknown;
-};
+type StoredCredential = StoredAuthCredential;
+
+/**
+ * Provider IDs that should be treated as OAuth-backed by the upstream
+ * pi-coding-agent AuthStorage but which Fusion reclassifies as API-key
+ * providers.  These IDs are stripped from getOAuthProviders() results so
+ * the dashboard never offers a browser-based OAuth login for them.
+ */
+const OAUTH_TO_API_KEY_RECLASSIFICATIONS: ReadonlySet<string> = new Set([
+  "anthropic",
+]);
 
 const BUILT_IN_API_KEY_PROVIDERS: Array<{ id: string; name: string }> = [
+  { id: "anthropic", name: "Anthropic" },
   { id: "brave", name: "Brave Search" },
   { id: "kimi-coding", name: "Kimi" },
   { id: "minimax", name: "Minimax" },
@@ -78,14 +90,23 @@ export function wrapAuthStorageWithApiKeyProviders(
     getOAuthProviders: () =>
       mergedAuthStorage
         .getOAuthProviders()
+        .filter((provider) => !OAUTH_TO_API_KEY_RECLASSIFICATIONS.has(provider.id))
         .map((provider) => ({ id: provider.id, name: provider.name })),
     hasAuth: (provider) => mergedAuthStorage.hasAuth(provider),
     login: (providerId, callbacks) =>
-      mergedAuthStorage.login(providerId as Parameters<AuthStorage["login"]>[0], callbacks),
+      mergedAuthStorage.login(
+        providerId as Parameters<AuthStorage["login"]>[0],
+        callbacks as Parameters<AuthStorage["login"]>[1],
+      ),
     logout: (provider) => mergedAuthStorage.logout(provider),
     getApiKeyProviders: () => {
+      // Use the reclassified (filtered) OAuth provider list so that providers
+      // moved to API-key (e.g. anthropic) are not skipped by the OAuth dedup.
       const oauthProviderIds = new Set(
-        mergedAuthStorage.getOAuthProviders().map((provider) => provider.id),
+        mergedAuthStorage
+          .getOAuthProviders()
+          .filter((provider) => !OAUTH_TO_API_KEY_RECLASSIFICATIONS.has(provider.id))
+          .map((provider) => provider.id),
       );
       const providers = new Map<string, string>();
 
@@ -132,13 +153,34 @@ export function mergeAuthStorageReads(
   readFallbackAuthStorages: ReadFallbackAuthStorage[] = [],
 ): AuthStorage {
   const readAuthStorages = [authStorage, ...readFallbackAuthStorages];
-  const getCredential = (providerId: string) => {
-    for (const storage of readAuthStorages) {
-      const credential = storage.get(providerId);
-      if (credential) return credential;
+  const selectCredential = (
+    providerId: string,
+    storages: Array<Pick<ReadFallbackAuthStorage, "get">>,
+  ): StoredCredential | undefined => {
+    let best: StoredCredential | undefined;
+    for (const storage of storages) {
+      best = choosePreferredStoredCredential(best, storage.get(providerId));
     }
-    return undefined;
+    return best;
   };
+
+  const getCredential = (providerId: string) => selectCredential(providerId, readAuthStorages);
+
+  const syncFallbackOauthCredentials = () => {
+    const providerIds = new Set(readFallbackAuthStorages.flatMap((storage) => storage.list()));
+    for (const providerId of providerIds) {
+      const current = authStorage.get(providerId) as StoredCredential | undefined;
+      const candidate = selectCredential(providerId, readFallbackAuthStorages);
+      if (!shouldHydrateStoredCredential(current, candidate)) {
+        continue;
+      }
+      if (candidate && (candidate.type === "oauth" || candidate.type === "api_key")) {
+        authStorage.set(providerId, candidate as AuthCredential);
+      }
+    }
+  };
+
+  syncFallbackOauthCredentials();
 
   return new Proxy(authStorage, {
     get(target, prop, receiver) {
@@ -147,6 +189,7 @@ export function mergeAuthStorageReads(
           for (const storage of readAuthStorages) {
             storage.reload();
           }
+          syncFallbackOauthCredentials();
         };
       }
 
@@ -163,13 +206,17 @@ export function mergeAuthStorageReads(
       }
 
       if (prop === "getAll") {
-        return () => ({
-          ...readFallbackAuthStorages.reduce(
-            (merged, storage) => ({ ...merged, ...storage.getAll() }),
-            {} as Record<string, { type?: string; key?: string }>,
-          ),
-          ...target.getAll(),
-        });
+        return () => {
+          const providerIds = new Set(readAuthStorages.flatMap((storage) => storage.list()));
+          const merged: Record<string, StoredCredential> = {};
+          for (const providerId of providerIds) {
+            const credential = getCredential(providerId);
+            if (credential) {
+              merged[providerId] = credential;
+            }
+          }
+          return merged;
+        };
       }
 
       if (prop === "list") {
@@ -226,16 +273,9 @@ export function createReadOnlyAuthFileStorage(authPaths: string[]): ReadFallback
   const reload = () => {
     const nextCredentials: Record<string, StoredCredential> = {};
     for (const authPath of authPaths) {
-      if (!existsSync(authPath)) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(readFileSync(authPath, "utf-8")) as Record<string, StoredCredential>;
-        for (const [provider, credential] of Object.entries(parsed)) {
-          nextCredentials[provider] ??= credential;
-        }
-      } catch {
-        // Ignore unreadable legacy auth files and continue with other candidates.
+      const parsed = readStoredCredentialsFromAuthFile(authPath);
+      for (const [provider, credential] of Object.entries(parsed)) {
+        nextCredentials[provider] = choosePreferredStoredCredential(nextCredentials[provider], credential) ?? credential;
       }
     }
     credentials = nextCredentials;

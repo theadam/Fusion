@@ -61,6 +61,7 @@ const mockFetchOrgTree = vi.mocked((apiModule as any).fetchOrgTree);
 const mockFetchAgentStats = vi.mocked((apiModule as any).fetchAgentStats);
 const mockFetchSettings = vi.mocked((apiModule as any).fetchSettings);
 const mockUpdateSettings = vi.mocked((apiModule as any).updateSettings);
+const mockClipboardWriteText = vi.fn();
 
 describe("AgentsView", () => {
   const mockAddToast = vi.fn();
@@ -117,6 +118,11 @@ describe("AgentsView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockViewportMode.mockReturnValue("desktop");
+    mockClipboardWriteText.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: mockClipboardWriteText },
+    });
     mockConfirm.mockReset();
     mockConfirm.mockResolvedValue(true);
     localStorage.clear();
@@ -145,6 +151,17 @@ describe("AgentsView", () => {
       expect(screen.getByRole("dialog", { name: "Agent controls" })).toBeTruthy();
     });
     return trigger;
+  };
+
+  const openOverviewPanel = async () => {
+    const toggle = await screen.findByRole("button", { name: /Overview/i });
+    if (toggle.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(toggle);
+    }
+    await waitFor(() => {
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    });
+    return toggle;
   };
 
   describe("rendering", () => {
@@ -186,14 +203,20 @@ describe("AgentsView", () => {
       expect(screen.getByText("review")).toHaveAttribute("title", "auto::skills/../../.agents/skills/review/SKILL.md");
     });
 
-    it("renders split layout with sidebar and detail pane", async () => {
+    it("renders cross-pane overview above split layout", async () => {
       const { container } = render(<AgentsView addToast={mockAddToast} />);
 
       await waitFor(() => {
+        expect(container.querySelector(".agents-overview-bar")).toBeTruthy();
         expect(container.querySelector(".agents-split-layout")).toBeTruthy();
       });
 
-      expect(container.querySelector(".agents-split-sidebar")).toBeTruthy();
+      const overview = container.querySelector(".agents-overview-bar");
+      const splitLayout = container.querySelector(".agents-split-layout");
+      expect(overview?.nextElementSibling).toBe(splitLayout);
+      const sidebar = container.querySelector(".agents-split-sidebar");
+      expect(sidebar).toBeTruthy();
+      expect(sidebar?.querySelector(".agents-overview-bar")).toBeNull();
       expect(container.querySelector(".agents-split-detail")).toBeTruthy();
       expect(screen.getByText("Select an agent")).toBeInTheDocument();
       expect(screen.getByText("Choose an agent from the sidebar to view details")).toBeInTheDocument();
@@ -317,6 +340,32 @@ describe("AgentsView", () => {
       expect(container.querySelector(".agents-split-detail--hidden-mobile")).toBeTruthy();
     });
 
+    it("collapses mobile overview after selecting an active agent card", async () => {
+      mockViewportMode.mockReturnValue("mobile");
+      render(<AgentsView addToast={mockAddToast} />);
+
+      const overviewToggle = await openOverviewPanel();
+      fireEvent.click(await screen.findByRole("button", { name: /select agent test agent 2/i }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("agent-detail-view")).toHaveTextContent("agent-002");
+        expect(overviewToggle.getAttribute("aria-expanded")).toBe("false");
+      });
+    });
+
+    it("keeps desktop overview open after selecting an active agent card", async () => {
+      mockViewportMode.mockReturnValue("desktop");
+      render(<AgentsView addToast={mockAddToast} />);
+
+      const overviewToggle = await openOverviewPanel();
+      fireEvent.click(await screen.findByRole("button", { name: /select agent test agent 2/i }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("agent-detail-view")).toHaveTextContent("agent-002");
+        expect(overviewToggle.getAttribute("aria-expanded")).toBe("true");
+      });
+    });
+
     it("shows a loading indicator while the initial agents fetch is pending", async () => {
       let resolveAgents: ((value: Agent[]) => void) | undefined;
       mockFetchAgents.mockImplementationOnce(
@@ -422,24 +471,25 @@ describe("AgentsView", () => {
       });
     });
 
-    it("renders metrics, then active panel, then the main collection", async () => {
+    it("keeps metrics and active agents collapsed behind overview disclosure by default", async () => {
       const { container } = render(<AgentsView addToast={mockAddToast} />);
 
       await waitFor(() => {
         expect(container.querySelector(".agent-list")).toBeTruthy();
+      });
+
+      const overviewToggle = screen.getByRole("button", { name: /Overview/i });
+      expect(overviewToggle.getAttribute("aria-expanded")).toBe("false");
+      expect(container.querySelector(".agent-metrics-bar")).toBeNull();
+      expect(container.querySelector(".active-agents-panel")).toBeNull();
+
+      fireEvent.click(overviewToggle);
+
+      await waitFor(() => {
+        expect(overviewToggle.getAttribute("aria-expanded")).toBe("true");
         expect(container.querySelector(".agent-metrics-bar")).toBeTruthy();
         expect(container.querySelector(".active-agents-panel")).toBeTruthy();
       });
-
-      const list = container.querySelector(".agent-list");
-      const metrics = container.querySelector(".agent-metrics-bar");
-      const activePanel = container.querySelector(".active-agents-panel");
-      expect(list && metrics && activePanel).toBeTruthy();
-      // Metrics bar sits at the very top of the view content.
-      expect(metrics!.compareDocumentPosition(activePanel!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      // Active agents panel sits between metrics and the main agent list,
-      // so live work is visible without scrolling past the full directory.
-      expect(activePanel!.compareDocumentPosition(list!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it("fetches agents only once on mount (regression: no duplicate initial load path)", async () => {
@@ -451,6 +501,7 @@ describe("AgentsView", () => {
       });
 
       // Ensure the single-load path still powers dependent UI sections.
+      await openOverviewPanel();
       expect(await screen.findByText("Active Agents (1)")).toBeTruthy();
     });
 
@@ -928,6 +979,54 @@ describe("AgentsView", () => {
         expect.stringContaining("greater than 0"),
         "error",
       );
+    });
+
+    it("renders collapsible error display and supports expand/copy", async () => {
+      const errorAgent: Agent = {
+        ...mockAgents[0],
+        id: "agent-error",
+        name: "Error Agent",
+        state: "error",
+        lastError: "something broke",
+      };
+      mockFetchAgents.mockResolvedValueOnce([errorAgent]);
+      mockFetchAgentStats.mockResolvedValueOnce({ total: 1, byState: { error: 1 }, byRole: { executor: 1 } });
+
+      render(<AgentsView addToast={mockAddToast} />);
+
+      await waitFor(() => {
+        expect(screen.getAllByText("something broke").length).toBeGreaterThan(0);
+      });
+
+      const expandButton = screen.getByRole("button", { name: "Expand error" });
+      fireEvent.click(expandButton);
+      expect(screen.getByRole("button", { name: "Collapse error" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Collapse error" }));
+      expect(screen.getByRole("button", { name: "Expand error" })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy error to clipboard" }));
+      await waitFor(() => {
+        expect(mockClipboardWriteText).toHaveBeenCalledWith("something broke");
+      });
+      expect(screen.getByRole("button", { name: "Copied error to clipboard" })).toBeTruthy();
+    });
+
+    it("does not render error display without error state and lastError", async () => {
+      mockFetchAgents.mockResolvedValueOnce([
+        { ...mockAgents[0], id: "error-no-text", name: "Error No Text", state: "error", lastError: undefined },
+        { ...mockAgents[0], id: "active-with-text", name: "Active With Text", state: "active", lastError: "should not show" },
+      ]);
+      mockFetchAgentStats.mockResolvedValueOnce({ total: 2, byState: { error: 1, active: 1 }, byRole: { executor: 2 } });
+
+      render(<AgentsView addToast={mockAddToast} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Error No Text")).toBeTruthy();
+        expect(screen.getByText("Active With Text")).toBeTruthy();
+      });
+
+      expect(screen.queryByText("should not show")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Copy error to clipboard" })).toBeNull();
     });
 
     it("shows refresh button", async () => {
@@ -1833,6 +1932,7 @@ describe("AgentsView", () => {
     it("renders active agents panel when agents are active", async () => {
       // agent-002 is active with taskId FN-001
       render(<AgentsView addToast={mockAddToast} />);
+      await openOverviewPanel();
 
       await waitFor(() => {
         expect(screen.getByText("Active Agents (1)")).toBeTruthy();
@@ -1845,6 +1945,7 @@ describe("AgentsView", () => {
 
     it("opens AgentDetailView when clicking an active agent card", async () => {
       render(<AgentsView addToast={mockAddToast} />);
+      await openOverviewPanel();
 
       await waitFor(() => {
         expect(screen.getByText("Active Agents (1)")).toBeTruthy();
@@ -1864,6 +1965,7 @@ describe("AgentsView", () => {
 
     it("opens AgentDetailView when pressing Enter on an active agent card", async () => {
       render(<AgentsView addToast={mockAddToast} />);
+      await openOverviewPanel();
 
       await waitFor(() => {
         expect(screen.getByText("Active Agents (1)")).toBeTruthy();
@@ -1884,6 +1986,7 @@ describe("AgentsView", () => {
 
     it("opens AgentDetailView when pressing Space on an active agent card", async () => {
       render(<AgentsView addToast={mockAddToast} />);
+      await openOverviewPanel();
 
       await waitFor(() => {
         expect(screen.getByText("Active Agents (1)")).toBeTruthy();
@@ -1904,6 +2007,7 @@ describe("AgentsView", () => {
 
     it("live agent cards have proper accessibility attributes", async () => {
       render(<AgentsView addToast={mockAddToast} />);
+      await openOverviewPanel();
 
       await waitFor(() => {
         expect(screen.getByText("Active Agents (1)")).toBeTruthy();
@@ -1934,9 +2038,10 @@ describe("AgentsView", () => {
       mockFetchAgents.mockResolvedValue(inactiveAgents);
 
       render(<AgentsView addToast={mockAddToast} />);
+      await openOverviewPanel();
 
       await waitFor(() => {
-        expect(screen.queryByText("Active Agents")).toBeNull();
+        expect(screen.queryByText(/^Active Agents \(/)).toBeNull();
       });
     });
 
@@ -1959,6 +2064,7 @@ describe("AgentsView", () => {
       mockFetchAgents.mockResolvedValue(spawnedAgents);
 
       render(<AgentsView addToast={mockAddToast} />);
+      await openOverviewPanel();
 
       await waitFor(() => {
         expect(screen.getByText("Active Agents (2)")).toBeTruthy();

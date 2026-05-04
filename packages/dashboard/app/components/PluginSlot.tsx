@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { DroidCliProviderCard } from "./DroidCliProviderCard";
 import { usePluginUiSlots } from "../hooks/usePluginUiSlots";
 import "./PluginSlot.css";
 
@@ -10,20 +11,24 @@ interface PluginSlotProps {
   projectId?: string;
   /** Optional plugin IDs to restrict rendering to a subset of matching entries */
   pluginIds?: string[];
+  /** Render fallback shell placeholders while dynamic slot component mounting is unavailable */
+  renderPlaceholder?: boolean;
+}
+
+function renderKnownPluginSlot(slotId: string, pluginId: string): ReactNode | null {
+  if (pluginId === "fusion-plugin-droid-runtime" && slotId === "settings-provider-card") {
+    return <DroidCliProviderCard compact authenticated={false} />;
+  }
+
+  return null;
 }
 
 /**
  * Renders plugin slot registrations for a host surface.
- *
- * Dynamic plugin component loading is not yet available, so this renders a
- * lightweight non-technical placeholder while preserving plugin slot boundaries.
- * Each rendered slot is wrapped in an ErrorBoundary to isolate failures from
- * the parent dashboard UI.
  */
-export function PluginSlot({ slotId, projectId, pluginIds }: PluginSlotProps): ReactNode {
+export function PluginSlot({ slotId, projectId, pluginIds, renderPlaceholder = true }: PluginSlotProps): ReactNode {
   const { getSlotsForId, loading, error } = usePluginUiSlots(projectId);
 
-  // Non-critical failure — no visible UI when loading, errored, or no matching slots
   if (loading || error || !slotId) {
     return null;
   }
@@ -39,19 +44,30 @@ export function PluginSlot({ slotId, projectId, pluginIds }: PluginSlotProps): R
   return (
     <ErrorBoundary level="page">
       <>
-        {matchingEntries.map((entry, index) => (
-          <section
-            key={`${entry.pluginId}-${entry.slot.slotId}-${index}`}
-            className="plugin-slot-shell"
-            data-plugin-slot
-            data-slot-id={entry.slot.slotId}
-            data-plugin-id={entry.pluginId}
-            aria-label={entry.slot.label}
-          >
-            <p className="plugin-slot-shell__title">{entry.slot.label}</p>
-            <p className="plugin-slot-shell__message">Extension content available.</p>
-          </section>
-        ))}
+        {matchingEntries.map((entry, index) => {
+          const knownSlot = renderKnownPluginSlot(entry.slot.slotId, entry.pluginId);
+          if (knownSlot) {
+            return <div key={`${entry.pluginId}-${entry.slot.slotId}-${index}`}>{knownSlot}</div>;
+          }
+
+          if (!renderPlaceholder) {
+            return null;
+          }
+
+          return (
+            <section
+              key={`${entry.pluginId}-${entry.slot.slotId}-${index}`}
+              className="plugin-slot-shell"
+              data-plugin-slot
+              data-slot-id={entry.slot.slotId}
+              data-plugin-id={entry.pluginId}
+              aria-label={entry.slot.label}
+            >
+              <p className="plugin-slot-shell__title">{entry.slot.label}</p>
+              <p className="plugin-slot-shell__message">Extension content available.</p>
+            </section>
+          );
+        })}
       </>
     </ErrorBoundary>
   );

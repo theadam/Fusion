@@ -86,10 +86,10 @@ These fields can only be set during update (not on create):
 
 The agents surface provides:
 
-- Agent-first list/board/tree/org collection (primary content appears first)
+- Agent-first list/board/tree/org collection in the left pane (primary content appears first)
+- A cross-pane **Overview** strip above the split layout with summary metrics and a disclosure to expand active/running live cards
 - A compact **Controls** popup for secondary actions (state filter, Show system agents toggle, Import, and global Heartbeat Speed)
 - Detail/config panels
-- Runtime metrics and active-agent live cards rendered below the main collection
 - A per-agent **Token Usage** panel that summarizes cumulative token consumption for the currently displayed agents
 - Run history
 - Task assignment context
@@ -163,6 +163,9 @@ Expected behavior and boundaries:
 - Queries should stay narrow and task-scoped; avoid open-ended exploration
 - If research is disabled or provider setup is incomplete, tools return actionable `setup` responses instead of crashing
 - Durable conclusions should be persisted with `fn_task_document_write` (for example, `key="research"`)
+- Research runs require the project engine to be running for processing; `fn_research_run` creates the run but does not block for completion unless `wait_for_completion` is set
+
+For the full research workflow, provider setup, CLI commands, and API reference, see the [Research guide](./research.md).
 
 ## Built-In Agent Prompt Templates
 

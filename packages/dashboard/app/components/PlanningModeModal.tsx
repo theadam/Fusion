@@ -1,5 +1,5 @@
 import "./PlanningModeModal.css";
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo, type CSSProperties } from "react";
 import type { Task, PlanningQuestion, PlanningSummary } from "@fusion/core";
 import { getErrorMessage } from "@fusion/core";
 import {
@@ -42,6 +42,9 @@ import { ConversationHistory } from "./ConversationHistory";
 import { OnboardingDisclosure } from "./OnboardingDisclosure";
 import { useSessionLock } from "../hooks/useSessionLock";
 import { useAiSessionSync } from "../hooks/useAiSessionSync";
+import { useViewportMode } from "../hooks/useViewportMode";
+import { useMobileKeyboard } from "../hooks/useMobileKeyboard";
+import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
 import { getSessionTabId } from "../utils/getSessionTabId";
 
 interface PlanningModeModalProps {
@@ -150,6 +153,10 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [favoriteProviders, setFavoriteProviders] = useState<string[]>([]);
   const [favoriteModels, setFavoriteModels] = useState<string[]>([]);
+  const [resolvedPlanningModel, setResolvedPlanningModel] = useState<{
+    provider?: string;
+    modelId?: string;
+  }>({});
   const trackedLockSessionRef = useRef<string | null>(null);
 
   // Sidebar list state
@@ -167,6 +174,9 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
   // target is the overlay and would dismiss the modal mid-resize.
   const overlayMouseDownOnSelfRef = useRef(false);
   const thinkingOutputRef = useRef<HTMLDivElement>(null);
+  // Mirrors `streamingOutput` state for reading inside callbacks without
+  // stale closure issues (e.g. capturing reasoning before onQuestion clears it).
+  const streamingOutputRef = useRef<string>("" );
   const draftSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSyncedDraftRef = useRef<{
     sessionId: string;
@@ -176,6 +186,25 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
   } | null>(null);
 
   useModalResizePersist(modalRef, isOpen, "fusion:planning-modal-size");
+  const viewportMode = useViewportMode();
+
+  const { keyboardOverlap, viewportHeight, viewportOffsetTop, keyboardOpen } =
+    useMobileKeyboard({ enabled: viewportMode === "mobile" });
+  useMobileScrollLock(viewportMode === "mobile" && isOpen);
+
+  const modalKeyboardStyle: CSSProperties = keyboardOpen
+    ? ({
+        "--keyboard-overlap": `${keyboardOverlap}px`,
+        "--vv-offset-top": `${viewportOffsetTop}px`,
+        ...(viewportHeight !== null ? { "--vv-height": `${viewportHeight}px` } : {}),
+      } as CSSProperties)
+    : {};
+
+  // Mirror streamingOutput into a ref so SSE handlers can read the latest
+  // value without stale closure issues.
+  useEffect(() => {
+    streamingOutputRef.current = streamingOutput;
+  }, [streamingOutput]);
 
   // Keep the streaming AI thinking pane pinned to the bottom as new tokens
   // arrive. If the user has scrolled up to read earlier output, we leave the
@@ -277,11 +306,15 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
 
   const getModelBadgeLabel = useCallback(
     (provider?: string, modelId?: string) => {
-      if (!provider || !modelId) return "Using default";
+      if (!provider || !modelId) {
+        return resolvedPlanningModel.provider && resolvedPlanningModel.modelId
+          ? `${resolvedPlanningModel.provider}/${resolvedPlanningModel.modelId}`
+          : "Using default";
+      }
       const matched = loadedModels.find((model) => model.provider === provider && model.id === modelId);
       return matched ? `${matched.provider}/${matched.id}` : `${provider}/${modelId}`;
     },
-    [loadedModels],
+    [loadedModels, resolvedPlanningModel.modelId, resolvedPlanningModel.provider],
   );
 
   const loadModels = useCallback(async () => {
@@ -293,6 +326,10 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
       setLoadedModels(response.models);
       setFavoriteProviders(response.favoriteProviders);
       setFavoriteModels(response.favoriteModels);
+      setResolvedPlanningModel({
+        provider: response.resolvedPlanningProvider,
+        modelId: response.resolvedPlanningModelId,
+      });
     } catch (err) {
       setModelsError(getErrorMessage(err) || "Failed to load models");
     } finally {
@@ -361,6 +398,23 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
           setIsReconnecting(false);
           setIsRetrying(false);
           clearPlanningDescription(projectId);
+
+          // Preserve reasoning accumulated during the loading turn as a
+          // visible conversation-history entry so the user can expand it
+          // from the question view. Without this, setStreamingOutput("")
+          // would silently discard everything the model produced before the
+          // first question arrived.
+          const capturedThinking = streamingOutputRef.current.trim();
+          if (capturedThinking) {
+            setConversationHistory((prev) => {
+              // De-duplicate: if the last entry already carries this exact
+              // thinking text (e.g. from a prior transition or resume), skip.
+              const lastEntry = prev[prev.length - 1];
+              if (lastEntry?.thinkingOutput === capturedThinking) return prev;
+              return [...prev, { thinkingOutput: capturedThinking }];
+            });
+          }
+
           setView({
             type: "question",
             session: { sessionId, currentQuestion: question, summary: null },
@@ -382,6 +436,17 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
           setIsReconnecting(false);
           setIsRetrying(false);
           clearPlanningDescription(projectId);
+
+          // Preserve reasoning accumulated during the loading turn.
+          const capturedThinking = streamingOutputRef.current.trim();
+          if (capturedThinking) {
+            setConversationHistory((prev) => {
+              const lastEntry = prev[prev.length - 1];
+              if (lastEntry?.thinkingOutput === capturedThinking) return prev;
+              return [...prev, { thinkingOutput: capturedThinking }];
+            });
+          }
+
           setView({
             type: "summary",
             session: { sessionId, currentQuestion: null, summary },
@@ -647,7 +712,20 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
           clearPlanningDescription(projectId);
           const question = JSON.parse(session.currentQuestion);
           setView({ type: "question", session: { sessionId, currentQuestion: question, summary: null } });
-          if (session.thinkingOutput) setStreamingOutput(session.thinkingOutput);
+          // Transfer persisted thinking into conversation history so it's
+          // visible as expandable reasoning in the question view, instead of
+          // setting streamingOutput which is only rendered in the loading
+          // state.
+          if (session.thinkingOutput) {
+            const trimmed = session.thinkingOutput.trim();
+            if (trimmed) {
+              setConversationHistory((prev) => {
+                const lastEntry = prev[prev.length - 1];
+                if (lastEntry?.thinkingOutput === trimmed) return prev;
+                return [...prev, { thinkingOutput: trimmed }];
+              });
+            }
+          }
           connectToPlanningStream(sessionId);
         } else if (session.status === "complete" && session.result) {
           clearPlanningDescription(projectId);
@@ -728,6 +806,29 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     if (!isOpen) return;
     void refreshSessionsList();
   }, [isOpen, refreshSessionsList]);
+
+  // Mobile empty-session routing: when the session list finishes loading and
+  // is empty, and there is no resumeSessionId or selected session, auto-
+  // switch to the detail pane so mobile users land on the composer instead
+  // of an empty sidebar. Desktop/tablet split-view is unaffected because
+  // both panes are visible simultaneously.
+  //
+  // We gate on sessionsLoading to avoid firing on the initial render (where
+  // planningSessions is empty but hasn't been fetched yet). When the sessions
+  // list finishes loading, planningSessions reflects the server response and
+  // we can make an informed routing decision.
+  const prevSessionsLoadingRef = useRef(false);
+  useEffect(() => {
+    const justFinishedLoading = prevSessionsLoadingRef.current && !sessionsLoading;
+    prevSessionsLoadingRef.current = sessionsLoading;
+    if (!justFinishedLoading) return;
+    if (viewportMode !== "mobile") return;
+    if (mobileShowDetail) return;
+    if (resumeSessionId) return;
+    if (selectedSessionId) return;
+    if (planningSessions.length > 0) return;
+    setMobileShowDetail(true);
+  }, [viewportMode, mobileShowDetail, resumeSessionId, selectedSessionId, sessionsLoading, planningSessions.length]);
 
   // SSE subscription keeps the list live (mirrors useBackgroundSessions, but
   // unfiltered by status so completed/errored sessions stay visible).
@@ -1077,6 +1178,22 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
   // Close the modal without abandoning the active server session. Sessions
   // remain in the list and can be resumed later. Only an explicit Delete
   // (from the sidebar) cancels and removes a session.
+  const resetMobileViewportAfterClose = useCallback(() => {
+    if (viewportMode !== "mobile") {
+      return;
+    }
+
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      activeElement.blur();
+    }
+
+    window.scrollTo(0, 0);
+    requestAnimationFrame(() => {
+      window.scrollTo(0, 0);
+    });
+  }, [viewportMode]);
+
   const handleClose = useCallback(() => {
     // Save the in-progress draft so the next open restores it.
     if (initialPlan && view.type === "initial") {
@@ -1099,8 +1216,9 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     streamConnectionRef.current = null;
     setIsReconnecting(false);
     setIsRetrying(false);
+    resetMobileViewportAfterClose();
     onClose();
-  }, [flushDraftAndSummarize, initialPlan, onClose, projectId, view.type]);
+  }, [flushDraftAndSummarize, initialPlan, onClose, projectId, resetMobileViewportAfterClose, view.type]);
 
   // Handle escape key to close
   useEffect(() => {
@@ -1137,13 +1255,25 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
       // the frontend disconnects and reconnects after the API call.
 
       setResponseHistory((prev) => [...prev, responses]);
-      setConversationHistory((prev) => [
-        ...prev,
-        {
-          question: activeQuestion,
-          response: responses,
-        },
-      ]);
+      setConversationHistory((prev) => {
+        // Capture any reasoning that accumulated since the last question
+        // (e.g. thinking streamed while the user was reading the question).
+        const currentThinking = streamingOutputRef.current.trim();
+        let updated = prev;
+        if (currentThinking) {
+          const lastEntry = updated[updated.length - 1];
+          if (lastEntry?.thinkingOutput !== currentThinking) {
+            updated = [...updated, { thinkingOutput: currentThinking }];
+          }
+        }
+        return [
+          ...updated,
+          {
+            question: activeQuestion,
+            response: responses,
+          },
+        ];
+      });
       setView({ type: "loading" });
       setStreamingOutput(""); // Clear old thinking output when entering loading state
 
@@ -1227,6 +1357,16 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
               type: "question",
               session: { sessionId: session.id, currentQuestion: question, summary: null },
             });
+            if (session.thinkingOutput) {
+              const trimmed = session.thinkingOutput.trim();
+              if (trimmed) {
+                setConversationHistory((prev) => {
+                  const lastEntry = prev[prev.length - 1];
+                  if (lastEntry?.thinkingOutput === trimmed) return prev;
+                  return [...prev, { thinkingOutput: trimmed }];
+                });
+              }
+            }
             if (!streamConnectionRef.current?.isConnected()) {
               connectToPlanningStream(session.id);
             }
@@ -1352,12 +1492,12 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
       currentSessionIdRef.current = null;
       setLockSessionId(null);
       setSelectedSessionId(null);
-      onClose();
+      handleClose();
     } catch (err) {
       setError(getErrorMessage(err) || "Failed to create tasks");
       setView({ type: "breakdown", sessionId: view.sessionId, subtasks: view.subtasks, dirty: view.dirty });
     }
-  }, [broadcastCompleted, view, onTasksCreated, onClose, projectId]);
+  }, [broadcastCompleted, handleClose, view, onTasksCreated, projectId]);
 
   const handleBack = useCallback(() => {
     if (view.type === "question" && responseHistory.length > 0) {
@@ -1399,7 +1539,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
       role="dialog"
       aria-modal="true"
     >
-      <div className="modal modal-lg planning-modal" ref={modalRef}>
+      <div className="modal modal-lg planning-modal" ref={modalRef} style={modalKeyboardStyle}>
         <div className="modal-header">
           <div className="detail-title-row">
             {mobileShowDetail && (
@@ -1556,12 +1696,9 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
                   </div>
                 </div>
 
-                <OnboardingDisclosure summary="Advanced planning settings" className="planning-advanced-disclosure" defaultOpen>
-                  <p className="planning-advanced-blurb">
-                    Choose the planning model and tune plan depth to control how detailed the AI interview should be.
-                  </p>
-
-                  <div className="planning-model-select-group">
+                <OnboardingDisclosure summary="Advanced planning settings" className="planning-advanced-disclosure">
+                  <div className="planning-advanced-content">
+                    <div className="planning-advanced-section planning-model-select-group">
                     <label htmlFor="planning-modal-model" className="form-label">
                       Planning Model
                       {modelsLoading && (
@@ -1570,6 +1707,9 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
                         </span>
                       )}
                     </label>
+                    <p className="planning-advanced-blurb">
+                      Selects which model runs the planning interview and writes the final draft.
+                    </p>
                     <CustomModelDropdown
                       id="planning-modal-model"
                       label="Planning Model"
@@ -1613,38 +1753,44 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
                     </div>
                   </div>
 
-                  <div className="planning-depth-selector">
-                    <div className="planning-depth-chip-group" role="group" aria-label="Planning depth">
-                      {([
-                        { value: "small", label: "Small" },
-                        { value: "medium", label: "Medium" },
-                        { value: "large", label: "Large" },
-                      ] as const).map((depthOption) => (
-                        <button
-                          key={depthOption.value}
-                          type="button"
-                          className={`planning-depth-chip btn ${planningDepth === depthOption.value ? "btn-primary planning-depth-chip-active" : ""}`}
-                          onClick={() => setPlanningDepth(depthOption.value)}
-                          aria-pressed={planningDepth === depthOption.value}
-                        >
-                          {depthOption.label}
-                        </button>
-                      ))}
-                    </div>
+                    <div className="planning-advanced-section planning-depth-selector">
+                      <p className="planning-advanced-blurb">
+                        Plan size sets default interview depth. Questions lets you override with an exact count.
+                      </p>
+                      <div className="planning-depth-controls-row">
+                        <div className="planning-depth-chip-group" role="group" aria-label="Planning depth">
+                          {([
+                            { value: "small", label: "Small" },
+                            { value: "medium", label: "Medium" },
+                            { value: "large", label: "Large" },
+                          ] as const).map((depthOption) => (
+                            <button
+                              key={depthOption.value}
+                              type="button"
+                              className={`planning-depth-chip btn ${planningDepth === depthOption.value ? "btn-primary planning-depth-chip-active" : ""}`}
+                              onClick={() => setPlanningDepth(depthOption.value)}
+                              aria-pressed={planningDepth === depthOption.value}
+                            >
+                              {depthOption.label}
+                            </button>
+                          ))}
+                        </div>
 
-                    <label className="planning-depth-question-count" htmlFor="planning-depth-questions">
-                      <span>Questions</span>
-                      <input
-                        id="planning-depth-questions"
-                        className="input planning-depth-question-input"
-                        type="number"
-                        min={1}
-                        max={20}
-                        value={customQuestionCount}
-                        onChange={(e) => setCustomQuestionCount(e.target.value)}
-                        placeholder="Auto"
-                      />
-                    </label>
+                        <label className="planning-depth-question-count" htmlFor="planning-depth-questions">
+                          <span>Questions</span>
+                          <input
+                            id="planning-depth-questions"
+                            className="input planning-depth-question-input"
+                            type="number"
+                            min={1}
+                            max={20}
+                            value={customQuestionCount}
+                            onChange={(e) => setCustomQuestionCount(e.target.value)}
+                            placeholder="Auto"
+                          />
+                        </label>
+                      </div>
+                    </div>
                   </div>
                 </OnboardingDisclosure>
               </div>

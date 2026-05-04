@@ -63,9 +63,11 @@ vi.mock("../../api", async (importOriginal) => {
   });
 });
 
+const mockCreateTask = vi.fn();
+
 const mockUseTasks = vi.fn(() => ({
   tasks: [],
-  createTask: vi.fn(),
+  createTask: mockCreateTask,
   moveTask: vi.fn(),
   deleteTask: vi.fn(),
   mergeTask: vi.fn(),
@@ -83,6 +85,27 @@ vi.mock("../../hooks/useTasks", () => ({
 }));
 
 // Mock useRemoteNodeData
+const mockUseInsights = vi.fn(() => ({
+  sections: [],
+  loading: false,
+  error: null,
+  latestRun: null,
+  isRunInFlight: false,
+  runError: null,
+  refresh: vi.fn(),
+  runInsights: vi.fn(),
+  dismiss: vi.fn(),
+  createTask: vi.fn(),
+  dismissStates: new Map(),
+  createTaskStates: new Map(),
+  totalCount: 0,
+  dismissedCount: 0,
+}));
+
+vi.mock("../../hooks/useInsights", () => ({
+  useInsights: (..._args: unknown[]) => mockUseInsights(),
+}));
+
 vi.mock("../../hooks/useRemoteNodeData", () => ({
   useRemoteNodeData: vi.fn(() => ({
     projects: [],
@@ -448,6 +471,26 @@ vi.mock("../../hooks/useNodes", () => ({
   })),
 }));
 
+// Mock useMobileKeyboard for modal keyboard isolation tests (FN-3290).
+// Default: keyboard closed, matching real test-environment behavior.
+const mockUseMobileKeyboard = vi.fn(() => ({
+  keyboardOverlap: 0,
+  viewportHeight: null,
+  viewportOffsetTop: 0,
+  keyboardOpen: false,
+}));
+vi.mock("../../hooks/useMobileKeyboard", () => ({
+  useMobileKeyboard: (...args: unknown[]) => mockUseMobileKeyboard(...args),
+}));
+
+// Mock useViewportMode so tests can simulate mobile viewport without
+// depending on window.matchMedia in jsdom.
+const mockUseViewportMode = vi.fn(() => "desktop");
+vi.mock("../../hooks/useViewportMode", () => ({
+  useViewportMode: (...args: unknown[]) => mockUseViewportMode(...args),
+  getViewportMode: () => "desktop",
+}));
+
 import { App } from "../../App";
 import { AUTH_TOKEN_RECOVERY_REQUIRED_EVENT } from "../../auth";
 import { fetchAuthStatus, fetchSettings, fetchGlobalSettings, fetchTaskDetail, fetchUnreadCount, updateSettings, runScript, fetchScripts, fetchModels, fetchPluginDashboardViews } from "../../api";
@@ -464,10 +507,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockSubscribeSse.mockReset();
   mockSubscribeSse.mockReturnValue(vi.fn());
+  mockCreateTask.mockReset();
   mockUseTasks.mockReset();
   mockUseTasks.mockImplementation(() => ({
     tasks: [],
-    createTask: vi.fn(),
+    createTask: mockCreateTask,
     moveTask: vi.fn(),
     deleteTask: vi.fn(),
     mergeTask: vi.fn(),
@@ -516,6 +560,33 @@ beforeEach(() => {
   mockGetSkippedSteps.mockReturnValue([]);
   mockGetStepData.mockReset();
   mockGetStepData.mockReturnValue(null);
+  mockUseInsights.mockReset();
+  mockUseInsights.mockImplementation(() => ({
+    sections: [],
+    loading: false,
+    error: null,
+    latestRun: null,
+    isRunInFlight: false,
+    runError: null,
+    refresh: vi.fn(),
+    runInsights: vi.fn(),
+    dismiss: vi.fn(),
+    createTask: vi.fn(),
+    dismissStates: new Map(),
+    createTaskStates: new Map(),
+    totalCount: 0,
+    dismissedCount: 0,
+  }));
+  // Reset mobile keyboard and viewport mocks to defaults (desktop, no keyboard)
+  mockUseMobileKeyboard.mockReset();
+  mockUseMobileKeyboard.mockReturnValue({
+    keyboardOverlap: 0,
+    viewportHeight: null,
+    viewportOffsetTop: 0,
+    keyboardOpen: false,
+  });
+  mockUseViewportMode.mockReset();
+  mockUseViewportMode.mockReturnValue("desktop");
 });
 
 describe("App backend-unreachable first-run flow", () => {
@@ -865,7 +936,7 @@ describe("App deep link handling", () => {
     // Should have cleaned the task param from the URL via replaceState
     await waitFor(() => {
       expect(window.history.replaceState).toHaveBeenCalledWith(
-        null,
+        expect.any(Object),
         "",
         "/",
       );
@@ -901,7 +972,7 @@ describe("App deep link handling", () => {
     // Should have removed only the task param, keeping project param
     await waitFor(() => {
       expect(window.history.replaceState).toHaveBeenCalledWith(
-        null,
+        expect.any(Object),
         "",
         "/?project=proj_456",
       );
@@ -1705,6 +1776,80 @@ describe("App view switching", () => {
     expect(document.querySelector(".board")).toBeNull();
     expect(document.querySelector(".list-view")).toBeNull();
     expect(document.querySelector(".agents-view")).toBeNull();
+  });
+
+  it("creates a real triage task from insights using dashboard task creation flow", async () => {
+    mockUseInsights.mockImplementation(() => ({
+      sections: [
+        {
+          category: "features",
+          label: "Features",
+          items: [
+            {
+              id: "INS-1",
+              projectId: DEFAULT_PROJECT_ID,
+              title: "Insight title",
+              content: "Insight content",
+              category: "features",
+              status: "generated",
+              fingerprint: "fp-ins-1",
+              provenance: { trigger: "manual" },
+              lastRunId: null,
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+          isLoading: false,
+          error: null,
+        },
+      ],
+      loading: false,
+      error: null,
+      latestRun: null,
+      isRunInFlight: false,
+      runError: null,
+      refresh: vi.fn(),
+      runInsights: vi.fn(),
+      dismiss: vi.fn(),
+      createTask: vi.fn().mockResolvedValue({
+        title: "Task from insight",
+        description: "Use this insight as a task description",
+      }),
+      dismissStates: new Map(),
+      createTaskStates: new Map(),
+      totalCount: 1,
+      dismissedCount: 0,
+    }));
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-toggle-overflow-trigger")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("view-toggle-overflow-trigger"));
+    fireEvent.click(screen.getByTestId("view-overflow-insights"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("create-task-INS-1")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("create-task-INS-1"));
+
+    await waitFor(() => {
+      expect(mockCreateTask).toHaveBeenCalledWith({
+        title: "Task from insight",
+        description: "Use this insight as a task description",
+        column: "triage",
+        source: {
+          sourceType: "dashboard_ui",
+          sourceMetadata: {
+            origin: "insights",
+            insightId: "INS-1",
+          },
+        },
+      });
+    });
   });
 
   it("persists insights view preference to localStorage", async () => {
@@ -2834,5 +2979,130 @@ describe("App auth token recovery dialog", () => {
     fireEvent.click(overlay);
 
     expect(screen.getByRole("dialog", { name: "Authentication token required" })).toBeInTheDocument();
+  });
+});
+
+describe("FN-3290: modal keyboard isolation for mobile dashboard layout", () => {
+  const originalLocation = window.location;
+
+  beforeEach(() => {
+    window.history.replaceState = vi.fn();
+    // Prevent onboarding modal from auto-opening
+    (fetchAuthStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      providers: [
+        { id: "anthropic", name: "Anthropic", authenticated: true },
+      ],
+    });
+    (fetchGlobalSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
+      modelOnboardingComplete: true,
+      defaultProvider: "anthropic",
+      defaultModelId: "claude-sonnet-4-5",
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+    localStorage.removeItem("kb-dashboard-view-mode");
+    localStorage.removeItem(taskViewStorageKey());
+  });
+
+  it("removes project-content--with-mobile-nav when keyboard is open with no modal (mobile)", async () => {
+    mockUseViewportMode.mockReturnValue("mobile");
+    localStorage.setItem("kb-dashboard-view-mode", "project");
+
+    // Keyboard is open, no modal
+    mockUseMobileKeyboard.mockReturnValue({
+      keyboardOverlap: 250,
+      viewportHeight: 550,
+      viewportOffsetTop: 0,
+      keyboardOpen: true,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".project-content")).toBeTruthy();
+    });
+
+    const wrapper = document.querySelector(".project-content");
+    // Without a modal, the keyboard-open state should remove the mobile nav padding
+    expect(wrapper?.classList.contains("project-content--with-mobile-nav")).toBe(false);
+  });
+
+  it("keeps project-content--with-mobile-nav when keyboard is open inside a modal (mobile)", async () => {
+    // Use deep link to open a task detail modal — avoids complex mobile overflow navigation
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: new URL("http://localhost:3000/?task=FN-123"),
+    });
+    mockUseViewportMode.mockReturnValue("mobile");
+    localStorage.setItem("kb-dashboard-view-mode", "project");
+
+    // Keyboard is reported as open (as if a modal input has focus)
+    mockUseMobileKeyboard.mockReturnValue({
+      keyboardOverlap: 250,
+      viewportHeight: 550,
+      viewportOffsetTop: 0,
+      keyboardOpen: true,
+    });
+
+    render(<App />);
+
+    // Wait for task detail modal to open
+    await waitFor(() => {
+      expect(fetchTaskDetail).toHaveBeenCalledWith("FN-123", "proj_123");
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Task FN-123")).toBeTruthy();
+    });
+
+    // The dashboard wrapper should STILL have project-content--with-mobile-nav
+    // because the keyboard-open state is gated by anyModalOpen.
+    const wrapper = document.querySelector(".project-content");
+    expect(wrapper).toBeTruthy();
+    expect(wrapper?.classList.contains("project-content--with-mobile-nav")).toBe(true);
+  });
+
+  it("removes mobile nav class when modal closes while keyboard stays open", async () => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: new URL("http://localhost:3000/?task=FN-456"),
+    });
+    mockUseViewportMode.mockReturnValue("mobile");
+    localStorage.setItem("kb-dashboard-view-mode", "project");
+
+    mockUseMobileKeyboard.mockReturnValue({
+      keyboardOverlap: 250,
+      viewportHeight: 550,
+      viewportOffsetTop: 0,
+      keyboardOpen: true,
+    });
+
+    const { rerender } = render(<App />);
+
+    // Wait for task detail modal to open
+    await waitFor(() => {
+      expect(screen.getByText("Task FN-456")).toBeTruthy();
+    });
+
+    // With modal open, mobile nav class is preserved despite keyboard being open
+    let wrapper = document.querySelector(".project-content");
+    expect(wrapper?.classList.contains("project-content--with-mobile-nav")).toBe(true);
+
+    // Close the modal via close button
+    const closeBtn = document.querySelector(".modal-overlay.open .modal-close") as HTMLElement;
+    expect(closeBtn).toBeTruthy();
+    fireEvent.click(closeBtn);
+    rerender(<App />);
+
+    // Keyboard is still open, but modal is now closed — mobileKeyboardOpen becomes true,
+    // so the mobile nav class should be removed
+    await waitFor(() => {
+      wrapper = document.querySelector(".project-content");
+      expect(wrapper?.classList.contains("project-content--with-mobile-nav")).toBe(false);
+    });
   });
 });

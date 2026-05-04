@@ -391,6 +391,9 @@ export { NodeConnection } from "./node-connection.js";
 export { NodeDiscovery } from "./node-discovery.js";
 export { collectSystemMetrics } from "./system-metrics.js";
 export { getAppVersion, parseSemver } from "./app-version.js";
+export { DockerClientService } from "./docker-client.js";
+export { MeshConfigGenerator } from "./mesh-config-generator.js";
+export { DockerProvisioningService } from "./docker-provisioning.js";
 export type {
   ConnectionErrorType,
   ConnectionOptions,
@@ -414,9 +417,20 @@ export type {
   DockerResourceSizing,
   DockerVolumeMount,
   DockerExtraCli,
+  DockerContextInfo,
+  DockerConnectivityResult,
+  DockerContainerInspectResult,
+  DockerNodeImageConfig,
+  DockerNodeResourceConfig,
+  DockerProvisionInput,
+  DockerProvisionResult,
   ManagedDockerNode,
   ManagedDockerNodeInput,
   ManagedDockerNodeUpdate,
+  MeshConfigGeneratorInput,
+  FullProvisioningInput,
+  MeshConnectionConfig,
+  MeshConfigResult,
   NodeDiscoveryEvent,
   DiscoveryConfig,
   DiscoveredNode,
@@ -586,7 +600,12 @@ export type { AgentDreamProcessorResult, DreamProcessorResult, DreamPromptExecut
 
 // ── Project Insights ──────────────────────────────────────────────────────
 
-export { InsightStore, computeInsightFingerprint } from "./insight-store.js";
+export { InsightLifecycleError, InsightStore, computeInsightFingerprint } from "./insight-store.js";
+export {
+  classifyInsightRunError,
+  executeInsightRunLifecycle,
+  retryInsightRunLifecycle,
+} from "./insight-run-executor.js";
 export type {
   InsightCategory,
   InsightStatus,
@@ -599,6 +618,10 @@ export type {
   InsightRun,
   InsightRunStatus,
   InsightRunTrigger,
+  InsightRunFailureClass,
+  InsightRunLifecycle,
+  InsightRunEventType,
+  InsightRunEvent,
   InsightRunInputMetadata,
   InsightRunOutputMetadata,
   InsightRunCreateInput,
@@ -606,10 +629,16 @@ export type {
   InsightRunListOptions,
   InsightStoreEvents,
 } from "./insight-types.js";
+export type {
+  InsightRunAttemptContext,
+  InsightRunAttemptResult,
+  InsightRunExecutorErrorClassification,
+  InsightRunExecutorOptions,
+} from "./insight-run-executor.js";
 
 // ── Research System ───────────────────────────────────────────────────────
 
-export { ResearchStore } from "./research-store.js";
+export { ResearchLifecycleError, ResearchStore } from "./research-store.js";
 export {
   RESEARCH_RUN_STATUSES,
   RESEARCH_SOURCE_STATUSES,
@@ -618,6 +647,7 @@ export {
   RESEARCH_EVENT_TYPES,
   RESEARCH_ORCHESTRATION_PHASES,
   RESEARCH_ORCHESTRATION_STEP_STATUSES,
+  RESEARCH_RUN_FAILURE_CLASSES,
 } from "./research-types.js";
 export type {
   ResearchRunStatus,
@@ -631,6 +661,9 @@ export type {
   ResearchResult,
   ResearchTokenUsage,
   ResearchRun,
+  ResearchRunLifecycle,
+  ResearchRunFailureClass,
+  ResearchRunEvent,
   ResearchExport,
   ResearchRunCreateInput,
   ResearchRunUpdateInput,
@@ -730,6 +763,14 @@ export type {
 } from "./chat-types.js";
 export { ChatStore } from "./chat-store.js";
 export type { ChatStoreEvents } from "./chat-store.js";
+export {
+  choosePreferredStoredCredential,
+  extractCodexCliStoredCredential,
+  getCodexCliAuthPath,
+  readStoredCredentialsFromAuthFile,
+  shouldHydrateStoredCredential,
+} from "./oauth-credential-interop.js";
+export type { StoredAuthCredential } from "./oauth-credential-interop.js";
 
 // ── Error helpers ─────────────────────────────────────────
 export { getErrorMessage } from "./error-message.js";

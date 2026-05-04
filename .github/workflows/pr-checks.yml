@@ -32,11 +32,14 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Build plugins
+        run: pnpm -r --filter './plugins/**' build
+
       - name: Lint
         run: pnpm lint
 
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
-        run: pnpm test
+      - name: Test (full suite)
+        run: pnpm test:full

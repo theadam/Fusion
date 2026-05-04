@@ -167,6 +167,16 @@ async function promptSessionAndCheck(session: AgentSession, prompt: string, opti
         piLog.warn(`pi state error — failed to inspect transcript: ${inspectErr instanceof Error ? inspectErr.message : String(inspectErr)}`);
       }
     }
+    // Some OpenAI-compatible providers (notably Moonshot/Kimi) end generation
+    // with a non-standard `finish_reason: repeat` when their server-side
+    // repetition detector trips. pi-ai surfaces this as a fatal state error,
+    // but for our purposes the assistant turn is already complete — treat it
+    // as a soft stop so the heartbeat keeps running.
+    if (/Provider finish_reason:\s*repeat\b/i.test(stateError)) {
+      piLog.warn(`pi state error — treating provider finish_reason=repeat as soft stop: ${stateError}`);
+      clearSessionStateError(session);
+      return;
+    }
     throw new Error(stateError);
   }
 }
@@ -1043,7 +1053,12 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
   piLog.log(`createFnAgent called (tools=${options.tools}, provider=${options.defaultProvider}, model=${options.defaultModelId})`);
   const authStorage = createFusionAuthStorage();
   const modelRegistry = ModelRegistry.create(authStorage, getModelRegistryModelsPath());
-  await registerExtensionProviders(options.cwd, modelRegistry);
+
+  // Resolve the project root early so extension providers, skill discovery,
+  // and resource loading all use the correct root when cwd is a worktree,
+  // subdirectory, or any path other than the project root itself.
+  const resolvedProjectRoot = getProjectRootFromWorktree(options.cwd) ?? resolvePiExtensionProjectRoot(options.cwd);
+  await registerExtensionProviders(resolvedProjectRoot, modelRegistry);
 
   for (const provider of readCustomProviders()) {
     try {
@@ -1103,11 +1118,14 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
 
   // Detect if this is a worktree session and apply path boundaries
   const worktreePath = options.cwd;
-  const projectRoot = getProjectRootFromWorktree(worktreePath);
-  if (projectRoot) {
-    await assertValidWorktreeSession(worktreePath, projectRoot);
+  const worktreeProjectRoot = getProjectRootFromWorktree(worktreePath);
+  if (worktreeProjectRoot) {
+    await assertValidWorktreeSession(worktreePath, worktreeProjectRoot);
   }
-  const wrappedTools = wrapToolsWithBoundary(tools, worktreePath, projectRoot);
+  const wrappedTools = wrapToolsWithBoundary(tools, worktreePath, worktreeProjectRoot);
+
+  // resolvedProjectRoot was computed above (before registerExtensionProviders)
+  // and is reused here for resource loader and skill discovery.
 
   // Compaction is explicitly enabled to prevent context-window overflow during
   // long-running agent conversations (triage, execution, review, merge).
@@ -1138,7 +1156,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
   if (!effectiveSkillSelection && options.skills && options.skills.length > 0) {
     piLog.log(`Using skills from convenience parameter: [${options.skills.join(", ")}]`);
     effectiveSkillSelection = {
-      projectRootDir: options.cwd,
+      projectRootDir: resolvedProjectRoot,
       requestedSkillNames: options.skills,
       sessionPurpose: "executor",
     };
@@ -1174,7 +1192,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
   }
 
   const resourceLoader = new DefaultResourceLoader({
-    cwd: options.cwd,
+    cwd: resolvedProjectRoot,
     agentDir: getFusionAgentDir(),
     settingsManager,
     systemPromptOverride: () => options.systemPrompt,

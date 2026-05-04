@@ -52,11 +52,11 @@ export interface HeartbeatMonitorOptions {
   /** Max concurrent runs per agent (default: 1) */
   maxConcurrentRuns?: number;
   /** Callback when an agent misses its heartbeat */
-  onMissed?: (agentId: string) => void;
+  onMissed?: (agentId: string, reason: string) => void;
   /** Callback when an agent recovers after a missed heartbeat */
   onRecovered?: (agentId: string) => void;
   /** Callback when an unresponsive agent is terminated */
-  onTerminated?: (agentId: string) => void;
+  onTerminated?: (agentId: string, reason: string) => void;
   /** Callback when a run starts */
   onRunStarted?: (agentId: string, run: AgentHeartbeatRun) => void;
   /** Callback when a run completes */
@@ -114,6 +114,17 @@ interface TrackedAgent {
   missedHeartbeatReported: boolean;
   /** Session ID before this execution started */
   sessionIdBefore?: string;
+}
+
+/** Format milliseconds into a human-readable duration string (e.g. "5m", "1h 20m", "2h"). */
+export function formatDuration(ms: number): string {
+  const totalMinutes = Math.floor(ms / 60_000);
+  if (totalMinutes < 1) return "<1m";
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${minutes}m`;
 }
 
 /** Compare blocked-state snapshots to decide whether blocked messaging is duplicate noise. */
@@ -429,9 +440,9 @@ export class HeartbeatMonitor {
   private pollIntervalMs: number;
   private heartbeatTimeoutMs: number;
   private maxConcurrentRuns: number;
-  private onMissed?: (agentId: string) => void;
+  private onMissed?: (agentId: string, reason: string) => void;
   private onRecovered?: (agentId: string) => void;
-  private onTerminated?: (agentId: string) => void;
+  private onTerminated?: (agentId: string, reason: string) => void;
   private onRunStarted?: (agentId: string, run: AgentHeartbeatRun) => void;
   private onRunCompleted?: (agentId: string, run: AgentHeartbeatRun) => void;
   private taskStore?: TaskStore;
@@ -1333,7 +1344,7 @@ export class HeartbeatMonitor {
           },
         };
 
-        const { createResolvedAgentSession, extractRuntimeHint } = await import("./agent-session-helpers.js");
+        const { createResolvedAgentSession, extractRuntimeHint, extractRuntimeModel } = await import("./agent-session-helpers.js");
         const { buildSessionSkillContextSync } = await import("./session-skill-context.js");
 
         // Build tools with task creation tracking and run context for mutation correlation
@@ -1438,8 +1449,10 @@ export class HeartbeatMonitor {
           systemPrompt,
           tools: "readonly",
           customTools: heartbeatTools,
-          defaultProvider: agent.runtimeConfig?.modelProvider as string | undefined,
-          defaultModelId: agent.runtimeConfig?.modelId as string | undefined,
+          ...(() => {
+            const { provider, modelId } = extractRuntimeModel(agent.runtimeConfig);
+            return { defaultProvider: provider, defaultModelId: modelId };
+          })(),
           onText: (delta) => {
             outputLength += delta.length;
             appendStdoutExcerpt(delta);
@@ -1975,30 +1988,37 @@ export class HeartbeatMonitor {
       const elapsed = now - tracked.lastSeen;
 
       if (elapsed >= config.heartbeatTimeoutMs) {
+        const reason = `No heartbeat for ${formatDuration(elapsed)} (threshold: ${formatDuration(config.heartbeatTimeoutMs)})`;
         // Missed heartbeat detected
         if (!tracked.missedHeartbeatReported) {
           tracked.missedHeartbeatReported = true;
-          await this.handleMissedHeartbeat(tracked);
+          await this.handleMissedHeartbeat(tracked, reason);
         } else {
           // Already reported - check if we should terminate
           // Give 2x timeout for recovery before auto-terminate
           if (elapsed >= config.heartbeatTimeoutMs * 2) {
-            await this.terminateUnresponsive(tracked);
+            await this.terminateUnresponsive(tracked, config.heartbeatTimeoutMs);
           }
         }
       }
     }
   }
 
-  private async handleMissedHeartbeat(tracked: TrackedAgent): Promise<void> {
+  private async handleMissedHeartbeat(tracked: TrackedAgent, reason: string): Promise<void> {
     // Record missed heartbeat
     await this.store.recordHeartbeat(tracked.agentId, "missed", tracked.runId);
 
     // Notify callback
-    this.onMissed?.(tracked.agentId);
+    this.onMissed?.(tracked.agentId, reason);
   }
 
-  private async terminateUnresponsive(tracked: TrackedAgent): Promise<void> {
+  private async terminateUnresponsive(tracked: TrackedAgent, heartbeatTimeoutMs: number): Promise<void> {
+    const now = Date.now();
+    const elapsed = now - tracked.lastSeen;
+    const reason = `No heartbeat for ${formatDuration(elapsed)} (2× timeout threshold: ${formatDuration(heartbeatTimeoutMs * 2)})`;
+
+    heartbeatLog.warn(`Terminating unresponsive agent ${tracked.agentId}: ${reason}`);
+
     // Dispose the session
     try {
       tracked.session.dispose();
@@ -2018,7 +2038,7 @@ export class HeartbeatMonitor {
     this.trackedAgents.delete(tracked.agentId);
 
     // Notify callback
-    this.onTerminated?.(tracked.agentId);
+    this.onTerminated?.(tracked.agentId, reason);
   }
 }
 

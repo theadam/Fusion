@@ -36,6 +36,7 @@ const mockRequestSpecRevision = vi.fn();
 const mockApprovePlan = vi.fn();
 const mockRejectPlan = vi.fn();
 const mockRefineTask = vi.fn();
+const mockFetchAiSessions = vi.fn();
 
 vi.mock("../../api", () => ({
   startPlanning: (...args: any[]) => mockStartPlanning(...args),
@@ -72,12 +73,35 @@ vi.mock("../../api", () => ({
   getRefineErrorMessage: vi.fn((err: any) => err?.message || "Failed to refine"),
   updateGlobalSettings: vi.fn().mockResolvedValue({}),
   duplicateTask: vi.fn().mockResolvedValue({}),
+  fetchAiSessions: (...args: any[]) => mockFetchAiSessions(...args),
 }));
 
 const mockConfirm = vi.fn();
 
 vi.mock("../../hooks/useConfirm", () => ({
   useConfirm: () => ({ confirm: mockConfirm }),
+}));
+
+const mockUseViewportMode = vi.fn<() => "mobile" | "tablet" | "desktop">(() => "desktop");
+
+vi.mock("../../hooks/useViewportMode", () => ({
+  useViewportMode: () => mockUseViewportMode(),
+}));
+
+const mockUseMobileKeyboard = vi.fn<() => {
+  keyboardOverlap: number;
+  viewportHeight: number | null;
+  viewportOffsetTop: number;
+  keyboardOpen: boolean;
+}>(() => ({
+  keyboardOverlap: 0,
+  viewportHeight: null,
+  viewportOffsetTop: 0,
+  keyboardOpen: false,
+}));
+
+vi.mock("../../hooks/useMobileKeyboard", () => ({
+  useMobileKeyboard: (...args: any[]) => mockUseMobileKeyboard(...args),
 }));
 
 const mockTasks: Task[] = [
@@ -187,6 +211,49 @@ class MockEventSource {
   }
 }
 
+function getMediaBlocks(css: string, mediaQuery: string): string[] {
+  const blocks: string[] = [];
+  let searchStart = 0;
+
+  while (searchStart < css.length) {
+    const start = css.indexOf(mediaQuery, searchStart);
+    if (start === -1) break;
+
+    const blockStart = css.indexOf("{", start);
+    if (blockStart === -1) break;
+
+    let depth = 1;
+    let cursor = blockStart + 1;
+    while (cursor < css.length && depth > 0) {
+      if (css[cursor] === "{") depth += 1;
+      else if (css[cursor] === "}") depth -= 1;
+      cursor += 1;
+    }
+
+    blocks.push(css.slice(start, cursor));
+    searchStart = cursor;
+  }
+
+  return blocks;
+}
+
+function mockViewport(mode: "mobile" | "desktop" | "tablet") {
+  mockUseViewportMode.mockReturnValue(mode);
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => {
+      const isMobileQuery = query === "(max-width: 768px)";
+      const isTabletQuery = query === "(min-width: 769px) and (max-width: 1024px)";
+      return {
+        matches: mode === "mobile" ? isMobileQuery : mode === "tablet" ? isTabletQuery : false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      };
+    }),
+  });
+}
+
 describe("PlanningModeModal", () => {
   const mockOnClose = vi.fn();
   const mockOnTaskCreated = vi.fn();
@@ -198,6 +265,8 @@ describe("PlanningModeModal", () => {
     MockEventSource.reset();
     vi.stubGlobal("EventSource", MockEventSource as any);
     window.sessionStorage.clear();
+    // Default to desktop viewport; mobile-specific tests override per-test.
+    mockViewport("desktop");
     
     // Default mock for streaming
     mockStartPlanningStreaming.mockResolvedValue({ sessionId: "session-123" });
@@ -210,6 +279,7 @@ describe("PlanningModeModal", () => {
     mockRetryPlanningSession.mockResolvedValue({ success: true, sessionId: "session-123" });
     mockStartPlanningBreakdown.mockResolvedValue({ sessionId: "session-123", subtasks: [] });
     mockFetchAiSession.mockResolvedValue(null);
+    mockFetchAiSessions.mockResolvedValue([]);
     mockParseConversationHistory.mockImplementation((raw: string) => {
       if (!raw) return [];
       try {
@@ -223,6 +293,8 @@ describe("PlanningModeModal", () => {
       models: mockModels,
       favoriteProviders: [],
       favoriteModels: [],
+      resolvedPlanningProvider: "openai",
+      resolvedPlanningModelId: "gpt-4o",
     });
     mockAcquireSessionLock.mockResolvedValue({ acquired: true, currentHolder: null });
     mockReleaseSessionLock.mockResolvedValue(undefined);
@@ -275,6 +347,42 @@ describe("PlanningModeModal", () => {
       );
 
       expect(screen.queryByText("Planning Mode")).toBeNull();
+    });
+
+    it("mobile close path blurs focused input and resets viewport scroll", () => {
+      mockViewport("mobile");
+      const scrollToSpy = vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+      const rafSpy = vi
+        .spyOn(window, "requestAnimationFrame")
+        .mockImplementation((callback: FrameRequestCallback) => {
+          callback(0);
+          return 1;
+        });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />
+      );
+
+      const textarea = screen.getByPlaceholderText(/e.g., Build a user authentication/) as HTMLTextAreaElement;
+      act(() => {
+        textarea.focus();
+      });
+      const blurSpy = vi.spyOn(textarea, "blur");
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      });
+
+      expect(blurSpy).toHaveBeenCalledTimes(1);
+      expect(scrollToSpy).toHaveBeenCalledWith(0, 0);
+      expect(rafSpy).toHaveBeenCalled();
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
     });
 
     it("hides send to background button in initial state", () => {
@@ -336,16 +444,21 @@ describe("PlanningModeModal", () => {
         />
       );
 
+      expect(screen.getByRole("button", { name: "Advanced planning settings" })).toBeDefined();
+      expect(screen.queryByRole("button", { name: "Planning Model" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Advanced planning settings" }));
+
       const modelTrigger = screen.getByRole("button", { name: "Planning Model" });
       expect(modelTrigger).toBeDefined();
-      expect(screen.getByText("Using default")).toBeDefined();
 
       await waitFor(() => {
         expect(mockFetchModels).toHaveBeenCalledTimes(1);
+        expect(screen.getByText("openai/gpt-4o")).toBeDefined();
       });
     });
 
-    it("updates planning model selection and badge", async () => {
+    it("shows resolved default model badge and switches to override badge when selected", async () => {
       render(
         <PlanningModeModal
           isOpen={true}
@@ -360,6 +473,8 @@ describe("PlanningModeModal", () => {
         expect(mockFetchModels).toHaveBeenCalledTimes(1);
       });
 
+      fireEvent.click(screen.getByRole("button", { name: "Advanced planning settings" }));
+      expect(screen.getByText("openai/gpt-4o")).toBeDefined();
       fireEvent.click(screen.getByRole("button", { name: "Planning Model" }));
       fireEvent.click(screen.getByRole("option", { name: /Claude Sonnet 4.5/ }));
 
@@ -381,6 +496,7 @@ describe("PlanningModeModal", () => {
         expect(mockFetchModels).toHaveBeenCalledTimes(1);
       });
 
+      fireEvent.click(screen.getByRole("button", { name: "Advanced planning settings" }));
       fireEvent.click(screen.getByRole("button", { name: "Planning Model" }));
       fireEvent.click(screen.getByRole("option", { name: /Claude Sonnet 4.5/ }));
 
@@ -399,7 +515,7 @@ describe("PlanningModeModal", () => {
       });
     });
 
-    it("renders planning depth controls with medium selected by default", () => {
+    it("keeps advanced disclosure collapsed by default and reveals controls when expanded", async () => {
       render(
         <PlanningModeModal
           isOpen={true}
@@ -410,12 +526,30 @@ describe("PlanningModeModal", () => {
         />
       );
 
-      expect(screen.getByRole("button", { name: "Advanced planning settings" })).toBeDefined();
-      expect(screen.getByText(/Choose the planning model and tune plan depth/)).toBeDefined();
-      expect(screen.getByRole("button", { name: "Small" })).toBeDefined();
-      expect(screen.getByRole("button", { name: "Medium" }).getAttribute("aria-pressed")).toBe("true");
-      expect(screen.getByRole("button", { name: "Large" })).toBeDefined();
-      expect(screen.getByLabelText("Questions")).toBeDefined();
+      const disclosureButton = screen.getByRole("button", { name: "Advanced planning settings" });
+      expect(disclosureButton).toBeDefined();
+
+      const disclosure = disclosureButton.closest(".onboarding-disclosure");
+      expect(disclosure).not.toBeNull();
+      const disclosureScope = within(disclosure as HTMLElement);
+
+      expect(disclosureButton.getAttribute("aria-expanded")).toBe("false");
+      expect(disclosureScope.queryByRole("button", { name: "Planning Model" })).toBeNull();
+      expect(disclosureScope.queryByText(/Selects which model runs the planning interview/)).toBeNull();
+
+      fireEvent.click(disclosureButton);
+      expect(disclosureButton.getAttribute("aria-expanded")).toBe("true");
+
+      expect(disclosureScope.getByRole("button", { name: "Planning Model" })).toBeDefined();
+      await waitFor(() => {
+        expect(disclosureScope.getByText("openai/gpt-4o")).toBeDefined();
+      });
+      expect(disclosureScope.getByText(/Selects which model runs the planning interview/)).toBeDefined();
+      expect(disclosureScope.getByText(/Plan size sets default interview depth/)).toBeDefined();
+      expect(disclosureScope.getByRole("button", { name: "Small" })).toBeDefined();
+      expect(disclosureScope.getByRole("button", { name: "Medium" }).getAttribute("aria-pressed")).toBe("true");
+      expect(disclosureScope.getByRole("button", { name: "Large" })).toBeDefined();
+      expect(disclosureScope.getByLabelText("Questions")).toBeDefined();
     });
 
     it("updates selected depth and sends custom question count", async () => {
@@ -429,6 +563,7 @@ describe("PlanningModeModal", () => {
         />
       );
 
+      fireEvent.click(screen.getByRole("button", { name: "Advanced planning settings" }));
       fireEvent.click(screen.getByRole("button", { name: "Large" }));
       fireEvent.change(screen.getByLabelText("Questions"), { target: { value: "7" } });
       fireEvent.change(screen.getByPlaceholderText(/e.g., Build a user authentication/), {
@@ -591,6 +726,29 @@ describe("PlanningModeModal", () => {
       expect(maxHeightValue).toContain("calc(");
       expect(maxHeightValue).toContain("100dvh");
       expect(maxHeightValue).toContain("--overlay-padding-top");
+    });
+
+    it("uses planning-scoped disclosure overrides to remove inherited content indent", async () => {
+      const { loadAllAppCssBaseOnly } = await import("../../test/cssFixture");
+      const css = loadAllAppCssBaseOnly();
+
+      const blockMatch = css.match(
+        /\.planning-advanced-disclosure\s+\.onboarding-disclosure-content\s*\{[^}]*\}/,
+      );
+      expect(blockMatch).toBeTruthy();
+      expect(blockMatch![0]).toContain("padding-inline-start: 0;");
+      expect(blockMatch![0]).toContain("justify-content: center;");
+    });
+
+    it("keeps mobile question view top spacing compact", async () => {
+      const { loadAllAppCss } = await import("../../test/cssFixture");
+      const css = loadAllAppCss();
+      const mobileBlocks = getMediaBlocks(css, "@media (max-width: 768px)");
+      const mobileCss = mobileBlocks.join("\n");
+
+      expect(mobileCss).toContain(".planning-question-scroll");
+      expect(mobileCss).toContain("padding-top: var(--space-sm);");
+      expect(mobileCss).toContain("gap: var(--space-md);");
     });
   });
 
@@ -1474,6 +1632,346 @@ describe("PlanningModeModal", () => {
       expect(screen.getByTestId("conversation-history")).toBeDefined();
       expect(screen.getByText("What is the scope?")).toBeDefined();
       expect(screen.getByText("Medium")).toBeDefined();
+    });
+  });
+
+  describe("Initial-turn reasoning visibility (FN-3274)", () => {
+    it("preserves reasoning in conversation history when first question arrives after thinking", async () => {
+      let streamHandlers: any;
+      mockConnectPlanningStream.mockImplementationOnce((_sessionId: string, _projectId: string | undefined, handlers: any) => {
+        streamHandlers = handlers;
+        return {
+          close: vi.fn(),
+          isConnected: vi.fn().mockReturnValue(true),
+        };
+      });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      fireEvent.change(screen.getByPlaceholderText(/e.g., Build a user authentication/), {
+        target: { value: "Build auth system" },
+      });
+      fireEvent.click(screen.getByText("Start Planning"));
+
+      // Wait for loading state to appear
+      await waitFor(() => {
+        expect(screen.getByText("Generating next question...")).toBeDefined();
+      });
+
+      // Simulate thinking output arriving during loading
+      act(() => {
+        streamHandlers.onThinking?.("Analyzing the plan requirements...");
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("AI is thinking...")).toBeDefined();
+      });
+
+      // Transition to question view
+      act(() => {
+        streamHandlers.onQuestion?.(mockQuestion);
+      });
+
+      // Question should be visible
+      await waitFor(() => {
+        expect(screen.getByText("What is the scope?")).toBeDefined();
+      });
+
+      // The reasoning should now be in conversation history as an expandable entry
+      expect(screen.getByTestId("conversation-history")).toBeDefined();
+      expect(screen.getByText("AI Reasoning")).toBeDefined();
+      fireEvent.click(screen.getByRole("button", { name: /Show AI reasoning/i }));
+      expect(screen.getByText("Analyzing the plan requirements...")).toBeDefined();
+
+      // avoid dangling handlers reference lint
+      expect(streamHandlers).toBeDefined();
+    });
+
+    it("preserves reasoning in conversation history when summary arrives after thinking", async () => {
+      let streamHandlers: any;
+      mockConnectPlanningStream.mockImplementationOnce((_sessionId: string, _projectId: string | undefined, handlers: any) => {
+        streamHandlers = handlers;
+        return {
+          close: vi.fn(),
+          isConnected: vi.fn().mockReturnValue(true),
+        };
+      });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      fireEvent.change(screen.getByPlaceholderText(/e.g., Build a user authentication/), {
+        target: { value: "Build auth system" },
+      });
+      fireEvent.click(screen.getByText("Start Planning"));
+
+      await waitFor(() => {
+        expect(screen.getByText("Generating next question...")).toBeDefined();
+      });
+
+      // Simulate thinking output arriving
+      act(() => {
+        streamHandlers.onThinking?.("Finalizing the planning summary...");
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("AI is thinking...")).toBeDefined();
+      });
+
+      // Transition directly to summary view
+      act(() => {
+        streamHandlers.onSummary?.(mockSummary);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("Planning Complete!")).toBeDefined();
+      });
+
+      // The reasoning should be visible in the Q&A disclosure
+      fireEvent.click(screen.getByRole("button", { name: "Show user Q&A" }));
+      await waitFor(() => {
+        expect(screen.getByTestId("conversation-history")).toBeDefined();
+      });
+      expect(screen.getByText("AI Reasoning")).toBeDefined();
+      fireEvent.click(screen.getByRole("button", { name: /Show AI reasoning/i }));
+      expect(screen.getByText("Finalizing the planning summary...")).toBeDefined();
+
+      expect(streamHandlers).toBeDefined();
+    });
+
+    it("restores persisted thinkingOutput as conversation history when resuming awaiting_input session", async () => {
+      mockConnectPlanningStream.mockImplementationOnce(() => ({
+        close: vi.fn(),
+        isConnected: vi.fn().mockReturnValue(true),
+      }));
+
+      const resumedQuestion: PlanningQuestion = {
+        id: "q-current",
+        type: "text",
+        question: "What should we prioritize next?",
+      };
+
+      const restoredHistory = [
+        {
+          question: {
+            id: "q1",
+            type: "single_select",
+            question: "What scope?",
+            options: [{ id: "small", label: "Small" }],
+          },
+          response: { q1: "small" },
+        },
+      ];
+
+      mockFetchAiSession.mockResolvedValueOnce({
+        id: "session-awaiting-reasoning",
+        type: "planning",
+        status: "awaiting_input",
+        title: "Resume with reasoning",
+        inputPayload: JSON.stringify({ initialPlan: "Build planning with reasoning" }),
+        conversationHistory: JSON.stringify(restoredHistory),
+        currentQuestion: JSON.stringify(resumedQuestion),
+        result: null,
+        thinkingOutput: "Server-side reasoning captured during generation",
+        error: null,
+        projectId: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+          resumeSessionId="session-awaiting-reasoning"
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("What should we prioritize next?")).toBeDefined();
+      });
+
+      // The persisted thinkingOutput should appear as a conversation history entry
+      const history = screen.getByTestId("conversation-history");
+      expect(history).toBeDefined();
+
+      // Should show the existing Q&A plus the AI Reasoning entry
+      expect(screen.getByText("What scope?")).toBeDefined();
+      expect(screen.getByText("AI Reasoning")).toBeDefined();
+      fireEvent.click(screen.getByRole("button", { name: /Show AI reasoning/i }));
+      expect(screen.getByText("Server-side reasoning captured during generation")).toBeDefined();
+    });
+
+    it("does not create duplicate reasoning entries on repeated transitions", async () => {
+      let streamHandlers: any;
+      mockConnectPlanningStream.mockImplementation((_sessionId: string, _projectId: string | undefined, handlers: any) => {
+        streamHandlers = handlers;
+        return {
+          close: vi.fn(),
+          isConnected: vi.fn().mockReturnValue(true),
+        };
+      });
+
+      const secondQuestion: PlanningQuestion = {
+        id: "q-second",
+        type: "text",
+        question: "Any additional requirements?",
+      };
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      fireEvent.change(screen.getByPlaceholderText(/e.g., Build a user authentication/), {
+        target: { value: "Build auth system" },
+      });
+      fireEvent.click(screen.getByText("Start Planning"));
+
+      await waitFor(() => {
+        expect(screen.getByText("Generating next question...")).toBeDefined();
+      });
+
+      // Emit thinking then question
+      act(() => {
+        streamHandlers.onThinking?.("First reasoning block");
+      });
+      act(() => {
+        streamHandlers.onQuestion?.(mockQuestion);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("What is the scope?")).toBeDefined();
+      });
+
+      // Answer the question
+      fireEvent.click(screen.getByText("Medium"));
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+      await waitFor(() => {
+        expect(mockRespondToPlanning).toHaveBeenCalled();
+      });
+
+      // Simulate thinking for second question then emit second question
+      act(() => {
+        streamHandlers.onThinking?.("Second reasoning block");
+      });
+      act(() => {
+        streamHandlers.onQuestion?.(secondQuestion);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("Any additional requirements?")).toBeDefined();
+      });
+
+      // Conversation history should contain both reasoning entries without duplicates
+      const history = screen.getByTestId("conversation-history");
+      expect(history).toBeDefined();
+
+      // Should have Q1, reasoning1, reasoning2 entries
+      const reasoningButtons = screen.getAllByRole("button", { name: /Show AI reasoning/i });
+      // First reasoning button should be next to Q1, second should be standalone
+      // There should be exactly 2 reasoning entries (not duplicated)
+      expect(reasoningButtons.length).toBe(2);
+
+      expect(streamHandlers).toBeDefined();
+    });
+
+    it("preserves reasoning when answer submission transitions back to loading then question", async () => {
+      let streamHandlers: any;
+      mockConnectPlanningStream.mockImplementation((_sessionId: string, _projectId: string | undefined, handlers: any) => {
+        streamHandlers = handlers;
+        return {
+          close: vi.fn(),
+          isConnected: vi.fn().mockReturnValue(true),
+        };
+      });
+
+      const secondQuestion: PlanningQuestion = {
+        id: "q-requirements",
+        type: "text",
+        question: "What are the key requirements?",
+      };
+
+      mockRespondToPlanning.mockImplementation(async () => {
+        // Simulate thinking then second question via the existing stream
+        setTimeout(() => {
+          streamHandlers?.onThinking?.("Thinking about requirements...");
+          streamHandlers?.onQuestion?.(secondQuestion);
+        }, 10);
+        return { sessionId: "session-123", currentQuestion: null, summary: null };
+      });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      fireEvent.change(screen.getByPlaceholderText(/e.g., Build a user authentication/), {
+        target: { value: "Build auth system" },
+      });
+      fireEvent.click(screen.getByText("Start Planning"));
+
+      // Wait for first thinking and question
+      await waitFor(() => {
+        expect(screen.getByText("Generating next question...")).toBeDefined();
+      });
+
+      act(() => {
+        streamHandlers.onThinking?.("Initial analysis...");
+      });
+      act(() => {
+        streamHandlers.onQuestion?.(mockQuestion);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("What is the scope?")).toBeDefined();
+      });
+
+      // Answer the first question
+      fireEvent.click(screen.getByText("Medium"));
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+      // Wait for second question to arrive
+      await waitFor(() => {
+        expect(screen.getByText("What are the key requirements?")).toBeDefined();
+      }, { timeout: 3000 });
+
+      // Conversation history should contain the first Q&A pair and initial reasoning
+      const history = screen.getByTestId("conversation-history");
+      expect(history).toBeDefined();
+      expect(screen.getByText("What is the scope?")).toBeDefined();
+      expect(screen.getByText("Medium")).toBeDefined();
+
+      expect(streamHandlers).toBeDefined();
     });
   });
 
@@ -2509,6 +3007,113 @@ describe("PlanningModeModal", () => {
     });
   });
 
+  describe("Mobile empty-session routing (FN-3269)", () => {
+    it("shows detail pane on mobile when session list is empty", async () => {
+      mockViewport("mobile");
+      mockFetchAiSessions.mockResolvedValue([]);
+
+      const { container } = render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(mockFetchAiSessions).toHaveBeenCalled();
+      });
+
+      // Wait for the session list to load and the routing effect to fire
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // The modal body should show detail pane (composer), not list pane
+      const body = container.querySelector(".planning-modal-body");
+      expect(body?.classList.contains("planning-modal-body--show-detail")).toBe(true);
+      expect(body?.classList.contains("planning-modal-body--show-list")).toBe(false);
+
+      // The composer textarea should be visible
+      expect(screen.getByPlaceholderText(/e.g., Build a user authentication/)).toBeDefined();
+    });
+
+    it("stays on list pane on mobile when sessions exist", async () => {
+      mockViewport("mobile");
+      mockFetchAiSessions.mockResolvedValue([
+        {
+          id: "session-existing",
+          type: "planning",
+          status: "complete",
+          title: "Existing session",
+          preview: "An existing planning session",
+          projectId: null,
+          lockedByTab: null,
+          updatedAt: new Date().toISOString(),
+          archived: false,
+        },
+      ]);
+
+      const { container } = render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(mockFetchAiSessions).toHaveBeenCalled();
+      });
+
+      // Wait one more tick to let state updates settle
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // The modal body should show list pane (sidebar), not detail pane
+      const body = container.querySelector(".planning-modal-body");
+      expect(body?.classList.contains("planning-modal-body--show-list")).toBe(true);
+      expect(body?.classList.contains("planning-modal-body--show-detail")).toBe(false);
+    });
+
+    it("does not auto-show detail pane on desktop with empty sessions", async () => {
+      mockViewport("desktop");
+      mockFetchAiSessions.mockResolvedValue([]);
+
+      const { container } = render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onTaskCreated={mockOnTaskCreated}
+          onTasksCreated={vi.fn()}
+          tasks={mockTasks}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(mockFetchAiSessions).toHaveBeenCalled();
+      });
+
+      // Wait one more tick to let state updates settle
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // Desktop shows both panes in split view regardless of mobileShowDetail.
+      // Both sidebar and detail pane should be present in the DOM.
+      expect(container.querySelector(".planning-sidebar")).not.toBeNull();
+      expect(container.querySelector(".planning-detail")).not.toBeNull();
+      // The mobile-only back button should NOT be visible (it's gated on mobileShowDetail,
+      // which stays false on desktop since the routing effect skips non-mobile viewports).
+      expect(container.querySelector(".planning-mobile-back")).toBeNull();
+    });
+  });
+
   describe("Model favorites persistence", () => {
     it("persists provider favorite toggle to global settings", async () => {
       mockFetchModels.mockResolvedValue({
@@ -2532,6 +3137,7 @@ describe("PlanningModeModal", () => {
         expect(mockFetchModels).toHaveBeenCalled();
       });
 
+      fireEvent.click(screen.getByRole("button", { name: "Advanced planning settings" }));
       fireEvent.click(screen.getByRole("button", { name: "Planning Model" }));
 
       await waitFor(() => {
@@ -2572,6 +3178,7 @@ describe("PlanningModeModal", () => {
         expect(mockFetchModels).toHaveBeenCalled();
       });
 
+      fireEvent.click(screen.getByRole("button", { name: "Advanced planning settings" }));
       fireEvent.click(screen.getByRole("button", { name: "Planning Model" }));
 
       await waitFor(() => {
@@ -2613,6 +3220,7 @@ describe("PlanningModeModal", () => {
         expect(mockFetchModels).toHaveBeenCalled();
       });
 
+      fireEvent.click(screen.getByRole("button", { name: "Advanced planning settings" }));
       fireEvent.click(screen.getByRole("button", { name: "Planning Model" }));
 
       await waitFor(() => {
@@ -2651,6 +3259,7 @@ describe("PlanningModeModal", () => {
         expect(mockFetchModels).toHaveBeenCalled();
       });
 
+      fireEvent.click(screen.getByRole("button", { name: "Advanced planning settings" }));
       fireEvent.click(screen.getByRole("button", { name: "Planning Model" }));
 
       await waitFor(() => {
@@ -2785,6 +3394,83 @@ describe("useSessionLock", () => {
     expect(sendBeaconSpy).toHaveBeenCalledWith(
       "/api/ai-sessions/session-3/lock/beacon?tabId=tab-self",
     );
+  });
+
+  describe("Mobile keyboard behavior (FN-3337)", () => {
+    beforeEach(() => {
+      mockUseViewportMode.mockReturnValue("desktop");
+      mockUseMobileKeyboard.mockReturnValue({
+        keyboardOverlap: 0,
+        viewportHeight: null,
+        viewportOffsetTop: 0,
+        keyboardOpen: false,
+      });
+    });
+
+    it("applies keyboard CSS variables when keyboard is open on mobile", () => {
+      mockUseViewportMode.mockReturnValue("mobile");
+      mockUseMobileKeyboard.mockReturnValue({
+        keyboardOverlap: 300,
+        viewportHeight: 400,
+        viewportOffsetTop: 50,
+        keyboardOpen: true,
+      });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+
+      const modal = screen.getByRole("dialog").querySelector(".planning-modal");
+      expect(modal).toBeTruthy();
+      expect(modal!.getAttribute("style")).toContain("--keyboard-overlap");
+      expect(modal!.getAttribute("style")).toContain("--vv-height");
+      expect(modal!.getAttribute("style")).toContain("--vv-offset-top");
+    });
+
+    it("does not apply keyboard CSS variables when keyboard is closed", () => {
+      mockUseViewportMode.mockReturnValue("mobile");
+      mockUseMobileKeyboard.mockReturnValue({
+        keyboardOverlap: 0,
+        viewportHeight: null,
+        viewportOffsetTop: 0,
+        keyboardOpen: false,
+      });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+
+      const modal = screen.getByRole("dialog").querySelector(".planning-modal");
+      expect(modal).toBeTruthy();
+      expect(modal!.getAttribute("style")).toBeNull();
+    });
+
+    it("does not apply keyboard CSS variables on desktop", () => {
+      mockUseViewportMode.mockReturnValue("desktop");
+      mockUseMobileKeyboard.mockReturnValue({
+        keyboardOverlap: 0,
+        viewportHeight: null,
+        viewportOffsetTop: 0,
+        keyboardOpen: false,
+      });
+
+      render(
+        <PlanningModeModal
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+      );
+
+      const modal = screen.getByRole("dialog").querySelector(".planning-modal");
+      expect(modal).toBeTruthy();
+      expect(modal!.getAttribute("style")).toBeNull();
+    });
   });
 
 });

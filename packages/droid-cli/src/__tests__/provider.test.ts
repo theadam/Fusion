@@ -71,16 +71,16 @@ import { streamViaCli } from "../provider";
 describe("provider registration (default export)", () => {
   it("registers provider id droid-cli with deduped discovered models", async () => {
     vi.resetModules();
-    vi.doMock("../../src/provider.js", () => ({
+    vi.doMock("../../../../plugins/fusion-plugin-droid-runtime/src/provider.js", () => ({
       streamViaCli: vi.fn(() => ({ mocked: true })),
     }));
-    vi.doMock("../../src/process-manager.js", () => ({
+    vi.doMock("../../../../plugins/fusion-plugin-droid-runtime/src/process-manager.js", () => ({
       validateCliPresenceAsync: vi.fn(async () => ({ ok: true })),
       validateCliAuthAsync: vi.fn(async () => true),
       killAllProcesses: vi.fn(),
       discoverDroidModels: vi.fn(async () => ["droid-pro", "droid-max", "droid-pro"]),
     }));
-    vi.doMock("../../src/mcp-config.js", () => ({
+    vi.doMock("../../../../plugins/fusion-plugin-droid-runtime/src/mcp-config.js", () => ({
       getCustomToolDefs: vi.fn(() => []),
       toolsFromContext: vi.fn(() => []),
       writeMcpConfig: vi.fn(() => "/tmp/droid-mcp.json"),
@@ -105,9 +105,45 @@ describe("provider registration (default export)", () => {
       "droid-pro",
       "droid-max",
     ]);
-    vi.doUnmock("../../src/provider.js");
-    vi.doUnmock("../../src/process-manager.js");
-    vi.doUnmock("../../src/mcp-config.js");
+    vi.doUnmock("../../../../plugins/fusion-plugin-droid-runtime/src/provider.js");
+    vi.doUnmock("../../../../plugins/fusion-plugin-droid-runtime/src/process-manager.js");
+    vi.doUnmock("../../../../plugins/fusion-plugin-droid-runtime/src/mcp-config.js");
+  });
+
+  it("delegates streamSimple execution to plugin-owned streamViaCli", async () => {
+    vi.resetModules();
+    const pluginStreamViaCli = vi.fn(() => ({ delegated: true }));
+    vi.doMock("../../../../plugins/fusion-plugin-droid-runtime/src/provider.js", () => ({
+      streamViaCli: pluginStreamViaCli,
+    }));
+    vi.doMock("../../../../plugins/fusion-plugin-droid-runtime/src/process-manager.js", () => ({
+      validateCliPresenceAsync: vi.fn(async () => ({ ok: true })),
+      validateCliAuthAsync: vi.fn(async () => true),
+      killAllProcesses: vi.fn(),
+      discoverDroidModels: vi.fn(async () => ["droid-pro"]),
+    }));
+    vi.doMock("../../../../plugins/fusion-plugin-droid-runtime/src/mcp-config.js", () => ({
+      getCustomToolDefs: vi.fn(() => []),
+      toolsFromContext: vi.fn(() => []),
+      writeMcpConfig: vi.fn(() => undefined),
+    }));
+
+    const registerProvider = vi.fn();
+    const on = vi.fn();
+    const getAllTools = vi.fn(() => []);
+    const setActiveTools = vi.fn();
+
+    const mod = await import("../../index");
+    mod.default({ registerProvider, on, getAllTools, setActiveTools } as any);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const [, config] = registerProvider.mock.calls[0];
+    config.streamSimple({ id: "droid-pro", provider: "droid-cli" }, { messages: [] }, {});
+    expect(pluginStreamViaCli).toHaveBeenCalled();
+
+    vi.doUnmock("../../../../plugins/fusion-plugin-droid-runtime/src/provider.js");
+    vi.doUnmock("../../../../plugins/fusion-plugin-droid-runtime/src/process-manager.js");
+    vi.doUnmock("../../../../plugins/fusion-plugin-droid-runtime/src/mcp-config.js");
   });
 });
 

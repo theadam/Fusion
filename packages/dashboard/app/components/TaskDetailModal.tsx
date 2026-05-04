@@ -1,7 +1,8 @@
 import "./TaskDetailModal.css";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pencil, Bot, X, ChevronDown, ChevronRight, GitBranch } from "lucide-react";
+import { Pencil, Bot, X, ChevronDown, ChevronRight, GitBranch, ArrowLeft } from "lucide-react";
 import { useModalResizePersist } from "../hooks/useModalResizePersist";
+import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
 import { useOverlayDismiss } from "../hooks/useOverlayDismiss";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -43,7 +44,7 @@ interface ModelSelection {
   modelId?: string;
 }
 
-const ACTIVE_STATUSES = new Set(["planning", "researching", "executing", "finalizing", "merging"]);
+const ACTIVE_STATUSES = new Set(["planning", "researching", "executing", "finalizing", "merging", "merging-fix"]);
 
 
 
@@ -167,6 +168,8 @@ export interface TaskDetailModalProps {
   prAuthAvailable?: boolean;
   /** Open the modal with this tab active instead of "definition" */
   initialTab?: TabId;
+  /** Mobile-only header affordance mode. */
+  mobileHeaderMode?: "close" | "back";
 }
 
 export type TaskDetailContentProps = Omit<TaskDetailModalProps, "onClose"> & {
@@ -332,6 +335,7 @@ export function TaskDetailContent({
   addToast,
   prAuthAvailable,
   initialTab = "definition",
+  mobileHeaderMode = "close",
   embedded = false,
   onRequestClose,
 }: TaskDetailContentProps) {
@@ -1551,6 +1555,7 @@ export function TaskDetailContent({
     "creating-pr": "Creating PR…",
     "awaiting-pr-checks": "Awaiting PR checks",
     "merging-pr": "Merging PR…",
+    "merging-fix": "Merging fixes…",
   };
   const prAutomationLabel = task.status ? prAutomationStatusLabels[task.status] : undefined;
 
@@ -1578,8 +1583,19 @@ export function TaskDetailContent({
                 <Pencil size={14} />
               </button>
             )}
-            {!embedded && (
-              <button className="modal-close" onClick={requestClose} aria-label="Close">
+            {!embedded && mobileHeaderMode === "back" && (
+              <button
+                className="modal-close task-detail-mobile-back"
+                onClick={requestClose}
+                aria-label="Back to task list"
+                type="button"
+              >
+                <ArrowLeft aria-hidden="true" />
+                <span>Back</span>
+              </button>
+            )}
+            {!embedded && mobileHeaderMode !== "back" && (
+              <button className="modal-close" onClick={requestClose} aria-label="Close" type="button">
                 &times;
               </button>
             )}
@@ -2506,7 +2522,7 @@ export function TaskDetailContent({
                       )}
 
                       {/* Pause/Unpause */}
-                      {task.column !== "done" && (
+                      {task.column !== "done" && !task.assignedAgentId && (
                         <button
                           className="detail-actions-menu-item"
                           role="menuitem"
@@ -2514,6 +2530,14 @@ export function TaskDetailContent({
                         >
                           {task.paused ? "Unpause" : "Pause"}
                         </button>
+                      )}
+                      {task.column !== "done" && task.paused && task.pausedByAgentId && (
+                        <span
+                          className="detail-actions-menu-item detail-actions-menu-note"
+                          role="note"
+                        >
+                          Paused by agent
+                        </span>
                       )}
                     </div>
                   )}
@@ -2682,6 +2706,7 @@ export function TaskDetailContent({
 export function TaskDetailModal({ onClose, ...props }: TaskDetailModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   useModalResizePersist(modalRef, true, "task-detail-modal-size");
+  useMobileScrollLock(true);
   const overlayDismissProps = useOverlayDismiss(onClose);
 
   return (

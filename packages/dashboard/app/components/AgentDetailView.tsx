@@ -131,7 +131,6 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
   const [isStreaming, setIsStreaming] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [latestRun, setLatestRun] = useState<AgentHeartbeatRun | null>(null);
-  const logContainerRef = useRef<HTMLDivElement>(null);
   const agentDetailModalRef = useRef<HTMLDivElement>(null);
   const overlayMouseDownRef = useRef(false);
   useModalResizePersist(agentDetailModalRef, !inline, "fusion:agent-detail-modal-size");
@@ -205,7 +204,7 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
       }
       const entries = await fetchAgentRunLogs(currentAgentId, latest.id, currentProjectId);
       if (isStale()) return;
-      setLogs([...entries].reverse());
+      setLogs(entries);
       loadedLatestRunLogsRef.current = latest.id;
     } catch (err) {
       if (isStale()) return;
@@ -264,7 +263,7 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
             if (contextVersionRef.current !== contextVersionAtStart) return;
             try {
               const entry: AgentLogEntry = JSON.parse(e.data);
-              setLogs(prev => [entry, ...prev]);
+              setLogs(prev => [...prev, entry]);
             } catch {
               // ignore malformed events
             }
@@ -354,12 +353,7 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
             if (contextVersionRef.current !== contextVersionAtStart) return;
             try {
               const entry: AgentLogEntry = JSON.parse(e.data);
-              setLogs(prev => [entry, ...prev]);
-
-              const container = logContainerRef.current;
-              if (container && container.scrollTop < 50) {
-                container.scrollTop = 0;
-              }
+              setLogs(prev => [...prev, entry]);
             } catch {
               // Ignore parse errors
             }
@@ -511,7 +505,7 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
                 >
                   {agent.state}
                 </span>
-                <span className="badge" style={{ color: health.color }} title={health.label}>
+                <span className="badge" style={{ color: health.color }} title={health.reason ?? health.label}>
                   {health.icon}
                   {!health.stateDerived && health.label}
                 </span>
@@ -519,81 +513,83 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
             </div>
           </div>
 
-          {/* Lifecycle controls: compact action buttons */}
-          <div className="agent-detail-controls">
-            {/* State-dependent action buttons */}
-            {agent.state === "idle" && (
-              <>
-                <button className="btn btn-task-create btn--compact" onClick={() => void handleStateChange("active")} disabled={isTransitioning}>
-                  <Play size={14} />
-                  Start
-                </button>
-                <button className="btn btn--danger btn--compact" onClick={handleDelete}>
-                  <Trash2 size={14} />
-                  Delete
-                </button>
-              </>
-            )}
-            {agent.state === "active" && (
-              <button className="btn btn--compact" onClick={() => void handleStateChange("paused")} disabled={isTransitioning}>
-                <Pause size={14} />
-                Pause
-              </button>
-            )}
-            {agent.state === "paused" && (
-              <button className="btn btn-task-create btn--compact" onClick={() => void handleStateChange("active")} disabled={isTransitioning}>
-                <Play size={14} />
-                Resume
-              </button>
-            )}
-            {agent.state === "running" && (
-              <>
+          <div className="agent-detail-header-actions">
+            {/* Lifecycle controls: compact action buttons */}
+            <div className="agent-detail-controls">
+              {/* State-dependent action buttons */}
+              {agent.state === "idle" && (
+                <>
+                  <button className="btn btn-task-create btn--compact" onClick={() => void handleStateChange("active")} disabled={isTransitioning}>
+                    <Play size={14} />
+                    Start
+                  </button>
+                  <button className="btn btn--danger btn--compact" onClick={handleDelete}>
+                    <Trash2 size={14} />
+                    Delete
+                  </button>
+                </>
+              )}
+              {agent.state === "active" && (
                 <button className="btn btn--compact" onClick={() => void handleStateChange("paused")} disabled={isTransitioning}>
                   <Pause size={14} />
                   Pause
                 </button>
-                <button className="btn btn--danger btn--compact" onClick={() => void handleStateChange("terminated")} disabled={isTransitioning}>
-                  <Square size={14} />
-                  Stop
-                </button>
-              </>
-            )}
-            {agent.state === "error" && (
-              <>
+              )}
+              {agent.state === "paused" && (
                 <button className="btn btn-task-create btn--compact" onClick={() => void handleStateChange("active")} disabled={isTransitioning}>
                   <Play size={14} />
-                  Retry
+                  Resume
                 </button>
-                <button className="btn btn--danger btn--compact" onClick={() => void handleStateChange("terminated")} disabled={isTransitioning}>
-                  <Square size={14} />
-                  Stop
-                </button>
-              </>
-            )}
-            {agent.state === "terminated" && (
-              <>
-                <button className="btn btn-task-create btn--compact" onClick={() => void handleStateChange("active")} disabled={isTransitioning}>
-                  <Play size={14} />
-                  Start
-                </button>
-                <button className="btn btn--danger btn--compact" onClick={handleDelete}>
-                  <Trash2 size={14} />
-                  Delete
-                </button>
-              </>
-            )}
-          </div>
+              )}
+              {agent.state === "running" && (
+                <>
+                  <button className="btn btn--compact" onClick={() => void handleStateChange("paused")} disabled={isTransitioning}>
+                    <Pause size={14} />
+                    Pause
+                  </button>
+                  <button className="btn btn--danger btn--compact" onClick={() => void handleStateChange("terminated")} disabled={isTransitioning}>
+                    <Square size={14} />
+                    Stop
+                  </button>
+                </>
+              )}
+              {agent.state === "error" && (
+                <>
+                  <button className="btn btn-task-create btn--compact" onClick={() => void handleStateChange("active")} disabled={isTransitioning}>
+                    <Play size={14} />
+                    Retry
+                  </button>
+                  <button className="btn btn--danger btn--compact" onClick={() => void handleStateChange("terminated")} disabled={isTransitioning}>
+                    <Square size={14} />
+                    Stop
+                  </button>
+                </>
+              )}
+              {agent.state === "terminated" && (
+                <>
+                  <button className="btn btn-task-create btn--compact" onClick={() => void handleStateChange("active")} disabled={isTransitioning}>
+                    <Play size={14} />
+                    Start
+                  </button>
+                  <button className="btn btn--danger btn--compact" onClick={handleDelete}>
+                    <Trash2 size={14} />
+                    Delete
+                  </button>
+                </>
+              )}
+            </div>
 
-          {/* Utility actions: refresh + close */}
-          <div className="agent-detail-utility-actions">
-            <button className="btn-icon" onClick={() => void loadAgent()} title="Refresh">
-              <RefreshCw size={16} />
-            </button>
-            {!inline && (
-              <button className="btn-icon" onClick={onClose} aria-label="Close" title="Close">
-                <X size={20} />
+            {/* Utility actions: refresh + close */}
+            <div className="agent-detail-utility-actions">
+              <button className="btn-icon" onClick={() => void loadAgent()} title="Refresh">
+                <RefreshCw size={16} />
               </button>
-            )}
+              {!inline && (
+                <button className="btn-icon" onClick={onClose} aria-label="Close" title="Close">
+                  <X size={20} />
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -626,7 +622,6 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
             <LogsTab
               logs={logs}
               isStreaming={isStreaming}
-              containerRef={logContainerRef}
               hasTask={!!agent.taskId || logs.length > 0 || latestRun !== null}
               fallbackLabel={!agent.taskId && latestRun ? `Latest run · ${latestRun.id.slice(0, 8)}` : null}
             />
@@ -860,7 +855,7 @@ function DashboardTab({
           <span className="inline-badge" style={{ background: stateStyle.bg, color: stateStyle.text }}>{agent.state}</span>
         </div>
         <div className="dashboard-summary-hero__meta">
-          <span className="dashboard-summary-hero__health" title={health.label}>{health.icon} {health.label}</span>
+          <span className="dashboard-summary-hero__health" title={health.reason ?? health.label}>{health.icon} {health.label}</span>
           <span>Role: {agent.role}</span>
           <span>
             <span className="dashboard-summary-label">{runtimeHint ? "Runtime" : "Model"}</span>
@@ -891,7 +886,7 @@ function DashboardTab({
           </div>
           <div>
             <p className="dashboard-summary-label">Status</p>
-            <p className="dashboard-summary-health-row"><span className={cn("status-dot", agent.state === "running" && "status-dot--running")} />{health.label}</p>
+            <p className="dashboard-summary-health-row"><span className={cn("status-dot", agent.state === "running" && "status-dot--running")} />{health.label}{health.reason && <span className="text-secondary" style={{ marginLeft: 'var(--space-xs)', fontSize: '12px' }} title={health.reason}>({health.reason})</span>}</p>
           </div>
         </div>
       </section>
@@ -971,13 +966,11 @@ function DashboardTab({
 function LogsTab({
   logs,
   isStreaming,
-  containerRef,
   hasTask,
   fallbackLabel,
 }: {
   logs: AgentLogEntry[];
   isStreaming: boolean;
-  containerRef: React.RefObject<HTMLDivElement | null>;
   hasTask: boolean;
   fallbackLabel?: string | null;
 }) {
@@ -1009,84 +1002,17 @@ function LogsTab({
           </span>
         )}
       </div>
-      
-      <div ref={containerRef} className="logs-container">
-        {logs.length === 0 ? (
-          <div className="logs-empty">
-            <FileText size={48} opacity={0.3} />
-            <p>No log entries yet</p>
-            <p className="text-muted">
-              {isStreaming ? "Waiting for activity..." : "Logs will appear here when the agent is active"}
-            </p>
-          </div>
-        ) : (
-          logs.map((entry, i) => {
-            const prevEntry = i > 0 ? logs[i - 1] : undefined;
-            const showTimestamp = !prevEntry || prevEntry.agent !== entry.agent;
-            return (
-              <LogEntry key={`${entry.timestamp}-${i}`} entry={entry} showTimestamp={showTimestamp} />
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-}
-
-function LogEntry({ entry, showTimestamp }: { entry: AgentLogEntry; showTimestamp: boolean }) {
-  const getEntryStyles = () => {
-    switch (entry.type) {
-      case "tool":
-        return {
-          color: "var(--accent)",
-          borderLeft: "3px solid var(--accent)",
-          background: "var(--log-tool-bg)",
-        };
-      case "tool_result":
-        return {
-          color: "var(--color-success)",
-          borderLeft: "3px solid var(--color-success)",
-          background: "var(--log-success-bg)",
-        };
-      case "tool_error":
-        return {
-          color: "var(--color-error)",
-          borderLeft: "3px solid var(--color-error)",
-          background: "var(--log-error-bg)",
-        };
-      case "thinking":
-        return {
-          color: "var(--text-muted)",
-          fontStyle: "italic" as const,
-          opacity: 0.7,
-        };
-      default:
-        return {
-          color: "var(--text)",
-        };
-    }
-  };
-
-  const styles = getEntryStyles();
-  const timestamp = new Date(entry.timestamp).toLocaleTimeString();
-
-  return (
-    <div className="log-entry" style={styles}>
-      {showTimestamp && (
-        <span className="log-timestamp">[{timestamp}]</span>
+      {logs.length === 0 ? (
+        <div className="logs-empty">
+          <FileText size={48} opacity={0.3} />
+          <p>No log entries yet</p>
+          <p className="text-muted">
+            {isStreaming ? "Waiting for activity..." : "Logs will appear here when the agent is active"}
+          </p>
+        </div>
+      ) : (
+        <AgentLogViewer entries={logs} loading={false} />
       )}
-      {entry.agent && (
-        <span className="log-agent">[{entry.agent}]</span>
-      )}
-      {entry.type === "tool" && <span className="log-icon">⚡</span>}
-      {entry.type === "tool_result" && <span className="log-icon">✓</span>}
-      {entry.type === "tool_error" && <span className="log-icon">✗</span>}
-      <span className="log-text">
-        {entry.text}
-        {entry.detail && (
-          <span className="log-detail"> — {entry.detail}</span>
-        )}
-      </span>
     </div>
   );
 }

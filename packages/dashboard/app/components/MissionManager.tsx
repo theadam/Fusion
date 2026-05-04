@@ -3727,7 +3727,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
   const manager = (
     <div
       ref={modalRef}
-      className={`mission-manager mission-manager--desktop-split${isInline ? " mission-manager--inline" : ""}`}
+      className={`mission-manager mission-manager--desktop${isInline ? " mission-manager--inline" : ""}`}
       role={isInline ? undefined : "dialog"}
       aria-modal={isInline ? undefined : true}
       aria-label={isInline ? undefined : "Mission Manager"}
@@ -3735,7 +3735,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
     >
       <div className={`mission-manager__header${isInline ? " mission-manager__header--inline" : ""}`}>
         <div className="mission-manager__header-title">
-          {isMobile && selectedMission && (
+          {selectedMission && (
             <button
               className="mission-manager__back-btn"
               onClick={handleBackToList}
@@ -3747,8 +3747,11 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
             </button>
           )}
           <Target size={18} className="mission-manager__header-icon" />
-          <h2 className="mission-manager__title">
-            {selectedMission ? selectedMission.title : "Missions"}
+          <h2 className="mission-manager__title" data-testid="mission-header-title">
+            <span className="mission-manager__title-text mission-manager__title-text--desktop">Missions</span>
+            <span className="mission-manager__title-text mission-manager__title-text--mobile">
+              {selectedMission ? selectedMission.title : "Missions"}
+            </span>
           </h2>
         </div>
         {!isInline && (
@@ -3786,7 +3789,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
         </div>
       ) : (
         <div className="mission-manager__split">
-          <div className="mission-manager__sidebar">
+          <aside className="mission-manager__sidebar" data-testid="mission-sidebar" aria-label="Mission list">
             <div className="mission-manager__sidebar-header">
               <span className="mission-manager__sidebar-title">Missions</span>
               <div className="mission-manager__sidebar-actions">
@@ -3818,7 +3821,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
                 renderMissionListContent({ hideBottomButtons: true })
               )}
             </div>
-          </div>
+          </aside>
 
           <div className="mission-manager__detail-pane">
             {detailLoading ? (
@@ -3829,8 +3832,8 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
             ) : selectedMission ? (
               renderMissionDetailContent()
             ) : (
-              <div className="mission-manager__detail-pane-empty">
-                <Target size={24} />
+              <div className="mission-manager__detail-pane-empty" data-testid="mission-empty-detail">
+                <Target size={32} />
                 <span>Select a mission to view details</span>
               </div>
             )}

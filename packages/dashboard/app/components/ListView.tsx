@@ -25,9 +25,14 @@ const COLUMN_COLOR_MAP: Record<Column, string> = {
   archived: "var(--text-secondary)",
 };
 
-const ACTIVE_STATUSES = new Set(["planning", "researching", "executing", "finalizing", "merging"]);
+const ACTIVE_STATUSES = new Set(["planning", "researching", "executing", "finalizing", "merging", "merging-fix"]);
 
 type SortField = "id" | "title" | "status" | "column";
+
+function getTaskStatusLabel(status: string): string {
+  if (status === "merging-fix") return "Merging fixes…";
+  return status;
+}
 type SortDirection = "asc" | "desc";
 
 // Column visibility types
@@ -164,7 +169,7 @@ interface ListViewProps {
   onMergeTask: (id: string) => Promise<MergeResult>;
   onResetTask?: (id: string) => Promise<Task>;
   onDuplicateTask?: (id: string) => Promise<Task>;
-  onOpenDetail: (task: Task | TaskDetail) => void;
+  onOpenDetail: (task: Task | TaskDetail, options?: { origin?: "list-mobile" }) => void;
   addToast: (message: string, type?: ToastType) => void;
   globalPaused?: boolean;
   onNewTask?: () => void;
@@ -286,9 +291,7 @@ export function ListView({
     }
   }, [collapsedSections, projectId]);
 
-  // Column dropdown state
-  const [columnDropdownOpen, setColumnDropdownOpen] = useState(false);
-  const columnDropdownRef = useRef<HTMLDivElement>(null);
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(false);
 
   // Selection state - initialize from localStorage
   const [bulkEditEnabled, setBulkEditEnabled] = useState(false);
@@ -438,30 +441,6 @@ export function ListView({
     });
   }, []);
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    if (!columnDropdownOpen) return;
-
-    const handleClickOutside = (e: MouseEvent) => {
-      if (columnDropdownRef.current && !columnDropdownRef.current.contains(e.target as Node)) {
-        setColumnDropdownOpen(false);
-      }
-    };
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setColumnDropdownOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleEscape);
-
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [columnDropdownOpen]);
 
   // Column display labels
   const COLUMN_LABELS_MAP: Record<ListColumn, string> = {
@@ -755,7 +734,7 @@ export function ListView({
   const handleRowClick = useCallback(
     (task: Task) => {
       if (isMobile) {
-        onOpenDetail(task);
+        onOpenDetail(task, { origin: "list-mobile" });
         return;
       }
 
@@ -959,148 +938,39 @@ export function ListView({
     );
   };
 
-  return (
-    <div className="list-view">
-      <div className="list-toolbar">
-        <div className="list-column-toggle" ref={columnDropdownRef}>
-          <button
-            className="btn btn-sm"
-            onClick={() => setColumnDropdownOpen((prev) => !prev)}
-            aria-expanded={columnDropdownOpen}
-            aria-haspopup="menu"
-          >
-            <Columns3 size={14} />
-            Columns
-          </button>
-          {columnDropdownOpen && (
-            <div className="list-column-dropdown" role="menu">
-              {ALL_LIST_COLUMNS.map((column) => {
-                const isVisible = visibleColumns.has(column);
-                const isLastVisible = isVisible && visibleColumns.size === 1;
-                return (
-                  <label
-                    key={column}
-                    className={`list-column-dropdown-item${isLastVisible ? " disabled" : ""}`}
-                    role="menuitem"
-                    title={isLastVisible ? "At least one column must be visible" : ""}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isVisible}
-                      onChange={() => toggleColumn(column)}
-                      disabled={isLastVisible}
-                    />
-                    <span>{COLUMN_LABELS_MAP[column]}</span>
-                  </label>
-                );
-              })}
-            </div>
-          )}
-        </div>
-        <button
-          className="btn btn-sm list-hide-done-toggle"
-          onClick={() => setHideDoneTasks((prev) => !prev)}
-          aria-pressed={hideDoneTasks}
-          title={hideDoneTasks ? "Show done tasks" : "Hide done tasks"}
-        >
-          {hideDoneTasks ? <Eye size={14} /> : <EyeOff size={14} />}
-          {hideDoneTasks ? "Show Done" : "Hide Done"}
-        </button>
-        <div className="list-stats">
-          {selectedColumn
-            ? `${filteredCount} of ${tasks.length} tasks in ${COLUMN_LABELS[selectedColumn]}`
-            : `${filteredCount} of ${tasks.length} tasks`}
-          {hiddenCompletedCount > 0 && !selectedColumn && (
-            <span className="list-stats-hidden"> ({hiddenCompletedCount} hidden)</span>
-          )}
-          {selectedColumn && (
-            <button
-              className="btn btn-sm list-clear-column-filter-btn"
-              onClick={clearColumnFilter}
-              aria-label="Clear column filter"
+  const renderViewOptionsPanel = (panelId: string) => (
+    <div id={panelId} className="list-view-options-panel">
+      <div className="list-view-options-columns">
+        {ALL_LIST_COLUMNS.map((column) => {
+          const isVisible = visibleColumns.has(column);
+          const isLastVisible = isVisible && visibleColumns.size === 1;
+          return (
+            <label
+              key={column}
+              className={`list-column-dropdown-item${isLastVisible ? " disabled" : ""}`}
+              title={isLastVisible ? "At least one column must be visible" : ""}
             >
-              Clear
-            </button>
-          )}
-        </div>
-        <button className="btn btn-sm" onClick={toggleBulkEdit} aria-pressed={bulkEditEnabled}>
-          {bulkEditEnabled ? "Done Editing" : "Bulk Edit"}
-        </button>
-        {bulkEditEnabled && selectedTaskIds.size > 0 && (
-          <div className="list-selection-stats">
-            <span className="selection-count">{selectedTaskIds.size} selected</span>
-            <button className="btn btn-sm btn-link" onClick={clearSelection}>
-              Clear
-            </button>
-          </div>
-        )}
-        {/* Bulk Edit Toolbar */}
-        {bulkEditEnabled && selectedTaskIds.size > 0 && availableModels && availableModels.length > 0 && (
-          <div className="bulk-edit-toolbar">
-            <span className="bulk-edit-label">Bulk Edit Models &amp; Node:</span>
-            <div className="bulk-edit-dropdown">
-              <CustomModelDropdown
-                models={availableModels}
-                value={executorModel}
-                onChange={setExecutorModel}
-                label="Executor Model"
-                noChangeValue="__no_change__"
-                noChangeLabel="No change"
-                favoriteProviders={favoriteProviders}
-                onToggleFavorite={onToggleFavorite}
-                favoriteModels={favoriteModels}
-                onToggleModelFavorite={onToggleModelFavorite}
+              <input
+                type="checkbox"
+                checked={isVisible}
+                onChange={() => toggleColumn(column)}
+                disabled={isLastVisible}
               />
-            </div>
-            <div className="bulk-edit-dropdown">
-              <CustomModelDropdown
-                models={availableModels}
-                value={validatorModel}
-                onChange={setValidatorModel}
-                label="Reviewer Model"
-                noChangeValue="__no_change__"
-                noChangeLabel="No change"
-                favoriteProviders={favoriteProviders}
-                onToggleFavorite={onToggleFavorite}
-                favoriteModels={favoriteModels}
-                onToggleModelFavorite={onToggleModelFavorite}
-              />
-            </div>
-            <div className="bulk-edit-dropdown bulk-edit-node-wrap">
-              <select
-                className="select bulk-node-select"
-                value={nodeOverride}
-                onChange={(e) => setNodeOverride(e.target.value)}
-                aria-label="Node Override"
-                disabled={isLoadingNodes}
-              >
-                <option value="__no_change__">No change</option>
-                <option value="">Use project default</option>
-                {availableNodes.map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {`${getNodeStatusSymbol(node.status)} ${node.name || node.id} (${getNodeStatusLabel(node.status)})`}
-                  </option>
-                ))}
-              </select>
-              {selectedOverrideNode ? <NodeHealthDot status={selectedOverrideNode.status} showLabel /> : null}
-            </div>
-            <button
-              className="btn btn-primary btn-sm bulk-edit-apply-btn"
-              onClick={handleApplyBulkUpdate}
-              disabled={isApplying || (executorModel === "__no_change__" && validatorModel === "__no_change__" && nodeOverride === "__no_change__")}
-            >
-              {isApplying ? "Applying..." : "Apply"}
-            </button>
-          </div>
-        )}
-        {onNewTask ? (
-          <button className="btn btn-task-create btn-sm" onClick={onNewTask}>
-            + New Task
-          </button>
-        ) : null}
+              <span>{COLUMN_LABELS_MAP[column]}</span>
+            </label>
+          );
+        })}
       </div>
-
-      <div className="list-drop-zones">
+      <button
+        className="btn btn-sm list-hide-done-toggle"
+        onClick={() => setHideDoneTasks((prev) => !prev)}
+        aria-pressed={hideDoneTasks}
+        title={hideDoneTasks ? "Show done tasks" : "Hide done tasks"}
+      >
+        {hideDoneTasks ? <Eye size={14} /> : <EyeOff size={14} />}
+        {hideDoneTasks ? "Show Done" : "Hide Done"}
+      </button>
+      <div className="list-drop-zones list-drop-zones--sidebar">
         {COLUMNS.map((column) => {
           const totalCount = tasks.filter((t) => t.column === column).length;
           const isCompletedColumn = column === "done" || column === "archived";
@@ -1117,7 +987,7 @@ export function ListView({
               onDrop={(e) => handleColumnDrop(e, column)}
               data-column={column}
             >
-              <span className="drop-zone-dot" style={{ background: COLUMN_COLOR_MAP[column] }} />
+              <span className={`list-section-dot dot-${column}`} />
               <span className="drop-zone-label">{COLUMN_LABELS[column]}</span>
               <span className="drop-zone-count">
                 {showPartial ? `${visibleCount} of ${totalCount}` : totalCount}
@@ -1126,6 +996,42 @@ export function ListView({
           );
         })}
       </div>
+    </div>
+  );
+
+  return (
+    <div className="list-view">
+      {isMobile && (
+        <>
+          <div className="list-toolbar">
+            <button className="btn btn-sm" onClick={toggleBulkEdit} aria-pressed={bulkEditEnabled}>
+              {bulkEditEnabled ? "Done Editing" : "Bulk Edit"}
+            </button>
+            {onNewTask ? (
+              <button className="btn btn-task-create btn-sm" onClick={onNewTask}>
+                + New Task
+              </button>
+            ) : null}
+            <button
+              className="btn btn-sm list-view-options-toggle"
+              onClick={() => setViewOptionsOpen((prev) => !prev)}
+              aria-expanded={viewOptionsOpen}
+              aria-controls="list-view-options-panel-mobile"
+            >
+              <Columns3 size={14} />
+              View options
+            </button>
+            <div className="list-stats">
+              {selectedColumn
+                ? `${filteredCount} of ${tasks.length} tasks in ${COLUMN_LABELS[selectedColumn]}`
+                : `${filteredCount} of ${tasks.length} tasks`}
+            </div>
+          </div>
+          {viewOptionsOpen ? (
+            <div className="list-toolbar-mobile-options">{renderViewOptionsPanel("list-view-options-panel-mobile")}</div>
+          ) : null}
+        </>
+      )}
 
       <div className="list-table-container">
         <div className={isMobile ? "" : "list-split-layout"} data-testid={isMobile ? undefined : "list-split-layout"} ref={splitLayoutRef}>
@@ -1135,6 +1041,114 @@ export function ListView({
             ref={splitSidebarRef}
             style={isMobile ? undefined : { width: `${sidebarWidth}px` }}
           >
+            {!isMobile && (
+              <aside className="list-sidebar-controls" aria-label="List controls">
+                <div className="list-sidebar-controls__header">
+                  <p className="list-stats">
+                    {selectedColumn
+                      ? `${filteredCount} of ${tasks.length} tasks in ${COLUMN_LABELS[selectedColumn]}`
+                      : `${filteredCount} of ${tasks.length} tasks`}
+                    {hiddenCompletedCount > 0 && !selectedColumn && (
+                      <span className="list-stats-hidden"> ({hiddenCompletedCount} hidden)</span>
+                    )}
+                  </p>
+                  <div className="list-sidebar-controls__actions">
+                    {onNewTask ? (
+                      <button className="btn btn-task-create btn-sm" onClick={onNewTask}>
+                        + New Task
+                      </button>
+                    ) : null}
+                    <button className="btn btn-sm" onClick={toggleBulkEdit} aria-pressed={bulkEditEnabled}>
+                      {bulkEditEnabled ? "Done Editing" : "Bulk Edit"}
+                    </button>
+                  </div>
+                  <div className="list-sidebar-summary-chips">
+                    {selectedColumn ? (
+                      <button className="btn btn-sm" onClick={clearColumnFilter} aria-label="Clear column filter">
+                        {`Filter: ${COLUMN_LABELS[selectedColumn]}`}
+                      </button>
+                    ) : null}
+                    {hideDoneTasks ? <span className="list-sidebar-chip">Done hidden</span> : null}
+                    {bulkEditEnabled ? (
+                      <span className="list-sidebar-chip">Bulk edit</span>
+                    ) : null}
+                    {bulkEditEnabled && selectedTaskIds.size > 0 ? (
+                      <button className="btn btn-sm" onClick={clearSelection}>
+                        {`${selectedTaskIds.size} selected`}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                <button
+                  className="btn btn-sm list-view-options-toggle"
+                  onClick={() => setViewOptionsOpen((prev) => !prev)}
+                  aria-expanded={viewOptionsOpen}
+                  aria-controls="list-view-options-panel"
+                >
+                  <Columns3 size={14} />
+                  View options
+                </button>
+                {viewOptionsOpen && renderViewOptionsPanel("list-view-options-panel")}
+                {bulkEditEnabled && selectedTaskIds.size > 0 && availableModels && availableModels.length > 0 && (
+                  <div className="bulk-edit-toolbar">
+                    <span className="bulk-edit-label">Bulk Edit Models &amp; Node:</span>
+                    <div className="bulk-edit-dropdown">
+                      <CustomModelDropdown
+                        models={availableModels}
+                        value={executorModel}
+                        onChange={setExecutorModel}
+                        label="Executor Model"
+                        noChangeValue="__no_change__"
+                        noChangeLabel="No change"
+                        favoriteProviders={favoriteProviders}
+                        onToggleFavorite={onToggleFavorite}
+                        favoriteModels={favoriteModels}
+                        onToggleModelFavorite={onToggleModelFavorite}
+                      />
+                    </div>
+                    <div className="bulk-edit-dropdown">
+                      <CustomModelDropdown
+                        models={availableModels}
+                        value={validatorModel}
+                        onChange={setValidatorModel}
+                        label="Reviewer Model"
+                        noChangeValue="__no_change__"
+                        noChangeLabel="No change"
+                        favoriteProviders={favoriteProviders}
+                        onToggleFavorite={onToggleFavorite}
+                        favoriteModels={favoriteModels}
+                        onToggleModelFavorite={onToggleModelFavorite}
+                      />
+                    </div>
+                    <div className="bulk-edit-dropdown bulk-edit-node-wrap">
+                      <select
+                        className="select bulk-node-select"
+                        value={nodeOverride}
+                        onChange={(e) => setNodeOverride(e.target.value)}
+                        aria-label="Node Override"
+                        disabled={isLoadingNodes}
+                      >
+                        <option value="__no_change__">No change</option>
+                        <option value="">Use project default</option>
+                        {availableNodes.map((node) => (
+                          <option key={node.id} value={node.id}>
+                            {`${getNodeStatusSymbol(node.status)} ${node.name || node.id} (${getNodeStatusLabel(node.status)})`}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedOverrideNode ? <NodeHealthDot status={selectedOverrideNode.status} showLabel /> : null}
+                    </div>
+                    <button
+                      className="btn btn-primary btn-sm bulk-edit-apply-btn"
+                      onClick={handleApplyBulkUpdate}
+                      disabled={isApplying || (executorModel === "__no_change__" && validatorModel === "__no_change__" && nodeOverride === "__no_change__")}
+                    >
+                      {isApplying ? "Applying..." : "Apply"}
+                    </button>
+                  </div>
+                )}
+              </aside>
+            )}
             <div className="list-quick-entry-above-table">
               <QuickEntryBox 
                 onCreate={onQuickCreate ?? (async () => addToast("Task creation not available", "error"))} 
@@ -1248,11 +1262,13 @@ export function ListView({
                                   </span>
                                 )}
                                 <span className="list-card-spacer" />
-                                {isStuckState ? (
+                                {isPaused && task.pausedByAgentId ? (
+                                  <span className="list-status-badge paused">paused by agent</span>
+                                ) : isStuckState ? (
                                   <span className="list-status-badge stuck">Stuck</span>
                                 ) : hasStatus ? (
                                   <span className={`list-status-badge list-status-badge--${task.column}${isFailed ? " failed" : ""}${isAgentActive ? " pulsing" : ""}`}>
-                                    {task.status}
+                                    {getTaskStatusLabel(task.status ?? "")}
                                   </span>
                                 ) : null}
                               </div>
@@ -1442,7 +1458,9 @@ export function ListView({
                                 )}
                                 {visibleColumns.has("status") && (
                                   <td className="list-cell">
-                                    {isStuckState ? (
+                                    {isPaused && task.pausedByAgentId ? (
+                                      <span className="list-status-badge paused">paused by agent</span>
+                                    ) : isStuckState ? (
                                       <span className="list-status-badge stuck">
                                         Stuck
                                       </span>
@@ -1452,7 +1470,7 @@ export function ListView({
                                           isAgentActive ? " pulsing" : ""
                                         }`}
                                       >
-                                        {task.status}
+                                        {getTaskStatusLabel(task.status ?? "")}
                                       </span>
                                     ) : (
                                       <span className="list-status-badge">-</span>

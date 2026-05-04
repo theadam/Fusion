@@ -2,6 +2,178 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.17.2
+
+### @fusion/core
+
+#### Patch Changes
+
+- 17a6634: Fix pre-merge workflow steps stalling on tasks with no relevant changes (FN-3327 post-mortem).
+
+  - **`@fusion/engine`**: `executeWorkflowStep` now computes the diff scope (`git diff --name-only` plus `--shortstat` against `task.baseCommitSha`) before spawning the reviewer agent and injects a "Diff Scope" block into the system prompt. The block lists every file the task actually changed and adds explicit scoping rules: review only those files, and if none match the step's category respond immediately with a short approval line and stop. Without this, an open-ended review prompt (e.g. WS-005 "Frontend UX Design") would drift into pre-existing files matching the task description's keywords, exhaust the 360 s timeout, and trigger the auto-revive → re-finalize → re-fail loop that had FN-3327 wedged in `in-review`. Both git calls are best-effort; failures degrade to a "no modified files detected" notice rather than blocking the step.
+  - **`@fusion/core`**: The built-in `frontend-ux-design` workflow step template (WS-005) now opens with a FAST-BAIL rule telling the reviewer to inspect the Diff Scope first and return an immediate one-line approval when no UI/CSS/component files are present. New installs and freshly-materialized templates pick this up automatically; existing DB rows are unaffected but are still rescued by the executor-side scope injection above.
+
+### @fusion/dashboard
+
+#### Patch Changes
+
+- Updated dependencies [17a6634]
+  - @fusion/engine@0.17.2
+  - @fusion/core@0.17.2
+  - @fusion-plugin-examples/dependency-graph@0.1.5
+  - @fusion-plugin-examples/hermes-runtime@0.2.24
+  - @fusion-plugin-examples/openclaw-runtime@0.2.24
+  - @fusion-plugin-examples/paperclip-runtime@0.2.24
+
+### @fusion/engine
+
+#### Patch Changes
+
+- 17a6634: Fix pre-merge workflow steps stalling on tasks with no relevant changes (FN-3327 post-mortem).
+
+  - **`@fusion/engine`**: `executeWorkflowStep` now computes the diff scope (`git diff --name-only` plus `--shortstat` against `task.baseCommitSha`) before spawning the reviewer agent and injects a "Diff Scope" block into the system prompt. The block lists every file the task actually changed and adds explicit scoping rules: review only those files, and if none match the step's category respond immediately with a short approval line and stop. Without this, an open-ended review prompt (e.g. WS-005 "Frontend UX Design") would drift into pre-existing files matching the task description's keywords, exhaust the 360 s timeout, and trigger the auto-revive → re-finalize → re-fail loop that had FN-3327 wedged in `in-review`. Both git calls are best-effort; failures degrade to a "no modified files detected" notice rather than blocking the step.
+  - **`@fusion/core`**: The built-in `frontend-ux-design` workflow step template (WS-005) now opens with a FAST-BAIL rule telling the reviewer to inspect the Diff Scope first and return an immediate one-line approval when no UI/CSS/component files are present. New installs and freshly-materialized templates pick this up automatically; existing DB rows are unaffected but are still rescued by the executor-side scope injection above.
+
+- Updated dependencies [17a6634]
+  - @fusion/core@0.17.2
+  - @fusion/pi-claude-cli@0.17.2
+
+### @fusion/plugin-sdk
+
+#### Patch Changes
+
+- Updated dependencies [17a6634]
+  - @fusion/core@0.17.2
+
+### @runfusion/fusion
+
+#### Patch Changes
+
+- bacc103: Fix Codex auth interoperability, remote OAuth manual-code login flow, and chat fallback/error handling.
+
+### runfusion.ai
+
+#### Patch Changes
+
+- Updated dependencies [bacc103]
+  - @runfusion/fusion@0.17.2
+
+## 0.17.1
+
+### @fusion/dashboard
+
+#### Patch Changes
+
+- 08aa64e: Fix mobile keyboard regressions in the dashboard.
+
+  - **Dashboard pushed up after closing a modal on mobile.** Adds a shared `useMobileScrollLock` hook that pins `body` with `position: fixed; top: -scrollY; width: 100%` while a fullscreen mobile overlay is open and restores scroll on cleanup — the same pattern Bootstrap, Headless UI, and Stripe Elements use to prevent iOS Safari from scrolling the document (and shifting `visualViewport.offsetTop`) when an input inside a `position: fixed` overlay is focused. Reference-counted so nested overlays don't release each other's locks. Wired into TodoModal, PlanningModeModal, TaskDetailModal, NewTaskModal, SettingsModal, MailboxModal, AddNodeModal, MissionInterviewModal, MilestoneSliceInterviewModal, SubtaskBreakdownModal, GitHubImportModal, AgentGenerationModal, AgentImportModal, ScriptsModal, ResearchTaskActionModal, and ChatView (replacing its inline body-overflow effect).
+  - **Auto-reload prompt missed rebuilds.** Widens `computeBuildVersion` in `vite.config.ts` to hash the entire `app/` source tree (FN-3333 follow-up). The previous version only hashed `app/main.tsx` and `package.json`, so edits to any other component or stylesheet produced an identical build version and the version-check poll never noticed the rebuild.
+  - **ChatView composer crawled down with iOS's keyboard-dismiss animation.** `useMobileKeyboard` now requires a focused input for `keyboardOpen=true`. The moment any input blurs, `keyboardOpen` flips to `false` instead of waiting for iOS's slow visualViewport animation to settle (hundreds of ms). This propagates to App-level `mobileKeyboardOpen` so the MobileNavBar reappears and `project-content` regains its nav-bar padding immediately — chat-thread, modals, and any other consumer all snap to their post-keyboard layout in one frame.
+
+- Updated dependencies [c2f6dd3]
+  - @fusion/engine@0.17.1
+  - @fusion/core@0.17.1
+  - @fusion-plugin-examples/dependency-graph@0.1.4
+  - @fusion-plugin-examples/hermes-runtime@0.2.23
+  - @fusion-plugin-examples/openclaw-runtime@0.2.23
+  - @fusion-plugin-examples/paperclip-runtime@0.2.23
+
+### @fusion/engine
+
+#### Patch Changes
+
+- c2f6dd3: Fix heartbeat and manual agent runs ignoring the agent's configured model. The dashboard saves `runtimeConfig.model` as a combined `"provider/modelId"` string, but heartbeat was reading non-existent split `modelProvider`/`modelId` fields, causing sessions to fall through to pi's default model (often `openai-codex`) and fail with "No API key for provider: openai-codex".
+  - @fusion/core@0.17.1
+  - @fusion/pi-claude-cli@0.17.1
+
+### @fusion/plugin-sdk
+
+#### Patch Changes
+
+- @fusion/core@0.17.1
+
+### runfusion.ai
+
+#### Patch Changes
+
+- @runfusion/fusion@0.17.1
+
+## 0.17.0
+
+### @fusion/dashboard
+
+#### Patch Changes
+
+- @fusion/core@0.17.0
+- @fusion/engine@0.17.0
+- @fusion-plugin-examples/dependency-graph@0.1.3
+- @fusion-plugin-examples/hermes-runtime@0.2.22
+- @fusion-plugin-examples/openclaw-runtime@0.2.22
+- @fusion-plugin-examples/paperclip-runtime@0.2.22
+
+### @fusion/engine
+
+#### Patch Changes
+
+- @fusion/core@0.17.0
+- @fusion/pi-claude-cli@0.17.0
+
+### @fusion/plugin-sdk
+
+#### Patch Changes
+
+- @fusion/core@0.17.0
+
+### @runfusion/fusion
+
+#### Minor Changes
+
+- 6724cf5: Add `autoReloadOnVersionChange` global setting to make the dashboard's automatic reload on version changes optional. Users can disable auto-reload in Settings → General → Updates.
+- 7f3fb77: Harden research subsystem with bounded rate/concurrency limits, cancellation safety, timeout handling, bounded retries, and graceful disabled/setup/error states across dashboard, API, CLI, and agent tooling.
+- fca870f: Add Docker target connectivity support for local daemon, Docker contexts, and direct host/TLS configuration with dashboard API and UI selectors.
+- d812427: Add mesh configuration generation service and API routes for Docker node provisioning (FN-3111). New exports from `@fusion/core`: `MeshConfigGenerator`, `MeshConfigGeneratorInput`, `FullProvisioningInput`, `MeshConnectionConfig`, `MeshConfigResult`.
+
+#### Patch Changes
+
+- ba893b8: Fix chat progress indicator on reload: show "Connecting…" indicator when dashboard reloads during active AI generation
+- 5291a6f: Fix custom model providers (e.g., Kimi, LM Studio, Ollama) failing with "No API key" error. The auth storage proxy now reads API keys from models.json as a fallback, and a Proxy set trap ensures the ModelRegistry's fallback resolver works correctly through the proxy.
+- 3db1752: Fix Planning Mode modal being pushed up when virtual keyboard opens on mobile. The modal now uses `useMobileKeyboard` to track viewport changes and adjusts its height via CSS variables instead of relying on `100dvh`.
+- 85d02c8: Fix spurious "new version" reloads in the dashboard by making the build version deterministic based on git commit hash instead of a random token generated per build.
+- ea5b7af: Fix mobile dashboard shifted state after closing Todo modal. The TodoModal now uses `useMobileKeyboard` to track visual viewport changes, preventing the underlying dashboard layout from becoming offset when the virtual keyboard opens and closes.
+- a82c3dc: Fix project memory tools failing in fresh worktrees and bundled runtime contexts when an internal memory backend artifact is missing. `fn_memory_search` and `fn_memory_get` now resolve the backend through bundled runtime code instead of a fragile side-load import path.
+- a47f319: Restore dashboard chat reply rendering for both full Chat and Quick Chat by fixing shared streaming response behavior and follow-up UX styling isolation regressions.
+- 9309c8c: Fix planning mode reasoning visibility: AI thinking output is now preserved as expandable conversation history when transitioning from the loading state to the first question or summary, and when resuming persisted sessions.
+- b9b5c08: Fix mobile dashboard layout offset after modal keyboard dismissal. Modal inputs no longer leak keyboard-open state into the underlying dashboard layout, preventing stale bottom-padding offsets.
+- c76d138: Fix infinite todo↔in-review loop on tasks whose previous run exhausted their merge budget. The scheduler now resets `mergeRetries` to 0 when dispatching a task to in-progress, so each fresh execution gets a fresh merge budget. Without this, a task with `mergeRetries=MAX` and `status=null` would land back in in-review, the merger would refuse it (`canMergeTask` false), and the ghost-review fallback would bounce it to todo every 10 minutes — before the 30-minute merge-cooldown could elapse.
+- 21504f6: Remove "install pi" references from user-facing docs and skill files. Fusion no longer requires pi as a prerequisite — all pi installation instructions and "pi extension" framing have been removed from README, docs, and AI skill files.
+- a1a8d03: Fix skill and settings discovery when agent cwd is a worktree path. Previously, agents running in worktrees couldn't find skills, load project settings, or discover extensions because path resolution used the worktree directory directly instead of walking up to the project root.
+- 63bb62f: Fix extension provider registration using wrong directory when project runs outside engine's working directory.
+- de02fed: Improve merger verification-fix agent: detect stale/missing sibling-workspace `dist/` artifacts (e.g. `Failed to resolve import "./X.js"`, `ERR_MODULE_NOT_FOUND` into another package) and rebuild before assuming a code fix is needed. The agent may also modify files unrelated to the task's original change when needed to make pre-existing build/test breakage on the base branch pass.
+
+### runfusion.ai
+
+#### Patch Changes
+
+- Updated dependencies [6724cf5]
+- Updated dependencies [ba893b8]
+- Updated dependencies [5291a6f]
+- Updated dependencies [3db1752]
+- Updated dependencies [85d02c8]
+- Updated dependencies [ea5b7af]
+- Updated dependencies [7f3fb77]
+- Updated dependencies [fca870f]
+- Updated dependencies [d812427]
+- Updated dependencies [a82c3dc]
+- Updated dependencies [a47f319]
+- Updated dependencies [9309c8c]
+- Updated dependencies [b9b5c08]
+- Updated dependencies [c76d138]
+- Updated dependencies [21504f6]
+- Updated dependencies [a1a8d03]
+- Updated dependencies [63bb62f]
+- Updated dependencies [de02fed]
+  - @runfusion/fusion@0.17.0
+
 ## 0.16.0
 
 ### @fusion/dashboard

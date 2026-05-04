@@ -19,8 +19,10 @@ Use the inline input on board/list view:
 Use the 💡 button to open planning mode:
 
 - AI asks clarifying questions
+- AI reasoning (thinking output) is preserved and visible throughout the session — expand the reasoning toggle to review the model's analysis before answering each question or accepting the summary
 - Produces summary + key deliverables
 - Create one task or **Break into Tasks** (multi-task generation with dependencies)
+- Sessions persist when the modal is closed — resume from the sidebar list at any time; reasoning context is restored automatically
 
 ### 3) Todo item → Plan Mode
 
@@ -83,6 +85,10 @@ Fusion task columns:
    - If merge/finalization hits a terminal error, tasks can remain in `in-review` with `status: "failed"` for explicit follow-up. This state is intentionally preserved by recovery (not auto-bounced to `todo`).
 5. **done** — merged/finalized
 6. **archived** — preserved history, optionally cleaned from filesystem
+
+Board ordering behavior:
+- Active work columns (`triage`, `todo`, `in-progress`, `in-review`) remain priority-ordered.
+- The `done` column is recency-ordered by completion time (newest first), using `columnMovedAt` as primary and falling back to `updatedAt` then `createdAt` for legacy tasks.
 
 ### Lifecycle commands
 

@@ -8,6 +8,7 @@ import {
   ChatManager,
   __setBuildAgentChatPrompt,
   __setCreateFnAgent,
+  __setCreateResolvedAgentSession,
   __resetChatState,
   chatStreamManager,
   __getChatDiagnostics,
@@ -62,8 +63,23 @@ const mockAgentStore = {
   listAgents: vi.fn(),
 };
 
-function createChatManager(): ChatManager {
-  return new ChatManager(mockChatStore as any, "/tmp/test", mockAgentStore as any);
+function createChatManager(pluginRunner?: Record<string, unknown>): ChatManager {
+  return new ChatManager(mockChatStore as any, "/tmp/test", mockAgentStore as any, pluginRunner as any);
+}
+
+function createChatManagerWithSettings(settings: {
+  fallbackProvider?: string;
+  fallbackModelId?: string;
+  defaultProvider?: string;
+  defaultModelId?: string;
+}): ChatManager {
+  return new ChatManager(
+    mockChatStore as any,
+    "/tmp/test",
+    mockAgentStore as any,
+    undefined,
+    async () => settings,
+  );
 }
 
 function createChatManagerWithoutAgentStore(): ChatManager {
@@ -99,6 +115,7 @@ describe("ChatManager.sendMessage", () => {
       soul: "Be calm and precise.",
       memory: "Remember to keep test coverage high.",
       instructionsText: "Keep replies focused.",
+      runtimeConfig: {},
     });
     mockAgentStore.listAgents.mockResolvedValue([
       {
@@ -530,6 +547,214 @@ describe("ChatManager.sendMessage", () => {
     expect(assistantCalls).toHaveLength(0);
   });
 
+  it("surfaces provider errors stored on session.state.errorMessage instead of persisting a blank assistant reply", async () => {
+    const events: Array<{ type: string; data: unknown }> = [];
+    const unsubscribe = chatStreamManager.subscribe("chat-001", (event) => {
+      events.push(event);
+    });
+
+    __setCreateFnAgent(async () => {
+      const session = {
+        prompt: vi.fn().mockImplementation(async function (this: any) {
+          this.state.errorMessage = "Codex error: provider request failed";
+        }),
+        dispose: vi.fn(),
+        state: { messages: [] as unknown[], errorMessage: undefined as string | undefined },
+      };
+      return { session };
+    });
+
+    const chatManager = createChatManager();
+    await chatManager.sendMessage("chat-001", "Hello");
+    unsubscribe();
+
+    const assistantCalls = mockChatStore.addMessage.mock.calls.filter((call) => call[1].role === "assistant");
+    expect(assistantCalls).toHaveLength(0);
+    expect(events).toContainEqual({ type: "error", data: "Codex error: provider request failed" });
+  });
+
+  it("uses the agent runtime path when the agent has a runtimeHint configured", async () => {
+    const createResolvedSession = vi.fn(async () => ({
+      session: {
+        prompt: vi.fn().mockResolvedValue(undefined),
+        dispose: vi.fn(),
+        state: {
+          messages: [{ role: "assistant", content: "Runtime response" }],
+        },
+      },
+    }));
+    __setCreateResolvedAgentSession(createResolvedSession as any);
+
+    mockAgentStore.getAgent.mockResolvedValue({
+      id: "agent-001",
+      name: "Avery",
+      role: "executor",
+      soul: "Be calm and precise.",
+      memory: "Remember to keep test coverage high.",
+      instructionsText: "Keep replies focused.",
+      runtimeConfig: {
+        runtimeHint: "openclaw",
+      },
+    });
+
+    const pluginRunner = {
+      getRuntimeById: vi.fn(),
+      createRuntimeContext: vi.fn(),
+    };
+    const chatManager = createChatManager(pluginRunner);
+
+    await chatManager.sendMessage("chat-001", "Hello");
+
+    expect(createResolvedSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionPurpose: "executor",
+      runtimeHint: "openclaw",
+      pluginRunner,
+    }));
+  });
+
+  it("uses the assigned built-in pi agent model when the chat session has no explicit model override", async () => {
+    let createOptions: any;
+
+    __setCreateFnAgent(async (options: any) => {
+      createOptions = options;
+      return {
+        session: {
+          prompt: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          state: {
+            messages: [{ role: "assistant", content: "Model response" }],
+          },
+        },
+      };
+    });
+
+    mockAgentStore.getAgent.mockResolvedValue({
+      id: "agent-001",
+      name: "Avery",
+      role: "executor",
+      soul: "Be calm and precise.",
+      memory: "Remember to keep test coverage high.",
+      instructionsText: "Keep replies focused.",
+      runtimeConfig: {
+        model: "minimax/MiniMax-M2.7-highspeed",
+      },
+    });
+
+    const chatManager = createChatManager();
+    await chatManager.sendMessage("chat-001", "Hello");
+
+    expect(createOptions.defaultProvider).toBe("minimax");
+    expect(createOptions.defaultModelId).toBe("MiniMax-M2.7-highspeed");
+  });
+
+  it("allows fallback for default-model chat and persists the fallback metadata", async () => {
+    const events: Array<{ type: string; data: unknown }> = [];
+    const unsubscribe = chatStreamManager.subscribe("chat-001", (event) => {
+      events.push(event);
+    });
+
+    mockChatStore.getSession.mockReturnValue({
+      id: "chat-001",
+      agentId: "agent-001",
+      status: "active",
+      title: "Default Codex Chat",
+      modelProvider: "openai-codex",
+      modelId: "gpt-5.3-codex",
+    });
+
+    let createOptions: any;
+    __setCreateFnAgent(async (options: any) => {
+      createOptions = options;
+      return {
+        session: {
+          prompt: vi.fn().mockImplementation(async function (this: any) {
+            await options.onFallbackModelUsed?.({
+              primaryModel: "openai-codex/gpt-5.3-codex",
+              fallbackModel: "zai/glm-5.1",
+              triggerPoint: "prompt-time",
+            });
+            this.state.messages = [{ role: "assistant", content: "Fallback reply" }];
+          }),
+          dispose: vi.fn(),
+          state: { messages: [] as Array<{ role: string; content: string }> },
+        },
+      };
+    });
+
+    const chatManager = createChatManagerWithSettings({
+      defaultProvider: "openai-codex",
+      defaultModelId: "gpt-5.3-codex",
+      fallbackProvider: "zai",
+      fallbackModelId: "glm-5.1",
+    });
+
+    await chatManager.sendMessage("chat-001", "Hello");
+    unsubscribe();
+
+    expect(createOptions.fallbackProvider).toBe("zai");
+    expect(createOptions.fallbackModelId).toBe("glm-5.1");
+    expect(mockChatStore.updateSession).toHaveBeenCalledWith("chat-001", {
+      modelProvider: "zai",
+      modelId: "glm-5.1",
+    });
+    expect(events).toContainEqual({
+      type: "fallback",
+      data: {
+        primaryModel: "openai-codex/gpt-5.3-codex",
+        fallbackModel: "zai/glm-5.1",
+        triggerPoint: "prompt-time",
+      },
+    });
+
+    const assistantCall = mockChatStore.addMessage.mock.calls.find((call) => call[1].role === "assistant");
+    expect(assistantCall?.[1]).toEqual(expect.objectContaining({
+      metadata: {
+        fallback: {
+          primaryModel: "openai-codex/gpt-5.3-codex",
+          fallbackModel: "zai/glm-5.1",
+          triggerPoint: "prompt-time",
+        },
+      },
+    }));
+  });
+
+  it("does not allow fallback when the chat session has a specific non-default model selected", async () => {
+    let createOptions: any;
+    mockChatStore.getSession.mockReturnValue({
+      id: "chat-001",
+      agentId: "agent-001",
+      status: "active",
+      title: "Explicit Model Chat",
+      modelProvider: "openai-codex",
+      modelId: "gpt-5.3-codex",
+    });
+
+    __setCreateFnAgent(async (options: any) => {
+      createOptions = options;
+      return {
+        session: {
+          prompt: vi.fn().mockImplementation(async function (this: any) {
+            this.state.messages = [{ role: "assistant", content: "Primary reply" }];
+          }),
+          dispose: vi.fn(),
+          state: { messages: [] as Array<{ role: string; content: string }> },
+        },
+      };
+    });
+
+    const chatManager = createChatManagerWithSettings({
+      defaultProvider: "anthropic",
+      defaultModelId: "claude-sonnet-4-5",
+      fallbackProvider: "zai",
+      fallbackModelId: "glm-5.1",
+    });
+
+    await chatManager.sendMessage("chat-001", "Hello");
+
+    expect(createOptions.fallbackProvider).toBeUndefined();
+    expect(createOptions.fallbackModelId).toBeUndefined();
+  });
+
   it("persists thinking output even when no text was generated", async () => {
     __setCreateFnAgent(async (options: any) => {
       return {
@@ -819,6 +1044,42 @@ describe("ChatManager.sendMessage", () => {
       "/tmp/test/.pi-fake/session-abc.jsonl",
     );
     expect(createSpy.mock.calls[0]?.[0]?.sessionManager).toBeDefined();
+  });
+
+  it("reopens the same CLI session on second turn and persists both assistant replies", async () => {
+    const promptSpy = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+
+    mockChatStore.getSession
+      .mockReturnValueOnce({
+        id: "chat-001",
+        agentId: "agent-001",
+        status: "active",
+        cliSessionFile: null,
+      })
+      .mockReturnValueOnce({
+        id: "chat-001",
+        agentId: "agent-001",
+        status: "active",
+        cliSessionFile: __dirname + "/chat-manager.test.ts",
+      });
+
+    __setCreateFnAgent(async () => ({
+      session: { prompt: promptSpy, dispose: vi.fn(), state: { messages: [{ role: "assistant", content: "Done" }] } },
+    }));
+
+    const chatManager = createChatManager();
+    await chatManager.sendMessage("chat-001", "Turn one");
+    await chatManager.sendMessage("chat-001", "Turn two");
+
+    expect(mockSessionManagerCreate).toHaveBeenCalledTimes(1);
+    expect(mockSessionManagerOpen).toHaveBeenCalledTimes(1);
+    expect(promptSpy).toHaveBeenCalledTimes(2);
+
+    const assistantCalls = mockChatStore.addMessage.mock.calls.filter((call) => call[1].role === "assistant");
+    expect(assistantCalls).toHaveLength(2);
   });
 
   it("reopens the same CLI session on subsequent turns instead of creating a new one", async () => {
@@ -1218,5 +1479,134 @@ describe("ChatManager diagnostics", () => {
       message: "Error disposing agent session:",
       args: [expect.any(Error)],
     });
+  });
+});
+
+describe("ChatManager.isGenerating", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetChatState();
+    mockChatStore.getSession.mockReturnValue({
+      id: "chat-001",
+      agentId: "agent-1",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    mockChatStore.addMessage.mockReturnValue({
+      id: "msg-1",
+      sessionId: "chat-001",
+      role: "user",
+      content: "Hello",
+      createdAt: new Date().toISOString(),
+    });
+    mockSummarizeTitle.mockResolvedValue("Test Title");
+  });
+
+  it("returns false when no generation is active", () => {
+    const chatManager = createChatManager();
+    expect(chatManager.isGenerating("chat-001")).toBe(false);
+  });
+
+  it("returns true during an active generation", async () => {
+    let resolvePrompt: () => void;
+    const promptPromise = new Promise<void>((resolve) => {
+      resolvePrompt = resolve;
+    });
+
+    __setCreateFnAgent(async () => {
+      await promptPromise;
+      return {
+        session: {
+          prompt: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          state: { messages: [{ role: "assistant", content: "Done" }] },
+        },
+      };
+    });
+
+    const chatManager = createChatManager();
+
+    // Start the generation (don't await it — it blocks until resolvePrompt is called)
+    const sendPromise = chatManager.sendMessage("chat-001", "Hello");
+
+    // The generation should be active now
+    expect(chatManager.isGenerating("chat-001")).toBe(true);
+    expect(chatManager.isGenerating("chat-999")).toBe(false); // different session
+
+    // Complete the generation
+    resolvePrompt!();
+    await sendPromise;
+
+    // Generation should be cleared
+    expect(chatManager.isGenerating("chat-001")).toBe(false);
+  });
+});
+
+describe("ChatManager.getGeneratingSessionIds", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetChatState();
+    mockSummarizeTitle.mockResolvedValue("Test Title");
+  });
+
+  it("returns empty array when no generations are active", () => {
+    const chatManager = createChatManager();
+    expect(chatManager.getGeneratingSessionIds()).toEqual([]);
+  });
+
+  it("returns all session IDs with active generations", async () => {
+    let resolvePrompt1: () => void;
+    let resolvePrompt2: () => void;
+    const promptPromise1 = new Promise<void>((resolve) => { resolvePrompt1 = resolve; });
+    const promptPromise2 = new Promise<void>((resolve) => { resolvePrompt2 = resolve; });
+
+    let callCount = 0;
+    __setCreateFnAgent(async () => {
+      callCount++;
+      const promise = callCount === 1 ? promptPromise1 : promptPromise2;
+      await promise;
+      return {
+        session: {
+          prompt: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          state: { messages: [{ role: "assistant", content: "Done" }] },
+        },
+      };
+    });
+
+    mockChatStore.getSession.mockImplementation((id: string) => ({
+      id,
+      agentId: "agent-1",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }));
+    mockChatStore.addMessage.mockReturnValue({
+      id: "msg-1",
+      sessionId: "chat-001",
+      role: "user",
+      content: "Hello",
+      createdAt: new Date().toISOString(),
+    });
+
+    const chatManager = createChatManager();
+
+    // Start two generations
+    const send1 = chatManager.sendMessage("chat-001", "Hello");
+    const send2 = chatManager.sendMessage("chat-002", "World");
+
+    // Both should show as generating
+    const ids = chatManager.getGeneratingSessionIds();
+    expect(ids).toContain("chat-001");
+    expect(ids).toContain("chat-002");
+    expect(ids).toHaveLength(2);
+
+    // Complete both
+    resolvePrompt1!();
+    resolvePrompt2!();
+    await Promise.all([send1, send2]);
+
+    expect(chatManager.getGeneratingSessionIds()).toEqual([]);
   });
 });

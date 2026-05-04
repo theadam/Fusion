@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, lazy, Suspense, type MouseEvent } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense, type CSSProperties, type MouseEvent } from "react";
 import { Globe, Folder, RefreshCw, Star, HelpCircle, Loader2, CheckCircle, AlertTriangle } from "lucide-react";
 import {
   THINKING_LEVELS,
@@ -10,8 +10,8 @@ import {
   resolveTitleSummarizerSettingsModel,
 } from "@fusion/core";
 import type { Settings, GlobalSettings, ThemeMode, ColorTheme, ModelPreset, NtfyNotificationEvent, AgentPromptsConfig, ThinkingLevel } from "@fusion/core";
-import { fetchSettings, fetchSettingsByScope, updateSettings, updateGlobalSettings, fetchAuthStatus, loginProvider, logoutProvider, cancelProviderLogin, saveApiKey, clearApiKey, fetchModels, testNotification, fetchBackups, createBackup, exportSettings, importSettings, fetchMemoryFile, fetchMemoryFiles, saveMemoryFile, compactMemory, fetchGlobalConcurrency, updateGlobalConcurrency, installQmd, testMemoryRetrieval, triggerMemoryDreams, fetchGitRemotesDetailed, fetchDashboardHealth, checkForUpdates, fetchRemoteSettings, updateRemoteSettings, fetchRemoteStatus, installCloudflared, startRemoteTunnel, stopRemoteTunnel, killExternalTunnel, regenerateRemotePersistentToken, generateShortLivedRemoteToken, fetchRemoteQr, fetchRemoteUrl } from "../api";
-import type { AuthProvider, ModelInfo, BackupListResponse, SettingsExportData, MemoryFileInfo, MemoryRetrievalTestResult, GitRemoteDetailed, RemoteSettings, RemoteStatus, UpdateCheckResponse } from "../api";
+import { fetchSettings, fetchSettingsByScope, updateSettings, updateGlobalSettings, fetchAuthStatus, loginProvider, logoutProvider, cancelProviderLogin, saveApiKey, clearApiKey, fetchModels, testNotification, fetchBackups, createBackup, exportSettings, importSettings, fetchMemoryFile, fetchMemoryFiles, saveMemoryFile, compactMemory, fetchGlobalConcurrency, updateGlobalConcurrency, installQmd, testMemoryRetrieval, triggerMemoryDreams, fetchGitRemotesDetailed, fetchDashboardHealth, checkForUpdates, fetchRemoteSettings, updateRemoteSettings, fetchRemoteStatus, installCloudflared, startRemoteTunnel, stopRemoteTunnel, killExternalTunnel, regenerateRemotePersistentToken, generateShortLivedRemoteToken, fetchRemoteQr, fetchRemoteUrl, submitProviderManualCode } from "../api";
+import type { AuthProvider, ManualOAuthCodeInfo, ModelInfo, BackupListResponse, SettingsExportData, MemoryFileInfo, MemoryRetrievalTestResult, GitRemoteDetailed, RemoteSettings, RemoteStatus, UpdateCheckResponse } from "../api";
 import { useMemoryBackendStatus } from "../hooks/useMemoryBackendStatus";
 import { useOverlayDismiss } from "../hooks/useOverlayDismiss";
 import type { ToastType } from "../hooks/useToast";
@@ -34,12 +34,17 @@ import { PaperclipRuntimeCard } from "./PaperclipRuntimeCard";
 import { PluginSlot } from "./PluginSlot";
 import { AgentPromptsManager } from "./AgentPromptsManager";
 import { LoginInstructions } from "./LoginInstructions";
+import { OAuthManualCodeForm } from "./OAuthManualCodeForm";
 import { ProviderIcon } from "./ProviderIcon";
 import { CustomProvidersSection } from "./CustomProvidersSection";
 import { applyPresetToSelection, generateUniquePresetId } from "../utils/modelPresets";
 import { appendTokenQuery } from "../auth";
 import { useConfirm } from "../hooks/useConfirm";
+import { useMobileKeyboard } from "../hooks/useMobileKeyboard";
+import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
 import { useNodes } from "../hooks/useNodes";
+import { usePluginUiSlots } from "../hooks/usePluginUiSlots";
+import { useViewportMode } from "../hooks/useViewportMode";
 import { NodeHealthDot } from "./NodeHealthDot";
 import { filterVisibleOnboardingAndSettingsProviders } from "./providerVisibility";
 
@@ -214,7 +219,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 
   // Project group (specific to this project)
   { id: "__project_header", label: "Project", scope: undefined, isGroupHeader: true },
-  { id: "general", label: "General", scope: "project" },
+  { id: "general", label: "Project General", scope: "project" },
   { id: "project-models", label: "Project Models", scope: "project" },
   { id: "scheduling", label: "Scheduling", scope: "project" },
   { id: "node-routing", label: "Node Routing", scope: "project" },
@@ -351,6 +356,18 @@ export function SettingsModal({
   onReopenOnboarding,
 }: SettingsModalProps) {
   const { confirm } = useConfirm();
+  const viewportMode = useViewportMode();
+  useMobileScrollLock(true);
+  const { keyboardOverlap, viewportHeight, viewportOffsetTop, keyboardOpen } = useMobileKeyboard({
+    enabled: viewportMode === "mobile",
+  });
+  const keyboardStyle: CSSProperties = keyboardOpen
+    ? ({
+        "--keyboard-overlap": `${keyboardOverlap}px`,
+        "--vv-offset-top": `${viewportOffsetTop}px`,
+        ...(viewportHeight !== null ? { "--vv-height": `${viewportHeight}px` } : {}),
+      } as CSSProperties)
+    : {};
   const modalRef = useRef<HTMLDivElement>(null);
   const settingsContentRef = useRef<HTMLDivElement>(null);
   useModalResizePersist(modalRef, true, "fusion:settings-modal-size");
@@ -421,6 +438,7 @@ export function SettingsModal({
   } = useWorkspaceFileBrowser("project", overlapPathPickerIndex !== null, projectId);
 
   const { nodes } = useNodes();
+  const { getSlotsForId } = usePluginUiSlots(projectId);
   const experimentalFeatures = form.experimentalFeatures ?? {};
   const remoteAccessEnabled = isExperimentalFeatureEnabled(experimentalFeatures, "remoteAccess");
   const researchViewEnabled = isExperimentalFeatureEnabled(experimentalFeatures, "researchView");
@@ -461,6 +479,9 @@ export function SettingsModal({
   const [authLoading, setAuthLoading] = useState(false);
   const [authActionInProgress, setAuthActionInProgress] = useState<string | null>(null);
   const [loginInstructions, setLoginInstructions] = useState<Record<string, string>>({});
+  const [manualCodeConfigs, setManualCodeConfigs] = useState<Record<string, ManualOAuthCodeInfo>>({});
+  const [manualCodeInputs, setManualCodeInputs] = useState<Record<string, string>>({});
+  const [manualCodeSubmitInProgress, setManualCodeSubmitInProgress] = useState<string | null>(null);
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
   const [apiKeyErrors, setApiKeyErrors] = useState<Record<string, string>>({});
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -909,8 +930,7 @@ export function SettingsModal({
     settingsContentRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
-  const handleLogin = useCallback(async (providerId: string) => {
-    setAuthActionInProgress(providerId);
+  const clearAuthLoginUiState = useCallback((providerId: string) => {
     setLoginInstructions((prev) => {
       if (!(providerId in prev)) {
         return prev;
@@ -919,11 +939,35 @@ export function SettingsModal({
       delete next[providerId];
       return next;
     });
+    setManualCodeConfigs((prev) => {
+      if (!(providerId in prev)) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[providerId];
+      return next;
+    });
+    setManualCodeInputs((prev) => {
+      if (!(providerId in prev)) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[providerId];
+      return next;
+    });
+  }, []);
+
+  const handleLogin = useCallback(async (providerId: string) => {
+    setAuthActionInProgress(providerId);
+    clearAuthLoginUiState(providerId);
 
     try {
-      const { url, instructions } = await loginProvider(providerId);
+      const { url, instructions, manualCode } = await loginProvider(providerId);
       if (instructions?.trim()) {
         setLoginInstructions((prev) => ({ ...prev, [providerId]: instructions }));
+      }
+      if (manualCode) {
+        setManualCodeConfigs((prev) => ({ ...prev, [providerId]: manualCode }));
       }
       window.open(appendTokenQuery(url), "_blank");
 
@@ -940,16 +984,20 @@ export function SettingsModal({
               pollIntervalRef.current = null;
             }
             setAuthActionInProgress(null);
-            setLoginInstructions((prev) => {
-              if (!(providerId in prev)) {
-                return prev;
-              }
-              const next = { ...prev };
-              delete next[providerId];
-              return next;
-            });
+            clearAuthLoginUiState(providerId);
             addToast("Login successful", "success");
             scrollSettingsToTop();
+            return;
+          }
+
+          if (!provider?.loginInProgress) {
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+            setAuthActionInProgress(null);
+            clearAuthLoginUiState(providerId);
+            addToast("Login did not complete. Please try again.", "error");
           }
         } catch {
           // Continue polling on transient errors
@@ -965,41 +1013,61 @@ export function SettingsModal({
         addToast(message, "error");
       }
       setAuthActionInProgress(null);
-      setLoginInstructions((prev) => {
-        if (!(providerId in prev)) {
-          return prev;
-        }
-        const next = { ...prev };
-        delete next[providerId];
-        return next;
-      });
+      clearAuthLoginUiState(providerId);
     }
-  }, [addToast, loadAuthStatus, scrollSettingsToTop]);
+  }, [addToast, clearAuthLoginUiState, loadAuthStatus, scrollSettingsToTop]);
+
+  const handleSubmitManualCode = useCallback(async (providerId: string) => {
+    const code = manualCodeInputs[providerId]?.trim();
+    if (!code) {
+      addToast("Paste the full redirect URL or authorization code first.", "warning");
+      return;
+    }
+
+    setManualCodeSubmitInProgress(providerId);
+    try {
+      const result = await submitProviderManualCode(providerId, code);
+      if (result.submitted) {
+        setManualCodeInputs((prev) => {
+          if (!(providerId in prev)) {
+            return prev;
+          }
+          const next = { ...prev };
+          delete next[providerId];
+          return next;
+        });
+        addToast("Authorization code received. Finishing login…", "success");
+      } else {
+        addToast("That authorization code was already submitted. Waiting for login…", "warning");
+      }
+    } catch (err) {
+      addToast(getErrorMessage(err) || "Failed to submit authorization code", "error");
+    } finally {
+      setManualCodeSubmitInProgress(null);
+    }
+  }, [addToast, manualCodeInputs]);
 
   const handleCancelLogin = useCallback(async (providerId: string) => {
     setAuthActionInProgress(providerId);
+    setAuthProviders((prev) => prev.map((provider) =>
+      provider.id === providerId ? { ...provider, loginInProgress: false } : provider,
+    ));
     try {
       await cancelProviderLogin(providerId);
-      setLoginInstructions((prev) => {
-        if (!(providerId in prev)) {
-          return prev;
-        }
-        const next = { ...prev };
-        delete next[providerId];
-        return next;
-      });
-      await loadAuthStatus();
+      clearAuthLoginUiState(providerId);
+      await loadAuthStatus().catch(() => {});
       addToast("Login cancelled", "success");
     } catch (err) {
       addToast(getErrorMessage(err) || "Failed to cancel login", "error");
     } finally {
       setAuthActionInProgress(null);
+      setManualCodeSubmitInProgress((prev) => prev === providerId ? null : prev);
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
       }
     }
-  }, [addToast, loadAuthStatus]);
+  }, [addToast, clearAuthLoginUiState, loadAuthStatus]);
 
   const handleLogout = useCallback(async (providerId: string) => {
     setAuthActionInProgress(providerId);
@@ -1968,6 +2036,25 @@ export function SettingsModal({
                 Controls how often the dashboard re-fetches the npm registry.
                 Use the version + refresh control in the header to trigger an
                 immediate check at any time.
+              </small>
+            </div>
+            <div className="form-group">
+              <label htmlFor="autoReloadOnVersionChange" className="checkbox-label">
+                <input
+                  id="autoReloadOnVersionChange"
+                  type="checkbox"
+                  checked={form.autoReloadOnVersionChange !== false}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, autoReloadOnVersionChange: e.target.checked }))
+                  }
+                />
+                Auto-reload dashboard on version change
+              </label>
+              <small>
+                When enabled (default), the dashboard automatically reloads when it
+                detects a new build version — either from server rebuilds or service
+                worker updates. Disable this to stay on the current version until you
+                manually refresh.
               </small>
             </div>
           </>
@@ -4940,6 +5027,9 @@ export function SettingsModal({
         // auth state (Authenticated when signed in, Available otherwise).
         const claudeCliProvider = cliAuthProviders.find((p) => p.id === "claude-cli");
         const droidCliProvider = cliAuthProviders.find((p) => p.id === "droid-cli");
+        const hasDroidPluginSlot = getSlotsForId("settings-provider-card").some(
+          (entry) => entry.pluginId === "fusion-plugin-droid-runtime",
+        );
         const claudeCliCard = claudeCliProvider ? (
           <ClaudeCliProviderCard
             compact
@@ -4949,7 +5039,7 @@ export function SettingsModal({
             }}
           />
         ) : null;
-        const droidCliCard = droidCliProvider ? (
+        const droidCliCard = droidCliProvider && !hasDroidPluginSlot ? (
           <DroidCliProviderCard
             compact
             authenticated={droidCliProvider.authenticated}
@@ -4961,12 +5051,11 @@ export function SettingsModal({
         const showAuthenticatedGroup =
           authenticatedProviders.length > 0
           || (claudeCliProvider?.authenticated ?? false)
-          || (droidCliProvider?.authenticated ?? false);
+          || ((droidCliProvider?.authenticated ?? false) && !hasDroidPluginSlot);
         const showAvailableGroup =
           unauthenticatedProviders.length > 0
           || (claudeCliProvider && !claudeCliProvider.authenticated)
-          || (droidCliProvider && !droidCliProvider.authenticated);
-
+          || (droidCliProvider && !droidCliProvider.authenticated && !hasDroidPluginSlot);
         return (
           <>
             <h4 className="settings-section-heading">Authentication</h4>
@@ -4978,6 +5067,8 @@ export function SettingsModal({
               </div>
             ) : (
               <div className="auth-panel-body">
+              <PluginSlot slotId="settings-provider-card" projectId={projectId} renderPlaceholder={false} />
+              <PluginSlot slotId="settings-integration-card" projectId={projectId} renderPlaceholder={false} />
               {!showAuthenticatedGroup && (
                 <div className="auth-section-hint">
                   Sign in to at least one provider to get started with AI models.
@@ -5157,6 +5248,19 @@ export function SettingsModal({
                                 data-testid={`auth-login-instructions-${provider.id}`}
                               />
                             )}
+                            {manualCodeConfigs[provider.id] && (provider.loginInProgress || authActionInProgress === provider.id) && (
+                              <OAuthManualCodeForm
+                                value={manualCodeInputs[provider.id] ?? ""}
+                                onChange={(value) => setManualCodeInputs((prev) => ({ ...prev, [provider.id]: value }))}
+                                onSubmit={() => void handleSubmitManualCode(provider.id)}
+                                prompt={manualCodeConfigs[provider.id].prompt}
+                                placeholder={manualCodeConfigs[provider.id].placeholder}
+                                helpText={manualCodeConfigs[provider.id].helpText}
+                                disabled={manualCodeSubmitInProgress === provider.id}
+                                submitLabel={manualCodeSubmitInProgress === provider.id ? "Submitting…" : "Submit code"}
+                                data-testid={`auth-manual-code-${provider.id}`}
+                              />
+                            )}
                           </div>
                         )}
                       </div>
@@ -5214,8 +5318,8 @@ export function SettingsModal({
   };
 
   return (
-    <div className="modal-overlay open" {...overlayDismissProps} role="dialog" aria-modal="true">
-      <div className="modal modal-lg settings-modal" ref={modalRef}>
+    <div className="modal-overlay open settings-modal-overlay" {...overlayDismissProps} role="dialog" aria-modal="true">
+      <div className="modal modal-lg settings-modal" ref={modalRef} style={keyboardStyle}>
         <div className="modal-header">
           <div className="settings-modal-heading">
             <h3>Settings</h3>

@@ -51,6 +51,7 @@ vi.mock("lucide-react", () => ({
   ChevronUp: () => null,
   ChevronDown: () => null,
   ChevronRight: (props: any) => <svg data-testid="chevron-right-icon" {...props} />,
+  ArrowLeft: () => null,
   X: () => null,
   Maximize2: () => null,
   Minimize2: () => null,
@@ -261,7 +262,7 @@ describe("TaskDetailModal", () => {
     });
   });
 
-  it("renders modal wrapper structure and close control", () => {
+  it("renders modal wrapper structure and default close control", () => {
     const { container } = render(
       <TaskDetailModal
         task={makeTask()}
@@ -277,6 +278,25 @@ describe("TaskDetailModal", () => {
     expect(container.querySelector(".modal-overlay.open")).toBeTruthy();
     expect(container.querySelector(".modal.modal-lg.task-detail-modal")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Back to task list" })).toBeNull();
+  });
+
+  it("renders mobile back control variant when requested", () => {
+    render(
+      <TaskDetailModal
+        task={makeTask()}
+        onClose={noop}
+        onMoveTask={noopMove}
+        onDeleteTask={noopDelete}
+        onMergeTask={noopMerge}
+        onOpenDetail={noopOpenDetail}
+        addToast={noop}
+        mobileHeaderMode="back"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Back to task list" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
   });
 
   it("omits close control in embedded mode while rendering shared content", () => {
@@ -4068,6 +4088,49 @@ describe("TaskDetailModal", () => {
       fireEvent.click(screen.getByRole("button", { name: /actions/i }));
 
       expect(screen.getByRole("menuitem", { name: "Unpause" })).toBeTruthy();
+    });
+
+    it("hides Pause/Unpause button for agent-assigned tasks", async () => {
+      const { fetchAgent } = await import("../../api");
+      vi.mocked(fetchAgent).mockResolvedValue({ id: "agent-1", name: "Agent 1", role: "executor", state: "active" } as any);
+
+      render(
+        <TaskDetailModal
+          task={makeTask({ column: "triage", paused: true, assignedAgentId: "agent-1" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /actions/i }));
+
+      expect(screen.queryByRole("menuitem", { name: "Pause" })).toBeNull();
+      expect(screen.queryByRole("menuitem", { name: "Unpause" })).toBeNull();
+    });
+
+    it("shows paused-by-agent indicator for agent-paused tasks", async () => {
+      const { fetchAgent } = await import("../../api");
+      vi.mocked(fetchAgent).mockResolvedValue({ id: "agent-1", name: "Agent 1", role: "executor", state: "paused" } as any);
+
+      render(
+        <TaskDetailModal
+          task={makeTask({ column: "triage", paused: true, assignedAgentId: "agent-1", pausedByAgentId: "agent-1" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /actions/i }));
+
+      expect(screen.getByText("Paused by agent")).toBeTruthy();
     });
 
     it("does NOT render Actions dropdown for a non-paused, non-awaiting-approval, non-retryable triage task", () => {

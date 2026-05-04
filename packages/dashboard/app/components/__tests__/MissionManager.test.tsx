@@ -2,6 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { MissionManager } from "../MissionManager";
 
+/**
+ * MissionManager layout reference (post FN-3136):
+ * - split container: .mission-manager__split
+ * - sidebar: .mission-manager__sidebar
+ * - detail pane: .mission-manager__detail-pane
+ * - empty detail placeholder: [data-testid="mission-empty-detail"]
+ * - back button handling: rendered when mission selected, CSS-hidden on desktop (.mission-manager--desktop .mission-manager__back-btn)
+ * - viewport strategy: js_detection via useViewportMode() + matchMedia
+ * - sidebar mission items: .mission-list__item
+ */
+
 const mockFetchAiSession = vi.fn();
 const mockFetchAiSessions = vi.fn();
 const mockCancelMissionInterview = vi.fn();
@@ -656,6 +667,12 @@ function mockViewport(mode: "mobile" | "desktop" | "tablet") {
   });
 }
 
+async function waitForDetailLoaded(detailContent = "Database Schema") {
+  await waitFor(() => {
+    expect(screen.getByText(detailContent)).toBeInTheDocument();
+  });
+}
+
 describe("MissionManager", () => {
   let originalFetch: typeof globalThis.fetch;
   let originalEventSource: typeof globalThis.EventSource | undefined;
@@ -719,7 +736,57 @@ describe("MissionManager", () => {
     render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Missions" })).toBeDefined();
+      expect(screen.getByTestId("mission-header-title")).toBeDefined();
+      expect(screen.getByTestId("mission-header-title").textContent).toContain("Missions");
+    });
+  });
+
+  describe("desktop header behavior", () => {
+    it("shows static Missions title on desktop when no mission is selected", async () => {
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => {
+        const header = screen.getByTestId("mission-header-title");
+        const desktopSpan = header.querySelector(".mission-manager__title-text--desktop");
+        const mobileSpan = header.querySelector(".mission-manager__title-text--mobile");
+        expect(desktopSpan?.textContent).toBe("Missions");
+        expect(mobileSpan?.textContent).toBe("Missions");
+      });
+    });
+
+    it("shows static Missions title on desktop when a mission is selected", async () => {
+      globalThis.fetch = createDetailFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Build Auth System")).toBeDefined();
+      });
+      fireEvent.click(screen.getByText("Build Auth System"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("mission-tab-structure")).toBeDefined();
+      });
+
+      const header = screen.getByTestId("mission-header-title");
+      const desktopSpan = header.querySelector(".mission-manager__title-text--desktop");
+      const mobileSpan = header.querySelector(".mission-manager__title-text--mobile");
+      expect(desktopSpan?.textContent).toBe("Missions");
+      expect(mobileSpan?.textContent).toBe("Build Auth System");
+    });
+
+    it("sidebar header hides title and shows only action buttons", async () => {
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => {
+        const sidebarTitle = document.querySelector(".mission-manager__sidebar-title");
+        const sidebarActions = document.querySelector(".mission-manager__sidebar-actions");
+        expect(sidebarTitle).toBeInTheDocument();
+        expect(sidebarActions).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Plan with AI" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "New Mission" })).toBeInTheDocument();
+      });
     });
   });
 
@@ -961,14 +1028,22 @@ describe("MissionManager", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Mission event 50")).toBeDefined();
-      expect(screen.getByText("50 of 65")).toBeDefined();
+      expect(
+        screen.getByText("50 of 65", {
+          selector: ".mission-detail__activity-count",
+        }),
+      ).toBeDefined();
       expect(screen.getByTestId("mission-activity-load-more")).toBeDefined();
     });
 
     fireEvent.click(screen.getByTestId("mission-activity-load-more"));
 
     await waitFor(() => {
-      expect(screen.getByText("65 of 65")).toBeDefined();
+      expect(
+        screen.getByText("65 of 65", {
+          selector: ".mission-detail__activity-count",
+        }),
+      ).toBeDefined();
       expect(screen.queryByTestId("mission-activity-load-more")).toBeNull();
     });
   }, 15000);
@@ -1096,10 +1171,7 @@ describe("MissionManager", () => {
     // Click on the mission to open detail view
     fireEvent.click(screen.getByText("Build Auth System"));
 
-    await waitFor(() => {
-      // Back button should appear in detail view
-      expect(screen.queryByTestId("mission-back-btn")).toBeNull();
-    });
+    await waitForDetailLoaded();
 
     // Record initial fetch calls for mission detail
     const initialFetchCount = fetchMock.mock.calls.filter(
@@ -1162,9 +1234,7 @@ describe("MissionManager", () => {
 
     fireEvent.click(screen.getByText("Build Auth System"));
 
-    await waitFor(() => {
-      expect(screen.queryByTestId("mission-back-btn")).toBeNull();
-    });
+    await waitForDetailLoaded();
 
     const initialTelemetryCalls = fetchMock.mock.calls.filter(
       (call) => typeof call[0] === "string" && call[0].includes("/milestones/MS-001/validation-telemetry")
@@ -1203,9 +1273,7 @@ describe("MissionManager", () => {
     // Click on the mission to open detail view
     fireEvent.click(screen.getByText("Build Auth System"));
 
-    await waitFor(() => {
-      expect(screen.queryByTestId("mission-back-btn")).toBeNull();
-    });
+    await waitForDetailLoaded();
 
     // Record initial fetch calls for mission detail
     const initialFetchCount = fetchMock.mock.calls.filter(
@@ -1286,9 +1354,7 @@ describe("MissionManager", () => {
     // Click on the mission to open detail view
     fireEvent.click(screen.getByText("Build Auth System"));
 
-    await waitFor(() => {
-      expect(screen.queryByTestId("mission-back-btn")).toBeNull();
-    });
+    await waitForDetailLoaded();
 
     // Record initial fetch calls for mission detail
     const initialFetchCount = fetchMock.mock.calls.filter(
@@ -1366,8 +1432,8 @@ describe("MissionManager", () => {
 
     // Wait for detail view to render
     await waitFor(() => {
-      // Desktop keeps sidebar visible and does not render the mobile back button.
-      expect(screen.queryByTestId("mission-back-btn")).toBeNull();
+      // Desktop keeps sidebar visible and back button stays mounted (CSS-hidden).
+      expect(screen.getByTestId("mission-back-btn")).toBeInTheDocument();
       // Milestone should be visible (auto-expanded)
       expect(screen.getByText("Database Schema")).toBeDefined();
     });
@@ -1384,7 +1450,7 @@ describe("MissionManager", () => {
     fireEvent.click(screen.getByText("Build Auth System"));
 
     await waitFor(() => {
-      expect(screen.queryByTestId("mission-back-btn")).toBeNull();
+      expect(screen.getByTestId("mission-back-btn")).toBeInTheDocument();
       expect(screen.getByText("API Redesign")).toBeDefined();
     });
   });
@@ -1411,7 +1477,7 @@ describe("MissionManager", () => {
     });
   });
 
-  it("does not render back button on desktop in detail view", async () => {
+  it("keeps back button mounted on desktop in detail view", async () => {
     globalThis.fetch = createDetailFetchMock();
     render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
 
@@ -1422,7 +1488,7 @@ describe("MissionManager", () => {
     fireEvent.click(screen.getByText("Build Auth System"));
 
     await waitFor(() => {
-      expect(screen.queryByLabelText("Back to missions list")).toBeNull();
+      expect(screen.getByLabelText("Back to missions list")).toBeInTheDocument();
     });
   });
 
@@ -1514,11 +1580,11 @@ describe("MissionManager", () => {
       });
       fireEvent.click(screen.getByText("Build Auth System"));
 
-      await waitFor(() => {
-        expect(screen.queryByTestId("mission-back-btn")).toBeNull();
-        // Close button should still be absent in inline mode even in detail view
-        expect(screen.queryByTestId("mission-close-btn")).toBeNull();
-      });
+      await waitForDetailLoaded();
+      expect(screen.getByTestId("mission-back-btn")).toBeInTheDocument();
+      expect(getComputedStyle(screen.getByTestId("mission-back-btn")).display).toBe("none");
+      // Close button should still be absent in inline mode even in detail view
+      expect(screen.queryByTestId("mission-close-btn")).toBeNull();
     });
   });
 
@@ -1603,7 +1669,7 @@ describe("MissionManager", () => {
       );
     });
 
-    expect(screen.getByRole("heading", { name: "Missions" })).toBeInTheDocument();
+    expect(screen.getByTestId("mission-header-title")).toBeInTheDocument();
     warnSpy.mockRestore();
   });
 
@@ -1878,9 +1944,7 @@ describe("MissionManager", () => {
       });
       fireEvent.click(screen.getByText("Build Auth System"));
 
-      await waitFor(() => {
-        expect(screen.queryByTestId("mission-back-btn")).toBeNull();
-      });
+      await waitForDetailLoaded();
 
       // Detail header should have edit/delete buttons
       const editBtns = screen.getAllByLabelText("Edit mission");
@@ -1910,9 +1974,7 @@ describe("MissionManager", () => {
       });
       fireEvent.click(screen.getByText("Build Auth System"));
 
-      await waitFor(() => {
-        expect(screen.queryByTestId("mission-back-btn")).toBeNull();
-      });
+      await waitForDetailLoaded();
 
       // Click edit mission in detail header
       const editBtns = screen.getAllByLabelText("Edit mission");
@@ -1937,9 +1999,7 @@ describe("MissionManager", () => {
       });
       fireEvent.click(screen.getByText("Build Auth System"));
 
-      await waitFor(() => {
-        expect(screen.queryByTestId("mission-back-btn")).toBeNull();
-      });
+      await waitForDetailLoaded();
 
       // Click delete mission in detail header
       const deleteBtns = screen.getAllByLabelText("Delete mission");
@@ -2662,9 +2722,7 @@ describe("MissionManager", () => {
       });
       fireEvent.click(screen.getByText("Build Auth System"));
 
-      await waitFor(() => {
-        expect(screen.queryByTestId("mission-back-btn")).toBeNull();
-      });
+      await waitForDetailLoaded();
 
       // After async telemetry loads, validation telemetry section should appear
       await waitFor(() => {
@@ -2796,9 +2854,7 @@ describe("MissionManager", () => {
       });
       fireEvent.click(screen.getByText("Build Auth System"));
 
-      await waitFor(() => {
-        expect(screen.queryByTestId("mission-back-btn")).toBeNull();
-      });
+      await waitForDetailLoaded();
 
       // Resume button with aria-label="Resume mission" should appear for blocked mission
       await waitFor(() => {
@@ -2879,14 +2935,16 @@ describe("MissionManager", () => {
       expect(document.querySelectorAll(".mission-manager__sidebar .mission-list__item").length).toBeGreaterThan(1);
     });
 
-    it("does not render desktop back button", async () => {
+    it("keeps desktop back button mounted but CSS-hidden", async () => {
       mockViewport("desktop");
       globalThis.fetch = createFetchMock();
       render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
       await waitFor(() => expect(screen.getByText("Build Auth System")).toBeDefined());
       const sidebar = document.querySelector(".mission-manager__sidebar") as HTMLElement;
       fireEvent.click(within(sidebar).getByText("Build Auth System"));
-      expect(screen.queryByTestId("mission-back-btn")).toBeNull();
+      await waitForDetailLoaded();
+      expect(screen.getByTestId("mission-back-btn")).toBeInTheDocument();
+      expect(getComputedStyle(screen.getByTestId("mission-back-btn")).display).toBe("none");
     });
 
     it("delete confirmation renders inside detail pane", async () => {
@@ -2906,6 +2964,167 @@ describe("MissionManager", () => {
       await waitFor(() => expect(document.querySelector(".mission-manager__sidebar-title")?.textContent).toBe("Missions"));
       expect(screen.getByLabelText("Plan with AI")).toBeInTheDocument();
       expect(screen.getByLabelText("New Mission")).toBeInTheDocument();
+    });
+  });
+
+  describe("detail pane", () => {
+    it("shows empty placeholder when no mission is selected", async () => {
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText("Select a mission to view details")).toBeInTheDocument());
+      expect(document.querySelector(".mission-manager__detail-pane-empty")).toBeTruthy();
+      expect(document.querySelector(".mission-manager__detail-pane .mission-detail")).toBeNull();
+      const placeholder = document.querySelector(".mission-manager__detail-pane-empty") as HTMLElement;
+      expect(within(placeholder).getByTestId("target-icon")).toBeInTheDocument();
+    });
+
+    it("shows loading spinner when detail is loading", async () => {
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText("Build Auth System")).toBeInTheDocument());
+      const sidebar = document.querySelector(".mission-manager__sidebar") as HTMLElement;
+      fireEvent.click(within(sidebar).getByText("Build Auth System"));
+
+      expect(screen.getByText("Loading mission details...")).toBeInTheDocument();
+      expect(document.querySelector(".mission-manager__detail-pane .spinner")).toBeTruthy();
+    });
+
+    it("renders mission detail when a mission is selected", async () => {
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText("Build Auth System")).toBeInTheDocument());
+      fireEvent.click(within(document.querySelector(".mission-manager__sidebar") as HTMLElement).getByText("Build Auth System"));
+
+      const detailPane = document.querySelector(".mission-manager__detail-pane") as HTMLElement;
+      await waitFor(() => expect(within(detailPane).getByTestId("mission-tab-structure")).toBeInTheDocument());
+      expect(detailPane.querySelector(".mission-detail")).toBeTruthy();
+      expect(within(detailPane).getByText("Build Auth System")).toBeInTheDocument();
+      expect(detailPane.querySelector(".mission-status-badge")).toBeTruthy();
+      expect(within(detailPane).getByTestId("mission-tab-activity")).toBeInTheDocument();
+    });
+
+    it("updates detail pane when a different mission is selected", async () => {
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/missions/health")) {
+          return Promise.resolve(mockApiResponse(mockMissionHealthById));
+        }
+        if (url.includes("/events")) {
+          return Promise.resolve(mockApiResponse(parseMissionEventsResponse(url)));
+        }
+        if (url.includes("/health")) {
+          const missionId = extractMissionId(url) ?? "M-001";
+          return Promise.resolve(mockApiResponse(getMockMissionHealth(missionId)));
+        }
+        if (url.includes("/autopilot")) {
+          return Promise.resolve(mockApiResponse(mockAutopilotStatus));
+        }
+        const validationResponse = getValidationApiMock(url);
+        if (validationResponse !== null) {
+          return Promise.resolve(mockApiResponse(validationResponse));
+        }
+        if (url.includes("/api/missions/M-001") && !url.includes("/milestones") && !url.includes("/status")) {
+          return Promise.resolve(mockApiResponse(mockMissionDetail));
+        }
+        if (url.includes("/api/missions/M-002") && !url.includes("/milestones") && !url.includes("/status")) {
+          return Promise.resolve(mockApiResponse({ ...mockMissionDetail, id: "M-002", title: "API Redesign" }));
+        }
+        return Promise.resolve(mockApiResponse(mockMissions));
+      });
+
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText("Build Auth System")).toBeInTheDocument());
+
+      const sidebar = document.querySelector(".mission-manager__sidebar") as HTMLElement;
+      fireEvent.click(within(sidebar).getByText("Build Auth System"));
+      await waitFor(() => expect(document.querySelector(".mission-detail__title")?.textContent).toBe("Build Auth System"));
+
+      fireEvent.click(within(sidebar).getByText("API Redesign"));
+      await waitFor(() => expect(document.querySelector(".mission-detail__title")?.textContent).toBe("API Redesign"));
+      expect(document.querySelector(".mission-manager__detail-pane-empty")).toBeNull();
+    });
+
+    it("renders delete confirmation inside detail pane", async () => {
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText("Build Auth System")).toBeInTheDocument());
+      fireEvent.click(within(document.querySelector(".mission-manager__sidebar") as HTMLElement).getByText("Build Auth System"));
+      await waitFor(() => expect(screen.getByLabelText("Delete mission")).toBeInTheDocument());
+      fireEvent.click(screen.getByLabelText("Delete mission"));
+
+      await waitFor(() => expect(document.querySelector(".mission-manager__detail-pane .mission-confirm-panel")).toBeTruthy());
+    });
+
+    it("renders link-task panel inside detail pane", async () => {
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/missions/health")) {
+          return Promise.resolve(mockApiResponse(mockMissionHealthById));
+        }
+        if (url.includes("/events")) {
+          return Promise.resolve(mockApiResponse(parseMissionEventsResponse(url)));
+        }
+        if (url.includes("/health")) {
+          const missionId = extractMissionId(url) ?? "M-001";
+          return Promise.resolve(mockApiResponse(getMockMissionHealth(missionId)));
+        }
+        if (url.includes("/autopilot")) {
+          return Promise.resolve(mockApiResponse(mockAutopilotStatus));
+        }
+        const validationResponse = getValidationApiMock(url);
+        if (validationResponse !== null) {
+          return Promise.resolve(mockApiResponse(validationResponse));
+        }
+        if (url.includes("/api/missions/") && !url.includes("/milestones") && !url.includes("/status")) {
+          return Promise.resolve(
+            mockApiResponse({
+              ...mockMissionDetail,
+              milestones: [
+                {
+                  ...mockMissionDetail.milestones[0],
+                  slices: [
+                    {
+                      ...mockMissionDetail.milestones[0].slices[0],
+                      features: [
+                        {
+                          ...mockMissionDetail.milestones[0].slices[0].features[0],
+                          status: "triaged",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            }),
+          );
+        }
+        return Promise.resolve(mockApiResponse(mockMissions));
+      });
+
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText("Build Auth System")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("Build Auth System"));
+      await waitFor(() => expect(screen.getByText("Database Schema")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText("User Tables")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByTitle("Link to task")).toBeInTheDocument());
+      fireEvent.click(screen.getByTitle("Link to task"));
+
+      await waitFor(() => expect(document.querySelector(".mission-manager__detail-pane .mission-confirm-panel")).toBeTruthy());
+      expect(screen.getByText("Link feature to task:")).toBeInTheDocument();
+    });
+
+    it("detail pane shows milestones and features hierarchy", async () => {
+      globalThis.fetch = createDetailFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText("Build Auth System")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("Build Auth System"));
+      await waitFor(() => expect(screen.getByText("Database Schema")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText("User Tables")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText("User model")).toBeInTheDocument());
     });
   });
 
@@ -2969,6 +3188,49 @@ describe("MissionManager", () => {
     });
   });
 
+  describe("desktop back button behavior", () => {
+    it("back button element exists when mission is selected and root uses desktop shell class", async () => {
+      mockViewport("desktop");
+      globalThis.fetch = createDetailFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText("Build Auth System")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("Build Auth System"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("mission-back-btn")).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId("mission-manager-dialog")).toHaveClass("mission-manager--desktop");
+    });
+
+    it("clicking back button clears selected mission", async () => {
+      mockViewport("desktop");
+      globalThis.fetch = createDetailFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText("Build Auth System")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("Build Auth System"));
+
+      await waitFor(() => expect(document.querySelector(".mission-manager__detail-pane .mission-detail")).toBeTruthy());
+      fireEvent.click(screen.getByTestId("mission-back-btn"));
+
+      await waitFor(() => {
+        expect(document.querySelector(".mission-manager__detail-pane .mission-detail")).toBeNull();
+        expect(screen.getByText("API Redesign")).toBeInTheDocument();
+      });
+    });
+
+    it("back button does not render when no mission is selected", async () => {
+      mockViewport("desktop");
+      globalThis.fetch = createDetailFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText("Build Auth System")).toBeInTheDocument());
+      expect(screen.queryByTestId("mission-back-btn")).toBeNull();
+    });
+  });
+
   describe("mobile stacked layout", () => {
     it("renders stacked body on mobile and hides desktop split", async () => {
       mockViewport("mobile");
@@ -3019,6 +3281,57 @@ describe("MissionManager", () => {
       expect(within(sidebar).getByText("API Redesign")).toBeInTheDocument();
       const sidebarList = document.querySelector(".mission-manager__sidebar-list") as HTMLElement;
       expect(getComputedStyle(sidebarList).overflowY).toBe("auto");
+    });
+  });
+
+  describe("two-panel layout test IDs", () => {
+    it("renders sidebar and empty detail pane on desktop via test IDs", async () => {
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("mission-sidebar")).toBeInTheDocument();
+        expect(screen.getByTestId("mission-empty-detail")).toBeInTheDocument();
+      });
+    });
+
+    it("shows mission detail in right pane when mission is selected from sidebar", async () => {
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Build Auth System")).toBeInTheDocument();
+      });
+
+      const sidebar = screen.getByTestId("mission-sidebar");
+      fireEvent.click(within(sidebar).getByText("Build Auth System"));
+
+      await waitForDetailLoaded();
+      expect(screen.getByTestId("mission-sidebar")).toBeInTheDocument();
+      expect(within(sidebar).getByText("API Redesign")).toBeInTheDocument();
+      expect(screen.getByTestId("mission-tab-structure")).toBeInTheDocument();
+    });
+
+    it("applies desktop class to shell on desktop viewport", async () => {
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => {
+        const dialog = screen.getByTestId("mission-manager-dialog");
+        expect(dialog.className).toContain("mission-manager--desktop");
+      });
+    });
+
+    it("works in inline mode with split layout", async () => {
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} isInline={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => {
+        const dialog = screen.getByTestId("mission-manager-dialog");
+        expect(dialog.className).toContain("mission-manager--inline");
+        expect(dialog.className).toContain("mission-manager--desktop");
+        expect(screen.getByTestId("mission-sidebar")).toBeInTheDocument();
+      });
     });
   });
 });

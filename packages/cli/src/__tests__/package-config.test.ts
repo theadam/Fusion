@@ -78,6 +78,14 @@ describe("CLI package.json publishing config", () => {
     const deps = Object.keys(pkg.dependencies || {});
     expect(deps).toContain("ioredis");
   });
+
+  it("declares dockerode as a runtime dependency when kept external in CLI bundling", () => {
+    const deps = Object.keys(pkg.dependencies || {});
+    const devDeps = Object.keys(pkg.devDependencies || {});
+
+    expect(deps).toContain("dockerode");
+    expect(devDeps).not.toContain("dockerode");
+  });
 });
 
 describe("Scoped @fusion/* packages publishing config", () => {
@@ -114,19 +122,18 @@ describe("Scoped @fusion/* packages publishing config", () => {
 describe("Workspace bootstrap script contract", () => {
   const rootPkg = loadRootPackageJson();
 
-  it("keeps root test self-sufficient (no implicit pre-build dependency)", () => {
-    const testScript = rootPkg.scripts?.test;
-    expect(testScript).toBeDefined();
-    expect(testScript).toContain("pnpm -r");
-    expect(testScript).not.toContain("pnpm build");
+  it("makes root test changed-only while keeping explicit full-suite command", () => {
+    expect(rootPkg.scripts?.test).toBe("node scripts/test-changed.mjs");
+    expect(rootPkg.scripts?.["test:full"]).toContain("pnpm -r --workspace-concurrency=2 test");
+    expect(rootPkg.scripts?.["test:full"]).not.toContain("pnpm build");
   });
 
-  it("defines verify:workspace in lint -> test -> build order", () => {
+  it("defines verify:workspace in lint -> test:full -> build order", () => {
     const verifyScript = rootPkg.scripts?.["verify:workspace"];
-    expect(verifyScript).toBe("pnpm lint && pnpm test && pnpm build");
+    expect(verifyScript).toBe("pnpm lint && pnpm test:full && pnpm build");
 
     const lintIdx = verifyScript.indexOf("pnpm lint");
-    const testIdx = verifyScript.indexOf("pnpm test");
+    const testIdx = verifyScript.indexOf("pnpm test:full");
     const buildIdx = verifyScript.indexOf("pnpm build");
 
     expect(lintIdx).toBeGreaterThanOrEqual(0);
