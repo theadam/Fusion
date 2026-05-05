@@ -425,6 +425,9 @@ Implemented in `agent-heartbeat.ts`:
 ### Node/mesh runtime services
 - `NodeHealthMonitor` (`node-health-monitor.ts`) — remote node liveness/metrics checks
 - `PeerExchangeService` (`peer-exchange-service.ts`) — peer sync orchestration
+- Canonical replication/write-coordination contract: [`docs/shared-mesh-protocol.md`](./shared-mesh-protocol.md)
+  - Defines protocol versioning, write classes, quorum/ack semantics, lease epochs/fencing, offline queue/replay, reconciliation outcomes, restart recovery hooks, and degraded-read staleness metadata.
+  - Existing `/api/mesh/sync` and settings-sync payloads remain the active exchange primitives while follow-on runtime tasks implement full v1 coordinator/quorum behavior.
 - Process lifecycle ownership:
   - `fn serve` / `fn dashboard` start a single process-level `PeerExchangeService` and stop it during shutdown.
   - `CentralCore.startDiscovery()` is invoked from CLI startup only after HTTP bind completes so discovery advertises the actual listening port.

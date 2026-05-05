@@ -34,6 +34,7 @@ Per-project task data remains in each repo’s `.fusion/fusion.db`.
 Peer/mesh coordination spans core + engine, with startup ownership in CLI process entrypoints:
 - `NodeDiscovery` and `NodeConnection` in `@fusion/core` handle discovery and remote node connectivity/auth primitives.
 - `PeerExchangeService` in `@fusion/engine` coordinates node-to-node sync/exchange workflows.
+- Canonical replication semantics live in [`docs/shared-mesh-protocol.md`](./shared-mesh-protocol.md). That protocol separates strongly coordinated shared state from append-only streams, queued replay classes, and node-local runtime state.
 - `runServe()` and `runDashboard()` (CLI) own process-level mesh service lifecycle:
   - start one process-wide `PeerExchangeService` instance
   - call `CentralCore.startDiscovery()` only after the HTTP server is listening and the real bound port is known

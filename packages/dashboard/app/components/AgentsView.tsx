@@ -1251,7 +1251,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                           />
                           <span className="text-secondary">min</span>
                           <button
-                            className="btn btn--sm"
+                            className="btn btn-sm"
                             onClick={() => void handleCustomHeartbeatSave(agent)}
                             disabled={isUpdatingHeartbeat}
                             title="Save custom interval"
@@ -1259,7 +1259,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                             Save
                           </button>
                           <button
-                            className="btn btn--sm"
+                            className="btn btn-sm"
                             onClick={() => {
                               setCustomHeartbeatAgentId(null);
                               setCustomHeartbeatMinutes((prev) => {
@@ -1327,7 +1327,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                   <div className="agent-card-actions">
                     {agent.state === "idle" && (
                       <button
-                        className="btn btn--sm"
+                        className="btn btn-sm"
                         onClick={() => void handleStateChange(agent.id, "active")}
                         disabled={transitioningAgentIds.has(agent.id)}
                         title="Activate"
@@ -1338,7 +1338,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                     {agent.state === "active" && (
                       <>
                         <button
-                          className="btn btn--sm"
+                          className="btn btn-sm"
                           onClick={() => void handleRunHeartbeat(agent.id, agent.name)}
                           disabled={transitioningAgentIds.has(agent.id)}
                           title="Run Now"
@@ -1347,7 +1347,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                           <Activity size={14} /> Run Now
                         </button>
                         <button
-                          className="btn btn--sm"
+                          className="btn btn-sm"
                           onClick={() => void handleStateChange(agent.id, "paused")}
                           disabled={transitioningAgentIds.has(agent.id)}
                           title="Pause"
@@ -1358,7 +1358,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                     )}
                     {agent.state === "paused" && (
                       <button
-                        className="btn btn--sm"
+                        className="btn btn-sm"
                         onClick={() => void handleStateChange(agent.id, "active")}
                         disabled={transitioningAgentIds.has(agent.id)}
                         title="Resume"
@@ -1369,7 +1369,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                     {agent.state === "running" && (
                       <>
                         <button
-                          className="btn btn--sm"
+                          className="btn btn-sm"
                           onClick={() => openAgentDetail(agent.id, { initialTab: "runs", initialRunId: null, preferActiveRun: true })}
                           title="View live run details"
                           aria-label={`View live run details for ${agent.name}`}
@@ -1377,7 +1377,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                           <Activity size={14} /> Running
                         </button>
                         <button
-                          className="btn btn--sm"
+                          className="btn btn-sm"
                           onClick={() => void handleStateChange(agent.id, "paused")}
                           disabled={transitioningAgentIds.has(agent.id)}
                           title="Pause"
@@ -1388,7 +1388,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                     )}
                     {agent.state === "error" && (
                       <button
-                        className="btn btn--sm"
+                        className="btn btn-sm"
                         onClick={() => void handleStateChange(agent.id, "active")}
                         disabled={transitioningAgentIds.has(agent.id)}
                         title="Retry"
@@ -1398,7 +1398,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                     )}
                     {agent.state === "terminated" && (
                       <button
-                        className="btn btn--sm"
+                        className="btn btn-sm"
                         onClick={() => void handleStateChange(agent.id, "active")}
                         disabled={transitioningAgentIds.has(agent.id)}
                         title="Start"
@@ -1407,7 +1407,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                       </button>
                     )}
                     <button
-                      className="btn btn--sm agent-card-details-btn"
+                      className="btn btn-sm agent-card-details-btn"
                       onClick={() => openAgentDetail(agent.id)}
                       title={`View details for ${agent.name}`}
                       aria-label={`View details for ${agent.name}`}
@@ -1416,7 +1416,7 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                     </button>
                     {(agent.state === "idle" || agent.state === "terminated" || agent.state === "paused") && (
                       <button
-                        className="btn btn--sm btn--danger"
+                        className="btn btn-sm btn-danger"
                         onClick={() => void handleDelete(agent.id, agent.name)}
                         title="Delete"
                       >
