@@ -1,5 +1,5 @@
 import "./MobileNavBar.css";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   Bot,
@@ -85,6 +85,7 @@ export interface MobileNavBarProps {
   };
   onOpenNodes?: () => void;
   pluginDashboardViews?: PluginDashboardViewEntry[];
+  shellConnectionControl?: ReactNode;
 }
 
 function GitHubLogo({ size = 20 }: { size?: number }) {

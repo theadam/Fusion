@@ -71,6 +71,10 @@ export interface ShellConnectionProfileInput {
 
 export interface ShellConnectionState {
   host: "web" | "mobile-shell" | "desktop-shell";
+  desktopModeState?: {
+    isFirstRun: boolean;
+    desktopMode: "local" | "remote" | null;
+  };
   desktopMode?: "local" | "remote";
   activeProfileId: string | null;
   profiles: ShellConnectionProfile[];
@@ -87,6 +91,7 @@ export interface FusionShellApi {
   saveProfile(profile: ShellConnectionProfileInput): Promise<ShellConnectionProfile>;
   deleteProfile(profileId: string): Promise<void>;
   setActiveProfile(profileId: string | null): Promise<ShellConnectionState>;
+  getDesktopModeState(): Promise<{ isFirstRun: boolean; desktopMode: "local" | "remote" | null }>;
   setDesktopMode(mode: "local" | "remote"): Promise<ShellConnectionState>;
   startQrScan(): Promise<{ serverUrl: string; authToken?: string | null }>;
   openConnectionManager(): Promise<void>;
@@ -95,8 +100,8 @@ export interface FusionShellApi {
 
 declare global {
   interface Window {
-    fusionAPI: FusionAPI;
-    electronAPI: FusionAPI;
+    fusionAPI?: FusionAPI;
+    electronAPI?: FusionAPI;
     fusionShell?: FusionShellApi;
   }
 }

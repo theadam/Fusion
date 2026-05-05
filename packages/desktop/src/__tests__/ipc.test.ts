@@ -17,7 +17,12 @@ const mocks = vi.hoisted(() => {
   const showExportSettingsDialog = vi.fn();
   const showImportSettingsDialog = vi.fn();
   const setupAutoUpdater = vi.fn();
-  const readShellSettings = vi.fn(async () => ({ desktopMode: "remote", activeProfileId: null, profiles: [] }));
+  const readShellSettings = vi.fn(async () => ({
+    desktopMode: "remote",
+    hasCompletedModeSelection: true,
+    activeProfileId: null,
+    profiles: [],
+  }));
   const writeShellSettings = vi.fn(async () => undefined);
 
   return {
@@ -51,6 +56,10 @@ vi.mock("../native.js", () => ({
 vi.mock("../shell-settings.js", () => ({
   readShellSettings: mocks.readShellSettings,
   writeShellSettings: mocks.writeShellSettings,
+  getDesktopShellModeState: (settings: { hasCompletedModeSelection?: boolean; desktopMode?: "local" | "remote" | null }) => ({
+    isFirstRun: !settings.hasCompletedModeSelection || !settings.desktopMode,
+    desktopMode: settings.desktopMode ?? null,
+  }),
 }));
 
 function createWindowMock() {
@@ -92,6 +101,7 @@ describe("ipc handlers", () => {
     const channels = new Set(mocks.ipcMain.handle.mock.calls.map(([channel]) => channel));
     expect(channels.has("shell:getState")).toBe(true);
     expect(channels.has("shell:saveProfile")).toBe(true);
+    expect(channels.has("shell:getDesktopModeState")).toBe(true);
     expect(channels.has("shell:setDesktopMode")).toBe(true);
     expect(channels.has("platform:get")).toBe(true);
   });
@@ -102,6 +112,7 @@ describe("ipc handlers", () => {
     const result = await handler?.({});
 
     expect(result).toMatchObject({ host: "desktop-shell", desktopMode: "remote" });
+    expect(result).toMatchObject({ desktopModeState: { isFirstRun: false, desktopMode: "remote" } });
   });
 
   it("shell:setDesktopMode persists mode and emits state", async () => {
@@ -110,7 +121,9 @@ describe("ipc handlers", () => {
     const handler = mocks.ipcHandlers.get("shell:setDesktopMode");
     await handler?.({}, "local");
 
-    expect(mocks.writeShellSettings).toHaveBeenCalled();
+    expect(mocks.writeShellSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ desktopMode: "local", hasCompletedModeSelection: true }),
+    );
     expect(onDesktopModeChange).toHaveBeenCalledWith("local");
     expect(window.webContents.send).toHaveBeenCalledWith("shell:state", expect.any(Object));
   });

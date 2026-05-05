@@ -36,11 +36,17 @@ describe("shell-settings", () => {
   });
 
   it("returns defaults when file missing", async () => {
-    const { readShellSettings } = await import("../shell-settings.ts");
+    const { readShellSettings, getDesktopShellModeState } = await import("../shell-settings.ts");
     await expect(readShellSettings()).resolves.toEqual({
-      desktopMode: "remote",
+      desktopMode: null,
+      hasCompletedModeSelection: false,
       activeProfileId: null,
       profiles: [],
+    });
+    const settings = await readShellSettings();
+    expect(getDesktopShellModeState(settings)).toEqual({
+      isFirstRun: true,
+      desktopMode: null,
     });
   });
 
@@ -49,6 +55,7 @@ describe("shell-settings", () => {
 
     await writeShellSettings({
       desktopMode: "local",
+      hasCompletedModeSelection: true,
       activeProfileId: "p1",
       profiles: [
         {
@@ -65,8 +72,33 @@ describe("shell-settings", () => {
 
     await expect(readShellSettings()).resolves.toMatchObject({
       desktopMode: "local",
+      hasCompletedModeSelection: true,
       activeProfileId: "p1",
       profiles: [{ id: "p1" }],
+    });
+  });
+
+  it("infers completed selection from legacy desktopMode payload", async () => {
+    mockState.content.set("/tmp/fusion/shell-connections.json", JSON.stringify({ desktopMode: "remote" }));
+    const { readShellSettings, getDesktopShellModeState } = await import("../shell-settings.ts");
+    const settings = await readShellSettings();
+    expect(settings.hasCompletedModeSelection).toBe(true);
+    expect(getDesktopShellModeState(settings)).toEqual({
+      isFirstRun: false,
+      desktopMode: "remote",
+    });
+  });
+
+  it("treats invalid persisted mode as first-run", async () => {
+    mockState.content.set(
+      "/tmp/fusion/shell-connections.json",
+      JSON.stringify({ desktopMode: "invalid", hasCompletedModeSelection: true }),
+    );
+    const { readShellSettings, getDesktopShellModeState } = await import("../shell-settings.ts");
+    const settings = await readShellSettings();
+    expect(getDesktopShellModeState(settings)).toEqual({
+      isFirstRun: true,
+      desktopMode: null,
     });
   });
 });

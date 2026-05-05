@@ -14,7 +14,7 @@ import {
 import { setupTray } from "./tray.js";
 import { getRendererUrl, getRendererFilePath, isUrlRenderer } from "./renderer.js";
 import { DesktopLocalServerManager } from "./local-server.js";
-import { readShellSettings } from "./shell-settings.js";
+import { getDesktopShellModeState, readShellSettings } from "./shell-settings.js";
 
 // Re-export for backward compatibility
 export { IS_DEVELOPMENT } from "./renderer.js";
@@ -115,7 +115,8 @@ export async function initializeApp(): Promise<void> {
   setupAutoUpdater(createdWindow);
 
   const shellSettings = await readShellSettings();
-  if (shellSettings.desktopMode === "local") {
+  const desktopModeState = getDesktopShellModeState(shellSettings);
+  if (!desktopModeState.isFirstRun && desktopModeState.desktopMode === "local") {
     await localServerManager.start();
   }
 

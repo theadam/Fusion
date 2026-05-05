@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
 import type { FusionShellApi, ShellConnectionState } from "../types/native-shell";
 
-interface ShellContextValue {
+export interface ShellContextValue {
   shellApi: FusionShellApi | null;
   state: ShellConnectionState;
   ready: boolean;

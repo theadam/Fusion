@@ -12,14 +12,23 @@ export interface ShellConnectionProfile {
   lastUsedAt?: string | null;
 }
 
+export type DesktopShellMode = "local" | "remote";
+
+export interface DesktopShellModeState {
+  isFirstRun: boolean;
+  desktopMode: DesktopShellMode | null;
+}
+
 export interface DesktopShellSettings {
-  desktopMode: "local" | "remote";
+  desktopMode: DesktopShellMode | null;
+  hasCompletedModeSelection: boolean;
   activeProfileId: string | null;
   profiles: ShellConnectionProfile[];
 }
 
 const DEFAULT_SETTINGS: DesktopShellSettings = {
-  desktopMode: "remote",
+  desktopMode: null,
+  hasCompletedModeSelection: false,
   activeProfileId: null,
   profiles: [],
 };
@@ -28,16 +37,28 @@ function getSettingsPath(): string {
   return join(app.getPath("userData"), "shell-connections.json");
 }
 
+function normalizeDesktopMode(value: unknown): DesktopShellMode | null {
+  if (value === "local" || value === "remote") {
+    return value;
+  }
+  return null;
+}
+
 function normalize(input: unknown): DesktopShellSettings {
   if (!input || typeof input !== "object") {
     return { ...DEFAULT_SETTINGS };
   }
 
   const candidate = input as Partial<DesktopShellSettings>;
+  const desktopMode = normalizeDesktopMode(candidate.desktopMode);
+  const inferredCompleted = desktopMode !== null;
   return {
-    desktopMode: candidate.desktopMode === "local" ? "local" : "remote",
+    desktopMode,
+    hasCompletedModeSelection: typeof candidate.hasCompletedModeSelection === "boolean" ? candidate.hasCompletedModeSelection : inferredCompleted,
     activeProfileId: typeof candidate.activeProfileId === "string" ? candidate.activeProfileId : null,
-    profiles: Array.isArray(candidate.profiles) ? candidate.profiles.filter((item) => item && typeof item === "object") as ShellConnectionProfile[] : [],
+    profiles: Array.isArray(candidate.profiles)
+      ? (candidate.profiles.filter((item) => item && typeof item === "object") as ShellConnectionProfile[])
+      : [],
   };
 }
 
@@ -48,6 +69,20 @@ export async function readShellSettings(): Promise<DesktopShellSettings> {
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
+}
+
+export function getDesktopShellModeState(settings: DesktopShellSettings): DesktopShellModeState {
+  if (!settings.hasCompletedModeSelection || settings.desktopMode === null) {
+    return {
+      isFirstRun: true,
+      desktopMode: null,
+    };
+  }
+
+  return {
+    isFirstRun: false,
+    desktopMode: settings.desktopMode,
+  };
 }
 
 export async function writeShellSettings(settings: DesktopShellSettings): Promise<void> {

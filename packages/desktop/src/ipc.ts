@@ -1,7 +1,13 @@
 import { app, type BrowserWindow, ipcMain, type Tray } from "electron";
 import { setupAutoUpdater, showExportSettingsDialog, showImportSettingsDialog } from "./native.js";
 import { type EngineStatus, updateTrayStatus } from "./tray.js";
-import { readShellSettings, writeShellSettings, type ShellConnectionProfile } from "./shell-settings.js";
+import {
+  getDesktopShellModeState,
+  readShellSettings,
+  writeShellSettings,
+  type DesktopShellMode,
+  type ShellConnectionProfile,
+} from "./shell-settings.js";
 import type { DesktopLocalServerState } from "./local-server.js";
 
 interface ShellConnectionProfileInput {
@@ -13,14 +19,18 @@ interface ShellConnectionProfileInput {
 
 interface ShellConnectionState {
   host: "desktop-shell";
-  desktopMode?: "local" | "remote";
+  desktopModeState: {
+    isFirstRun: boolean;
+    desktopMode: DesktopShellMode | null;
+  };
+  desktopMode?: DesktopShellMode;
   activeProfileId: string | null;
   profiles: ShellConnectionProfile[];
   localServer?: DesktopLocalServerState;
 }
 
 interface RegisterIpcOptions {
-  onDesktopModeChange?: (mode: "local" | "remote") => Promise<void>;
+  onDesktopModeChange?: (mode: DesktopShellMode) => Promise<void>;
   getLocalServerState?: () => DesktopLocalServerState;
   getServerPort?: () => number | undefined;
 }
@@ -39,7 +49,8 @@ function toShellState(
 ): ShellConnectionState {
   return {
     host: "desktop-shell",
-    desktopMode: settings.desktopMode,
+    desktopModeState: getDesktopShellModeState(settings),
+    desktopMode: settings.desktopMode ?? undefined,
     activeProfileId: settings.activeProfileId,
     profiles: settings.profiles,
     localServer: localServerState ?? { status: "idle", error: null },
@@ -133,9 +144,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, tray: Tray, optio
     return emitShellState(mainWindow, options.getLocalServerState);
   });
 
-  ipcMain.handle("shell:setDesktopMode", async (_event, mode: "local" | "remote") => {
+  ipcMain.handle("shell:getDesktopModeState", async () => {
+    const settings = await readShellSettings();
+    return getDesktopShellModeState(settings);
+  });
+
+  ipcMain.handle("shell:setDesktopMode", async (_event, mode: DesktopShellMode) => {
     const settings = await readShellSettings();
     settings.desktopMode = mode;
+    settings.hasCompletedModeSelection = true;
     await writeShellSettings(settings);
     await options.onDesktopModeChange?.(mode);
     return emitShellState(mainWindow, options.getLocalServerState);

@@ -61,12 +61,18 @@ getRendererFilePath() // Returns absolute file path for loadFile()
 
 ## First-run Shell Onboarding (Desktop)
 
-Desktop now boots through a shell-level onboarding gate before dashboard onboarding when no usable shell connection state exists.
+Desktop boots through a shell-owned mode chooser before mounting the dashboard app when the user has not completed mode selection yet.
 
-- **First run choice:** users choose **Local Fusion (bundled runtime)** or **Remote Server**.
-- **Desktop mode restore:** last-used mode is persisted and restored on relaunch.
+- **First run choice:** users choose **Local Fusion (bundled runtime)** or **Remote connection path**.
+- **Mode contract:** `desktopMode` is `"local" | "remote" | null` and `hasCompletedModeSelection` determines whether the renderer treats startup as first-run. IPC also exposes a renderer-safe `{ isFirstRun, desktopMode }` shape via `shell:getDesktopModeState`.
+- **Desktop mode restore:** after selection, mode is persisted and reused on relaunch.
 - **Remote profiles:** multiple saved profiles are supported (`name`, `serverUrl`, optional `authToken`) and can be managed/switched later from the dashboard header connection UI.
 - **Storage boundary:** shell connection state is stored only in desktop-local app data at `app.getPath("userData")/shell-connections.json` and is not written to `.fusion/config.json` or dashboard project storage keys.
+
+### Production vs dev bootstrap behavior
+
+- **Production (`fn desktop`)**: renderer mounts `DesktopShellBootstrap`, which resolves shell mode via preload/IPC and either renders the chooser or mounts the dashboard shell. In remote mode, the dashboard shell opens the native connection onboarding/manager flow instead of the local runtime path.
+- **Dev (`pnpm --filter @fusion/desktop dev`)**: same mode bootstrap flow runs; only the renderer source (Vite URL vs bundled file) changes.
 
 ## IPC Channel Reference
 

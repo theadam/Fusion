@@ -49,7 +49,15 @@ vi.mock("../tray.js", () => ({ setupTray: vi.fn() }));
 vi.mock("../ipc.js", () => ({ registerIpcHandlers: vi.fn() }));
 vi.mock("../native.js", () => ({ DEFAULT_WINDOW_STATE: { width: 1000, height: 800 }, loadWindowState: vi.fn(async () => null), saveWindowState: vi.fn(), setupAutoUpdater: vi.fn() }));
 vi.mock("../deep-link.js", () => ({ registerDeepLinkProtocol: vi.fn(), setupDeepLinkHandler: vi.fn() }));
-vi.mock("../shell-settings.js", () => ({ readShellSettings: vi.fn(async () => ({ desktopMode: "local", activeProfileId: null, profiles: [] })) }));
+vi.mock("../shell-settings.js", () => ({
+  readShellSettings: vi.fn(async () => ({
+    desktopMode: "local",
+    hasCompletedModeSelection: true,
+    activeProfileId: null,
+    profiles: [],
+  })),
+  getDesktopShellModeState: () => ({ isFirstRun: false, desktopMode: "local" }),
+}));
 vi.mock("../local-server.js", () => ({ DesktopLocalServerManager: vi.fn(() => mocks.localServerManager) }));
 
 describe("main local mode", () => {

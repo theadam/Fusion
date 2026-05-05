@@ -100,6 +100,55 @@ vi.mock("electron", () => ({
   shell: mocks.shell,
 }));
 
+const mainDeps = vi.hoisted(() => {
+  const start = vi.fn(async () => undefined);
+  const stop = vi.fn(async () => undefined);
+  const getState = vi.fn(() => ({ status: "idle", error: null }));
+  const getPort = vi.fn(() => 0);
+  return {
+    registerIpcHandlers: vi.fn(),
+    buildAppMenu: vi.fn(),
+    setupTray: vi.fn(),
+    registerDeepLinkProtocol: vi.fn(),
+    setupDeepLinkHandler: vi.fn(),
+    setupAutoUpdater: vi.fn(),
+    loadWindowState: vi.fn(async () => null),
+    saveWindowState: vi.fn(),
+    readShellSettings: vi.fn(async () => ({
+      desktopMode: null,
+      hasCompletedModeSelection: false,
+      activeProfileId: null,
+      profiles: [],
+    })),
+    DesktopLocalServerManager: vi.fn(() => ({ start, stop, getState, getPort })),
+    start,
+  };
+});
+
+vi.mock("../ipc.js", () => ({ registerIpcHandlers: mainDeps.registerIpcHandlers }));
+vi.mock("../menu.js", () => ({ buildAppMenu: mainDeps.buildAppMenu }));
+vi.mock("../tray.js", () => ({ setupTray: mainDeps.setupTray }));
+vi.mock("../deep-link.js", () => ({
+  registerDeepLinkProtocol: mainDeps.registerDeepLinkProtocol,
+  setupDeepLinkHandler: mainDeps.setupDeepLinkHandler,
+}));
+vi.mock("../native.js", () => ({
+  DEFAULT_WINDOW_STATE: { width: 1280, height: 900, isMaximized: false },
+  loadWindowState: mainDeps.loadWindowState,
+  saveWindowState: mainDeps.saveWindowState,
+  setupAutoUpdater: mainDeps.setupAutoUpdater,
+}));
+vi.mock("../shell-settings.js", () => ({
+  readShellSettings: mainDeps.readShellSettings,
+  getDesktopShellModeState: (settings: { hasCompletedModeSelection: boolean; desktopMode: "local" | "remote" | null }) => ({
+    isFirstRun: !settings.hasCompletedModeSelection || settings.desktopMode === null,
+    desktopMode: settings.desktopMode,
+  }),
+}));
+vi.mock("../local-server.js", () => ({
+  DesktopLocalServerManager: mainDeps.DesktopLocalServerManager,
+}));
+
 async function importMainModule() {
   return import("../main.ts");
 }
@@ -111,6 +160,12 @@ describe("main process", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    mainDeps.readShellSettings.mockResolvedValue({
+      desktopMode: null,
+      hasCompletedModeSelection: false,
+      activeProfileId: null,
+      profiles: [],
+    });
     if (originalDashboardUrl === undefined) {
       delete process.env.FUSION_DASHBOARD_URL;
     } else {
@@ -200,6 +255,28 @@ describe("main process", () => {
     const mainModule = await importMainModule();
 
     expect(typeof mainModule.initializeApp).toBe("function");
+  });
+
+  it("initializeApp starts local server only when persisted mode is local and not first run", async () => {
+    mainDeps.readShellSettings.mockResolvedValueOnce({
+      desktopMode: "local",
+      hasCompletedModeSelection: true,
+      activeProfileId: null,
+      profiles: [],
+    });
+    const { initializeApp } = await importMainModule();
+
+    await initializeApp();
+
+    expect(mainDeps.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("initializeApp does not start local server on first run without mode selection", async () => {
+    const { initializeApp } = await importMainModule();
+
+    await initializeApp();
+
+    expect(mainDeps.start).not.toHaveBeenCalled();
   });
 
   it("createMainWindow registers close and closed handlers", async () => {

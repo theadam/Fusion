@@ -20,6 +20,10 @@ interface ShellConnectionProfileInput {
 
 interface ShellConnectionState {
   host: "web" | "mobile-shell" | "desktop-shell";
+  desktopModeState?: {
+    isFirstRun: boolean;
+    desktopMode: "local" | "remote" | null;
+  };
   desktopMode?: "local" | "remote";
   activeProfileId: string | null;
   profiles: ShellConnectionProfile[];
@@ -96,6 +100,8 @@ const fusionShell = {
   saveProfile: (profile: ShellConnectionProfileInput): Promise<ShellConnectionProfile> => ipcRenderer.invoke("shell:saveProfile", profile),
   deleteProfile: (profileId: string): Promise<void> => ipcRenderer.invoke("shell:deleteProfile", profileId),
   setActiveProfile: (profileId: string | null): Promise<ShellConnectionState> => ipcRenderer.invoke("shell:setActiveProfile", profileId),
+  getDesktopModeState: (): Promise<{ isFirstRun: boolean; desktopMode: "local" | "remote" | null }> =>
+    ipcRenderer.invoke("shell:getDesktopModeState"),
   setDesktopMode: (mode: "local" | "remote"): Promise<ShellConnectionState> => ipcRenderer.invoke("shell:setDesktopMode", mode),
   startQrScan: (): Promise<{ serverUrl: string; authToken?: string | null }> => ipcRenderer.invoke("shell:startQrScan"),
   openConnectionManager: (): Promise<void> => ipcRenderer.invoke("shell:openConnectionManager"),
