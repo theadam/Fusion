@@ -25,7 +25,6 @@ import {
   HEARTBEAT_INTERVAL_PRESETS,
 } from "../utils/heartbeatIntervals";
 import { isEphemeralAgent, getErrorMessage } from "@fusion/core";
-import { relativeTime } from "./AgentDetailView";
 import { formatAgentSkillBadgeLabel } from "../utils/agentSkills";
 
 export interface AgentsViewProps {
@@ -699,7 +698,6 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
 
   const getRoleLabel = (role: AgentCapability) => AGENT_ROLES.find(r => r.value === role)?.label ?? role;
   const getRoleIcon = (role: AgentCapability) => AGENT_ROLES.find(r => r.value === role)?.icon ?? "◆";
-  const selectedAgent = selectedAgentId ? displayAgents.find((agent) => agent.id === selectedAgentId) ?? null : null;
   const orgChartZoom = ORG_CHART_ZOOM_LEVELS[orgChartZoomIndex];
 
   /** Get skill badges from agent metadata */
@@ -1379,60 +1377,6 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
         )}
           </div>
 
-          {!isMobileViewport && selectedAgent && (
-            <div className="agents-sidebar-quick-controls">
-              <div className="agents-sidebar-quick-controls__header">
-                <strong>{selectedAgent.name}</strong>
-                <span className={`badge ${getStateBadgeClass(selectedAgent.state)}`}>{selectedAgent.state}</span>
-              </div>
-              <div className="agents-sidebar-quick-controls__meta">
-                <span>{formatHeartbeatInterval(resolveHeartbeatIntervalMs(selectedAgent.runtimeConfig?.heartbeatIntervalMs))}</span>
-                {selectedAgent.lastHeartbeatAt && <span>Last {relativeTime(selectedAgent.lastHeartbeatAt)}</span>}
-              </div>
-              <div className="agents-sidebar-quick-controls__actions">
-                {selectedAgent.state === "idle" && (
-                  <button className="btn btn-sm" onClick={() => void handleStateChange(selectedAgent.id, "active")}>
-                    <Play size={14} /> Start
-                  </button>
-                )}
-                {selectedAgent.state === "active" && (
-                  <>
-                    <button className="btn btn-sm" onClick={() => void handleRunHeartbeat(selectedAgent.id, selectedAgent.name)}>
-                      <Activity size={14} /> Run Now
-                    </button>
-                    <button className="btn btn-sm" onClick={() => void handleStateChange(selectedAgent.id, "paused")}>
-                      <Pause size={14} /> Pause
-                    </button>
-                  </>
-                )}
-                {selectedAgent.state === "running" && (
-                  <button className="btn btn-sm" onClick={() => void handleStateChange(selectedAgent.id, "paused")}>
-                    <Pause size={14} /> Pause
-                  </button>
-                )}
-                {selectedAgent.state === "paused" && (
-                  <button className="btn btn-sm" onClick={() => void handleStateChange(selectedAgent.id, "active")}>
-                    <Play size={14} /> Resume
-                  </button>
-                )}
-                {selectedAgent.state === "error" && (
-                  <button className="btn btn-sm" onClick={() => void handleStateChange(selectedAgent.id, "active")}>
-                    <Play size={14} /> Retry
-                  </button>
-                )}
-                {selectedAgent.state === "terminated" && (
-                  <>
-                    <button className="btn btn-sm" onClick={() => void handleStateChange(selectedAgent.id, "active")}>
-                      <Play size={14} /> Start
-                    </button>
-                    <button className="btn btn-danger btn-sm" onClick={() => void handleDelete(selectedAgent.id, selectedAgent.name)}>
-                      <Trash2 size={14} /> Delete
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
         <div className={`agents-split-detail${isMobileViewport && !selectedAgentId ? " agents-split-detail--hidden-mobile" : ""}`}>

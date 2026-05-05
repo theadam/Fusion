@@ -169,6 +169,13 @@ describe("Agent CSS classes", () => {
     expect(hasClass(".agents-mobile-back-btn")).toBe(false);
   });
 
+  it("removes desktop sidebar quick-controls strip classes", () => {
+    expect(hasClass(".agents-sidebar-quick-controls")).toBe(false);
+    expect(hasClass(".agents-sidebar-quick-controls__header")).toBe(false);
+    expect(hasClass(".agents-sidebar-quick-controls__meta")).toBe(false);
+    expect(hasClass(".agents-sidebar-quick-controls__actions")).toBe(false);
+  });
+
   it("should visually group the filter controls", () => {
     const filtersBlock = extractRuleBlock(".agent-controls-filters");
     expect(filtersBlock).toContain("padding: var(--space-xs) var(--space-sm)");
