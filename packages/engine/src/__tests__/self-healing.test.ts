@@ -883,6 +883,54 @@ describe("SelfHealingManager", () => {
       expect(store.archiveTaskAndCleanup).toHaveBeenCalledWith("FN-001");
       expect(store.archiveTaskAndCleanup).not.toHaveBeenCalledWith("FN-002");
     });
+
+    it("skips stale done tasks that have active dependents", async () => {
+      vi.setSystemTime(new Date("2026-01-04T00:00:00.000Z"));
+      (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
+        autoArchiveDoneTasksEnabled: true,
+        autoArchiveDoneAfterMs: 24 * 60 * 60 * 1000,
+      } as unknown as Settings);
+      (store.listTasks as ReturnType<typeof vi.fn>).mockResolvedValue([
+        // Stale done — but a todo task depends on it. Must not be archived
+        // because archiving wipes .fusion/tasks/{id}/ and downstream agents
+        // are told they may read sibling task specs from disk.
+        {
+          id: "FN-100",
+          column: "done",
+          columnMovedAt: "2026-01-02T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          dependencies: [],
+        },
+        // Stale done — only a done dependent remains, archive is fine
+        {
+          id: "FN-101",
+          column: "done",
+          columnMovedAt: "2026-01-02T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          dependencies: [],
+        },
+        {
+          id: "FN-200",
+          column: "todo",
+          dependencies: ["FN-100"],
+        },
+        {
+          id: "FN-201",
+          column: "done",
+          // Fresh — not stale. Demonstrates that a *done* dependent does
+          // not block archive of FN-101.
+          columnMovedAt: "2026-01-03T23:00:00.000Z",
+          updatedAt: "2026-01-03T23:00:00.000Z",
+          dependencies: ["FN-101"],
+        },
+      ]);
+
+      const result = await manager.archiveStaleDoneTasks();
+
+      expect(result).toBe(1);
+      expect(store.archiveTaskAndCleanup).toHaveBeenCalledWith("FN-101");
+      expect(store.archiveTaskAndCleanup).not.toHaveBeenCalledWith("FN-100");
+    });
   });
 
   // ── Completed task recovery ─────────────────────────────────────────

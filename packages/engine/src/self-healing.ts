@@ -712,6 +712,20 @@ export class SelfHealingManager {
       const tasks = await this.store.listTasks({ slim: true, includeArchived: false });
       const cutoff = Date.now() - archiveAfterMs;
 
+      // Build a set of task IDs that have at least one *active* dependent —
+      // i.e., another task in triage/todo/in-progress/in-review that lists
+      // this ID in its `dependencies`. Archiving such a task wipes
+      // `.fusion/tasks/{id}/` on disk, which downstream agents are told they
+      // may read for sibling-spec context (executor prompt). Done/archived
+      // dependents have already consumed the spec and don't block.
+      const tasksWithActiveDependents = new Set<string>();
+      for (const t of tasks) {
+        if (t.column === "done" || t.column === "archived") continue;
+        for (const depId of t.dependencies ?? []) {
+          tasksWithActiveDependents.add(depId);
+        }
+      }
+
       const stale = tasks.filter((t) => {
         if (t.column !== "done") return false;
         // Prefer columnMovedAt (when the task entered done); fall back to updatedAt
@@ -719,7 +733,12 @@ export class SelfHealingManager {
         const ts = t.columnMovedAt || t.updatedAt;
         const movedAt = ts ? Date.parse(ts) : NaN;
         if (!Number.isFinite(movedAt)) return false;
-        return movedAt < cutoff;
+        if (movedAt >= cutoff) return false;
+        if (tasksWithActiveDependents.has(t.id)) {
+          log.log(`Skipping auto-archive of ${t.id}: has active dependents`);
+          return false;
+        }
+        return true;
       });
 
       if (stale.length === 0) return 0;
