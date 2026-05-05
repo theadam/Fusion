@@ -3130,6 +3130,23 @@ describe("Messaging Routes", () => {
     expect(res.body.unreadCount).toBe(1);
   });
 
+  it("dashboard inbox aggregates legacy dashboard user aliases", async () => {
+    messageStore.sendMessage({ fromId: "agent-1", fromType: "agent", toId: "dashboard", toType: "user", content: "A", type: "agent-to-user" });
+    messageStore.sendMessage({ fromId: "agent-1", fromType: "agent", toId: "user:dashboard", toType: "user", content: "B", type: "agent-to-user" });
+    messageStore.sendMessage({ fromId: "agent-1", fromType: "agent", toId: "User: user:dashboard", toType: "user", content: "C", type: "agent-to-user" });
+
+    const inbox = await GET(app, "/api/messages/inbox");
+    expect(inbox.status).toBe(200);
+    expect(inbox.body.messages).toHaveLength(3);
+
+    const unread = await GET(app, "/api/messages/unread-count");
+    expect(unread.body.unreadCount).toBe(3);
+
+    const readAll = await REQUEST(app, "POST", "/api/messages/read-all");
+    expect(readAll.status).toBe(200);
+    expect(readAll.body.markedAsRead).toBe(3);
+  });
+
   it("GET /api/messages/outbox returns dashboard sent messages", async () => {
     const sent = await REQUEST(
       app,

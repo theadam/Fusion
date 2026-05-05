@@ -545,6 +545,17 @@ Mailbox replies use `message.metadata.replyTo.messageId` as the stable reply lin
 
 The dashboard mailbox UI also uses the same metadata contract when users click **Reply**, so user and agent replies share one threading model.
 
+### Dashboard user recipient convention
+
+For dashboard user messaging, agents should target the canonical user recipient ID `dashboard`.
+
+Runtime safeguards defensively normalize the legacy alias forms below to the same logical dashboard user:
+- `dashboard` (canonical)
+- `user:dashboard`
+- `User: user:dashboard`
+
+This normalization applies on send and mailbox reads, so replies from agents still land in the dashboard inbox even when older alias-like recipient strings appear.
+
 ### How It Works
 
 1. **Message Prefetch**: When `messageStore` is available, heartbeat runs fetch up to 10 unread inbox messages for the agent.

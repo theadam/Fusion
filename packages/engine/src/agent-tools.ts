@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import type { AgentStore, AgentState, AgentCapability, AgentUpdateInput, TaskDocument, TaskDocumentCreateInput, TaskStore, RunMutationContext, MessageStore, Message, SourceType, Settings, ResearchRun, ResearchRunStatus, TaskCreateInput, ReflectionStore } from "@fusion/core";
-import { dailyMemoryPath, ensureOpenClawMemoryFiles, getMemoryBackendCapabilities, getProjectMemory, isEphemeralAgent, memoryLongTermPath, resolveMemoryBackend, resolveResearchSettings, resolveTitleSummarizerSettingsModel, scheduleQmdProjectMemoryRefresh, searchProjectMemory, shouldSkipBackgroundQmdRefresh, summarizeTitle } from "@fusion/core";
+import { DASHBOARD_USER_ID, dailyMemoryPath, ensureOpenClawMemoryFiles, getMemoryBackendCapabilities, getProjectMemory, isEphemeralAgent, memoryLongTermPath, normalizeMessageParticipant, resolveMemoryBackend, resolveResearchSettings, resolveTitleSummarizerSettingsModel, scheduleQmdProjectMemoryRefresh, searchProjectMemory, shouldSkipBackgroundQmdRefresh, summarizeTitle } from "@fusion/core";
 import { ResearchOrchestrator } from "./research-orchestrator.js";
 import { ResearchProviderRegistry } from "./research/provider-registry.js";
 import { ResearchStepRunner } from "./research-step-runner.js";
@@ -1432,7 +1432,10 @@ export function createSendMessageTool(messageStore: MessageStore, fromAgentId: s
 
       try {
         const messageType = params.type ?? "agent-to-agent";
-        const recipientType = messageType === "agent-to-user" ? "user" : "agent";
+        const recipientType: "user" | "agent" = messageType === "agent-to-user" ? "user" : "agent";
+        const recipient = recipientType === "user"
+          ? normalizeMessageParticipant(params.to_id, recipientType)
+          : { id: params.to_id, type: recipientType };
         const replyToMessageId = params.reply_to_message_id?.trim();
 
         if (params.reply_to_message_id !== undefined && !replyToMessageId) {
@@ -1445,8 +1448,8 @@ export function createSendMessageTool(messageStore: MessageStore, fromAgentId: s
         const message = messageStore.sendMessage({
           fromId: fromAgentId,
           fromType: "agent",
-          toId: params.to_id,
-          toType: recipientType,
+          toId: recipient.id,
+          toType: recipient.type,
           content,
           type: messageType,
           ...(replyToMessageId ? { metadata: { replyTo: { messageId: replyToMessageId } } } : {}),
@@ -1455,7 +1458,7 @@ export function createSendMessageTool(messageStore: MessageStore, fromAgentId: s
         return {
           content: [{
             type: "text" as const,
-            text: `Message sent to ${params.to_id} (ID: ${message.id})`,
+            text: `Message sent to ${recipient.id === DASHBOARD_USER_ID ? DASHBOARD_USER_ID : params.to_id} (ID: ${message.id})`,
           }],
           details: { messageId: message.id },
         };

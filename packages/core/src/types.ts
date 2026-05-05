@@ -4117,6 +4117,24 @@ export interface MigrationResult {
 /** Participant types for message routing */
 export type ParticipantType = "agent" | "user" | "system";
 
+/** Canonical recipient ID for dashboard user mailbox routing. */
+export const DASHBOARD_USER_ID = "dashboard";
+
+const DASHBOARD_USER_ALIASES = new Set([DASHBOARD_USER_ID, "user:dashboard", "User: user:dashboard"]);
+
+/** Normalize participant identity for durable mailbox routing. */
+export function normalizeMessageParticipant(id: string, type: ParticipantType): { id: string; type: ParticipantType } {
+  if (type !== "user") {
+    return { id, type };
+  }
+
+  if (DASHBOARD_USER_ALIASES.has(id)) {
+    return { id: DASHBOARD_USER_ID, type };
+  }
+
+  return { id, type };
+}
+
 /** Message types/categories */
 export type MessageType = "agent-to-agent" | "agent-to-user" | "user-to-agent" | "system";
 

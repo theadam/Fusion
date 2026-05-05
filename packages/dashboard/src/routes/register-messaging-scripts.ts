@@ -1,5 +1,5 @@
 import type { Request } from "express";
-import { MessageStore, type MessageType, type ParticipantType, validateMessageMetadata } from "@fusion/core";
+import { DASHBOARD_USER_ID, MessageStore, type MessageType, type ParticipantType, validateMessageMetadata } from "@fusion/core";
 import { ApiError, badRequest, notFound } from "../api-error.js";
 import { getTerminalService } from "../terminal-service.js";
 import type { ApiRoutesContext } from "./types.js";
@@ -190,7 +190,6 @@ export function registerMessagingScriptRoutes(ctx: ApiRoutesContext): void {
 
   const VALID_MESSAGE_TYPES: MessageType[] = ["agent-to-agent", "agent-to-user", "user-to-agent", "system"];
   const VALID_PARTICIPANT_TYPES: ParticipantType[] = ["agent", "user", "system"];
-  const DASHBOARD_USER_ID = "dashboard";
 
   router.get("/messages/inbox", async (req, res) => {
     try {

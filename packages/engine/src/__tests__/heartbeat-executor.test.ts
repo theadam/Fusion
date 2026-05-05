@@ -1607,22 +1607,26 @@ describe("executeHeartbeat", () => {
         const sendMessageTool = callArgs.customTools?.find((tool: { name: string }) => tool.name === "fn_send_message");
         expect(sendMessageTool).toBeDefined();
 
-        await sendMessageTool!.execute(
-          "tool-call",
-          {
-            to_id: "dashboard",
-            content: "Status: I am on it.",
-            type: "agent-to-user",
-            reply_to_message_id: inboundFromUser.id,
-          },
-          undefined,
-          undefined,
-          {} as any,
-        );
+        for (const [index, alias] of ["dashboard", "user:dashboard", "User: user:dashboard"].entries()) {
+          await sendMessageTool!.execute(
+            `tool-call-${index}`,
+            {
+              to_id: alias,
+              content: `Status: I am on it. (${index})`,
+              type: "agent-to-user",
+              reply_to_message_id: inboundFromUser.id,
+            },
+            undefined,
+            undefined,
+            {} as any,
+          );
+        }
 
         const dashboardInbox = fakeMessageStore.getInbox("dashboard", "user");
-        const linkedReply = dashboardInbox.find((message) => message.content === "Status: I am on it.");
-        expect(linkedReply?.metadata).toEqual({ replyTo: { messageId: inboundFromUser.id } });
+        for (const index of [0, 1, 2]) {
+          const linkedReply = dashboardInbox.find((message) => message.content === `Status: I am on it. (${index})`);
+          expect(linkedReply?.metadata).toEqual({ replyTo: { messageId: inboundFromUser.id } });
+        }
 
         await monitor.stop();
       });

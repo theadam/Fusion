@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "../db.js";
 import { MessageStore } from "../message-store.js";
+import { DASHBOARD_USER_ID } from "../types.js";
 import type { Message, Mailbox } from "../types.js";
 
 describe("MessageStore", () => {
@@ -123,6 +124,40 @@ describe("MessageStore", () => {
       const result = store.getMessage("msg-nonexistent");
       expect(result).toBeNull();
     });
+
+    it.each(["dashboard", "user:dashboard", "User: user:dashboard"])(
+      "canonicalizes dashboard user alias '%s' when writing recipient",
+      (dashboardAlias) => {
+        const message = store.sendMessage({
+          fromId: "agent-1",
+          fromType: "agent",
+          toId: dashboardAlias,
+          toType: "user",
+          content: "Hello dashboard",
+          type: "agent-to-user",
+        });
+
+        expect(message.toId).toBe(DASHBOARD_USER_ID);
+        expect(store.getMessage(message.id)?.toId).toBe(DASHBOARD_USER_ID);
+      },
+    );
+
+    it.each(["dashboard", "user:dashboard", "User: user:dashboard"])(
+      "canonicalizes dashboard user alias '%s' when writing sender",
+      (dashboardAlias) => {
+        const message = store.sendMessage({
+          fromId: dashboardAlias,
+          fromType: "user",
+          toId: "agent-1",
+          toType: "agent",
+          content: "Reply",
+          type: "user-to-agent",
+        });
+
+        expect(message.fromId).toBe(DASHBOARD_USER_ID);
+        expect(store.getMessage(message.id)?.fromId).toBe(DASHBOARD_USER_ID);
+      },
+    );
   });
 
   describe("message-to-agent hook", () => {
@@ -232,6 +267,15 @@ describe("MessageStore", () => {
     it("returns empty array for participant with no messages", () => {
       const inbox = store.getInbox("user-99", "user");
       expect(inbox).toEqual([]);
+    });
+
+    it("includes legacy dashboard aliases in canonical dashboard inbox reads", () => {
+      store.sendMessage({ fromId: "agent-1", fromType: "agent", toId: DASHBOARD_USER_ID, toType: "user", content: "A", type: "agent-to-user" });
+      store.sendMessage({ fromId: "agent-1", fromType: "agent", toId: "user:dashboard", toType: "user", content: "B", type: "agent-to-user" });
+      store.sendMessage({ fromId: "agent-1", fromType: "agent", toId: "User: user:dashboard", toType: "user", content: "C", type: "agent-to-user" });
+
+      const inbox = store.getInbox(DASHBOARD_USER_ID, "user");
+      expect(inbox).toHaveLength(3);
     });
 
     it("filters by read status", () => {
@@ -418,6 +462,14 @@ describe("MessageStore", () => {
       const count = store.markAllAsRead("user-99", "user");
       expect(count).toBe(0);
     });
+
+    it("marks canonical dashboard aliases as read together", () => {
+      store.sendMessage({ fromId: "agent-1", fromType: "agent", toId: DASHBOARD_USER_ID, toType: "user", content: "A", type: "agent-to-user" });
+      store.sendMessage({ fromId: "agent-2", fromType: "agent", toId: "user:dashboard", toType: "user", content: "B", type: "agent-to-user" });
+      const marked = store.markAllAsRead(DASHBOARD_USER_ID, "user");
+      expect(marked).toBe(2);
+      expect(store.getMailbox(DASHBOARD_USER_ID, "user").unreadCount).toBe(0);
+    });
   });
 
   describe("deleteMessage()", () => {
@@ -524,6 +576,31 @@ describe("MessageStore", () => {
       );
       expect(conversation).toEqual([]);
     });
+
+    it("treats canonical dashboard identity as equivalent to legacy aliases in conversation reads", () => {
+      const sent = store.sendMessage({
+        fromId: "dashboard",
+        fromType: "user",
+        toId: "agent-1",
+        toType: "agent",
+        content: "Question",
+        type: "user-to-agent",
+      });
+      const reply = store.sendMessage({
+        fromId: "agent-1",
+        fromType: "agent",
+        toId: "user:dashboard",
+        toType: "user",
+        content: "Answer",
+        type: "agent-to-user",
+      });
+
+      const conversation = store.getConversation(
+        { id: DASHBOARD_USER_ID, type: "user" },
+        { id: "agent-1", type: "agent" },
+      );
+      expect(conversation.map((message) => message.id)).toEqual([sent.id, reply.id]);
+    });
   });
 
   describe("getMailbox()", () => {
@@ -559,6 +636,15 @@ describe("MessageStore", () => {
       const mailbox = store.getMailbox("user-99", "user");
       expect(mailbox.unreadCount).toBe(0);
       expect(mailbox.lastMessage).toBeUndefined();
+    });
+
+    it("aggregates unread count across canonical and legacy dashboard aliases", () => {
+      store.sendMessage({ fromId: "agent-1", fromType: "agent", toId: DASHBOARD_USER_ID, toType: "user", content: "A", type: "agent-to-user" });
+      store.sendMessage({ fromId: "agent-1", fromType: "agent", toId: "User: user:dashboard", toType: "user", content: "B", type: "agent-to-user" });
+
+      const mailbox = store.getMailbox(DASHBOARD_USER_ID, "user");
+      expect(mailbox.unreadCount).toBe(2);
+      expect(mailbox.lastMessage).toBeTruthy();
     });
 
     it("counts only unread messages", () => {

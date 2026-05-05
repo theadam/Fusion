@@ -727,6 +727,24 @@ describe("createSendMessageTool", () => {
     );
   });
 
+  it.each(["dashboard", "user:dashboard", "User: user:dashboard"])(
+    "canonicalizes dashboard alias '%s' for agent-to-user sends",
+    async (dashboardAlias) => {
+      const mockMessage = createMessage({ toId: "dashboard", toType: "user", type: "agent-to-user" });
+      vi.mocked(messageStore.sendMessage).mockReturnValue(mockMessage);
+
+      await executeTool(tool, {
+        to_id: dashboardAlias,
+        content: "Status",
+        type: "agent-to-user",
+      });
+
+      expect(messageStore.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ toId: "dashboard", toType: "user", type: "agent-to-user" }),
+      );
+    },
+  );
+
   it("maps recipient type to agent for agent-to-agent messages", async () => {
     const mockMessage = createMessage({ toType: "agent", type: "agent-to-agent" });
     vi.mocked(messageStore.sendMessage).mockReturnValue(mockMessage);
