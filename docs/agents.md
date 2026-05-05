@@ -657,6 +657,21 @@ Heartbeat timers are armed for agents in valid working states and remain armed a
 - Ephemeral/task-worker agents are never armed with timers (managed directly by TaskExecutor)
 - The `runtimeConfig.enabled` flag is respected for disabling heartbeat monitoring entirely
 
+### Unresponsive Recovery (FN-3475)
+
+When a tracked agent misses heartbeat for `2 × heartbeatTimeoutMs`, the monitor now performs recovery (not termination):
+
+1. Dispose the stuck session and untrack the stale run
+2. `pauseAgent(agentId, { pauseReason: "heartbeat-unresponsive", stopActiveRun: false })`
+3. `resumeAgent(agentId, { triggerDetail: "unresponsive-recovery", triggerSource: "heartbeat-unresponsive", clearPauseReason: true })`
+
+Effects:
+- Agent state transitions `running/active → paused → active`
+- `pauseReason` is set to `heartbeat-unresponsive` during recovery and cleared on resume
+- Assigned tasks are auto-paused with `pausedByAgentId` during pause, then only those same tasks are auto-unpaused on resume
+- Resume triggers one on-demand heartbeat restart only when `runtimeConfig.enabled !== false`
+- `onTerminated` is reserved for true termination flows and is not used by unresponsive recovery
+
 ## Dashboard Health Status
 
 The dashboard displays agent health status in AgentsView, AgentListModal, and AgentDetailView using a centralized health evaluation utility (`packages/dashboard/app/utils/agentHealth.ts`).

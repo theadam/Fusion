@@ -112,6 +112,17 @@ export interface HeartbeatExecutionOptions {
   contextSnapshot?: Record<string, unknown>;
 }
 
+export interface PauseAgentOptions {
+  pauseReason?: string;
+  stopActiveRun?: boolean;
+}
+
+export interface ResumeAgentOptions {
+  triggerDetail?: string;
+  triggerSource?: string;
+  clearPauseReason?: boolean;
+}
+
 /** Session interface for disposing agent resources */
 export interface AgentSession {
   /** Dispose the agent session (stop execution, cleanup resources) */
@@ -878,6 +889,104 @@ export class HeartbeatMonitor {
     }
 
     this.clearRunState(agentId);
+  }
+
+  async pauseAgent(agentId: string, options: PauseAgentOptions = {}): Promise<Agent> {
+    const { pauseReason, stopActiveRun = false } = options;
+
+    if (stopActiveRun) {
+      try {
+        await this.stopRun(agentId);
+      } catch (error) {
+        heartbeatLog.warn(`pauseAgent(${agentId}) stopRun failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    const current = await this.store.getAgent(agentId);
+    if (!current) {
+      throw new Error(`Agent ${agentId} not found`);
+    }
+
+    let updated = current;
+    if (current.state !== "paused") {
+      updated = await this.store.updateAgentState(agentId, "paused");
+    }
+
+    if (pauseReason !== undefined && updated.pauseReason !== pauseReason) {
+      updated = await this.store.updateAgent(agentId, { pauseReason });
+    }
+
+    if (this.taskStore) {
+      const assignedTasks = await this.taskStore.getTasksByAssignedAgent(agentId, { excludeArchived: true });
+      const toPause = assignedTasks.filter((task) => task.paused !== true);
+      const results = await Promise.allSettled(
+        toPause.map((task) => this.taskStore!.pauseTask(task.id, true, undefined, { pausedByAgentId: agentId })),
+      );
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          heartbeatLog.warn(`pauseAgent(${agentId}) failed to pause assigned task ${toPause[index]?.id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+        }
+      });
+    }
+
+    return updated;
+  }
+
+  async resumeAgent(agentId: string, options: ResumeAgentOptions = {}): Promise<Agent> {
+    const {
+      triggerDetail = "Triggered from state resume",
+      triggerSource = "state-resume",
+      clearPauseReason = true,
+    } = options;
+
+    const current = await this.store.getAgent(agentId);
+    if (!current) {
+      throw new Error(`Agent ${agentId} not found`);
+    }
+
+    let updated = current;
+    if (current.state !== "active") {
+      updated = await this.store.updateAgentState(agentId, "active");
+    }
+
+    if (clearPauseReason && updated.pauseReason !== undefined) {
+      updated = await this.store.updateAgent(agentId, { pauseReason: undefined });
+    }
+
+    if (this.taskStore) {
+      const pausedTasks = await this.taskStore.getTasksByAssignedAgent(agentId, {
+        pausedOnly: true,
+        excludeArchived: true,
+      });
+      const toUnpause = pausedTasks.filter((task) => task.pausedByAgentId === agentId);
+      const results = await Promise.allSettled(toUnpause.map((task) => this.taskStore!.pauseTask(task.id, false)));
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          heartbeatLog.warn(`resumeAgent(${agentId}) failed to unpause assigned task ${toUnpause[index]?.id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+        }
+      });
+    }
+
+    const latest = await this.store.getAgent(agentId);
+    const isHeartbeatEnabled = latest?.runtimeConfig?.enabled !== false;
+    if (isHeartbeatEnabled) {
+      try {
+        await this.executeHeartbeat({
+          agentId,
+          source: "on_demand",
+          triggerDetail,
+          contextSnapshot: {
+            wakeReason: "on_demand",
+            triggerDetail,
+            triggerSource,
+          },
+        });
+      } catch (error) {
+        heartbeatLog.warn(`resumeAgent(${agentId}) executeHeartbeat failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    return (await this.store.getAgent(agentId)) ?? updated;
   }
 
   /**
@@ -2228,7 +2337,7 @@ export class HeartbeatMonitor {
           // Already reported - check if we should terminate
           // Give 2x timeout for recovery before auto-terminate
           if (elapsed >= config.heartbeatTimeoutMs * 2) {
-            await this.terminateUnresponsive(tracked, config.heartbeatTimeoutMs);
+            await this.recoverUnresponsiveAgent(tracked, config.heartbeatTimeoutMs);
           }
         }
       }
@@ -2243,33 +2352,36 @@ export class HeartbeatMonitor {
     this.onMissed?.(tracked.agentId, reason);
   }
 
-  private async terminateUnresponsive(tracked: TrackedAgent, heartbeatTimeoutMs: number): Promise<void> {
+  private async recoverUnresponsiveAgent(tracked: TrackedAgent, heartbeatTimeoutMs: number): Promise<void> {
     const now = Date.now();
     const elapsed = now - tracked.lastSeen;
     const reason = `No heartbeat for ${formatDuration(elapsed)} (2× timeout threshold: ${formatDuration(heartbeatTimeoutMs * 2)})`;
 
-    heartbeatLog.warn(`Terminating unresponsive agent ${tracked.agentId}: ${reason}`);
+    heartbeatLog.warn(`Recovering unresponsive agent ${tracked.agentId}: ${reason}`);
 
-    // Dispose the session
     try {
       tracked.session.dispose();
     } catch (err) {
-      // Log but don't stop termination
       heartbeatLog.warn(`Error disposing session for ${tracked.agentId}: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    // Update agent state to terminated
+    this.untrackAgent(tracked.agentId);
+
     try {
-      await this.store.updateAgentState(tracked.agentId, "terminated");
+      await this.pauseAgent(tracked.agentId, { pauseReason: "heartbeat-unresponsive", stopActiveRun: false });
     } catch (err) {
-      heartbeatLog.warn(`Error terminating agent ${tracked.agentId}: ${err instanceof Error ? err.message : String(err)}`);
+      heartbeatLog.warn(`Error pausing unresponsive agent ${tracked.agentId}: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    // Remove from tracking
-    this.trackedAgents.delete(tracked.agentId);
-
-    // Notify callback
-    this.onTerminated?.(tracked.agentId, reason);
+    try {
+      await this.resumeAgent(tracked.agentId, {
+        triggerDetail: "unresponsive-recovery",
+        triggerSource: "heartbeat-unresponsive",
+        clearPauseReason: true,
+      });
+    } catch (err) {
+      heartbeatLog.warn(`Error resuming unresponsive agent ${tracked.agentId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 

@@ -39,7 +39,7 @@ interface AgentRuntimeRouteDeps {
 }
 
 export function registerAgentRuntimeRoutes(ctx: ApiRoutesContext, deps: AgentRuntimeRouteDeps): void {
-  const { router, getProjectContext, rethrowAsApiError } = ctx;
+  const { router, getProjectContext, rethrowAsApiError, runtimeLogger } = ctx;
   const {
     validateAgentInstructionsPayload,
     serializeAccessState,
@@ -421,6 +421,33 @@ export function registerAgentRuntimeRoutes(ctx: ApiRoutesContext, deps: AgentRun
         ? heartbeatMonitor
         : null;
 
+      const lifecycleMonitor = projectHeartbeatMonitor as ({
+        pauseAgent?: (agentId: string, options?: { pauseReason?: string; stopActiveRun?: boolean }) => Promise<unknown>;
+        resumeAgent?: (agentId: string, options?: { triggerDetail?: string; triggerSource?: string; clearPauseReason?: boolean }) => Promise<unknown>;
+      } | null);
+      const pauseAgentHelper = lifecycleMonitor?.pauseAgent;
+      const resumeAgentHelper = lifecycleMonitor?.resumeAgent;
+      const supportsLifecycleHelpers = pauseAgentHelper && resumeAgentHelper;
+
+      if (supportsLifecycleHelpers && nextState === "paused") {
+        const paused = await pauseAgentHelper(agentId, {
+          pauseReason: currentAgent.pauseReason,
+          stopActiveRun: true,
+        });
+        res.json(paused);
+        return;
+      }
+
+      if (supportsLifecycleHelpers && nextState === "active") {
+        const resumed = await resumeAgentHelper(agentId, {
+          triggerDetail: "Triggered from state resume",
+          triggerSource: "state-resume",
+          clearPauseReason: true,
+        });
+        res.json(resumed);
+        return;
+      }
+
       const updatedAgent = await agentStore.updateAgentState(agentId, nextState);
       res.json(updatedAgent);
 
@@ -445,7 +472,11 @@ export function registerAgentRuntimeRoutes(ctx: ApiRoutesContext, deps: AgentRun
             );
             results.forEach((result, index) => {
               if (result.status === "rejected") {
-                console.error(`[agent-state] failed to pause assigned task ${toPause[index]?.id} for ${agentId}:`, result.reason);
+                runtimeLogger.child("agent-state").warn("Failed to auto-pause assigned task", {
+                  agentId,
+                  taskId: toPause[index]?.id,
+                  error: String(result.reason),
+                });
               }
             });
           }
@@ -461,7 +492,11 @@ export function registerAgentRuntimeRoutes(ctx: ApiRoutesContext, deps: AgentRun
             );
             results.forEach((result, index) => {
               if (result.status === "rejected") {
-                console.error(`[agent-state] failed to unpause assigned task ${toUnpause[index]?.id} for ${agentId}:`, result.reason);
+                runtimeLogger.child("agent-state").warn("Failed to auto-unpause assigned task", {
+                  agentId,
+                  taskId: toUnpause[index]?.id,
+                  error: String(result.reason),
+                });
               }
             });
           }
@@ -480,7 +515,11 @@ export function registerAgentRuntimeRoutes(ctx: ApiRoutesContext, deps: AgentRun
             });
           }
         } catch (err) {
-          console.error(`[agent-state] async heartbeat work failed for ${agentId}:`, err);
+          runtimeLogger.child("agent-state").warn("Async state transition follow-up failed", {
+            agentId,
+            nextState,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       })();
     } catch (err: unknown) {

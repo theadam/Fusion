@@ -48,6 +48,8 @@ describe("per-agent heartbeat config", () => {
     return {
       recordHeartbeat: vi.fn().mockResolvedValue(undefined),
       updateAgentState: vi.fn().mockResolvedValue(undefined),
+      updateAgent: vi.fn().mockResolvedValue(undefined),
+      getAgent: vi.fn().mockResolvedValue({ ...agent, state: "running" }),
       getCachedAgent: vi.fn().mockReturnValue(agent),
     } as unknown as AgentStore;
   }
@@ -322,17 +324,21 @@ describe("per-agent heartbeat config", () => {
       vi.useRealTimers();
     });
 
-    it("terminates unresponsive agent using per-agent timeout", async () => {
+    it("recovers unresponsive agent using per-agent timeout", async () => {
       const onTerminated = vi.fn();
       const agentStore = createStoreWithAgent({
         id: "agent-001",
         runtimeConfig: { heartbeatTimeoutMs: 5000 },
       });
+      const runtimeStore = createStoreWithAgent({
+        id: "agent-001",
+        runtimeConfig: { enabled: false },
+      });
       const session = createMockSession();
 
       vi.useFakeTimers({ shouldAdvanceTime: true });
       const monitor = new HeartbeatMonitor({
-        store,
+        store: runtimeStore,
         agentStore,
         pollIntervalMs: 1000,
         heartbeatTimeoutMs: 60000, // Global default 60s — agent overrides to 5s
@@ -346,7 +352,9 @@ describe("per-agent heartbeat config", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       expect(session.dispose).toHaveBeenCalled();
-      expect(onTerminated).toHaveBeenCalledWith("agent-001", expect.any(String));
+      expect(runtimeStore.updateAgentState).toHaveBeenCalledWith("agent-001", "paused");
+      expect(runtimeStore.updateAgentState).toHaveBeenCalledWith("agent-001", "active");
+      expect(onTerminated).not.toHaveBeenCalled();
 
       monitor.stop();
       vi.useRealTimers();
