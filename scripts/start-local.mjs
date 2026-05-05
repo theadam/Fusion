@@ -23,7 +23,6 @@ Fusion local startup
 
 Usage:
   pnpm local [options]
-  pnpm start:local [options]
 
 Options:
   --engine            Start the full AI engine. Default: dashboard/API only.
@@ -208,13 +207,15 @@ function ensureProjectRegistered(opts) {
   }
 
   info("Checking Fusion project registry");
+  const rootLiteral = JSON.stringify(repoRoot);
+  const nameLiteral = JSON.stringify(projectNameFromPackage());
   const helper = `
     import { CentralCore } from "./packages/core/src/central-core.ts";
     import { ensureMemoryFileWithBackend } from "./packages/core/src/project-memory.ts";
 
     async function main() {
-      const root = process.argv[1];
-      const requestedName = process.argv[2] || "Fusion";
+      const root = ${rootLiteral};
+      const requestedName = ${nameLiteral};
       const sanitize = (value) => String(value)
         .replace(/^@[^/]+\\//, "")
         .replace(/[^a-zA-Z0-9_-]/g, "-")
@@ -263,7 +264,7 @@ function ensureProjectRegistered(opts) {
     });
   `;
 
-  run(pnpm, ["exec", "tsx", "--eval", helper, repoRoot, projectNameFromPackage()]);
+  run(pnpm, ["exec", "tsx", "--eval", helper]);
 }
 
 function canListen(port, host) {
