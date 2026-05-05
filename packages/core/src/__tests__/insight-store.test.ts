@@ -971,7 +971,7 @@ describe("Migration: pre-33 DB upgrade", () => {
       // Step 1: Create a fresh DB and run migrations
       const db1 = createDatabase(compatDir);
       db1.init();
-      expect(db1.getSchemaVersion()).toBe(61);
+      expect(db1.getSchemaVersion()).toBe(62);
 
       // Step 2: Strip lifecycle and cancelledAt columns by recreating the
       // table without them. This simulates a DB that was created before the
