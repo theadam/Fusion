@@ -450,11 +450,11 @@ Plugins declare `uiSlots` in their `FusionPlugin` definition. The dashboard disc
 | `header-action` | Dashboard header | Action button in the header toolbar | Available |
 | `settings-section` | Settings modal | Section added to the settings panel | Available |
 | `settings-provider-card` | Settings → Authentication | Provider card contribution in Authentication section | Available |
-| `settings-integration-card` | Settings → Authentication | Integration/help card contribution in Authentication section | Available |
 | `onboarding-provider-card` | Onboarding modal → AI setup | Provider card content rendered before host fallback cards | Available |
-| `onboarding-recommendation-card` | Onboarding modal → AI setup | Recommendation/help content rendered near setup intro | Available |
 | `onboarding-setup-help` | Onboarding modal → AI setup | Additional setup-help content rendered below provider sections | Available |
 | `post-onboarding-recommendation` | Dashboard post-onboarding card | Recommendation item rendered in host-owned next-steps container | Available |
+| `settings-integration-card` | Legacy structured name | Compatibility alias now normalized to `settings-config-section` in structured API | Compatibility only |
+| `onboarding-recommendation-card` | Legacy structured name | Compatibility alias now normalized to `onboarding-provider-recommendation` in structured API | Compatibility only |
 | `task-card-badge` | Task card on the board | Small badge displayed on task cards (e.g., CI status indicator) | Planned |
 | `board-column-footer` | Board column | Footer area below the last card in a column | Planned |
 
@@ -509,6 +509,32 @@ Important implications:
 - Host flows still own modal structure, navigation, callbacks, and fallback content when no slot entry exists.
 
 For this reason, plugin authors should still provide stable `componentPath` values in manifests, but coordinate with dashboard host maintainers when adding new UI surfaces or module paths that need mapping.
+
+### Structured UI Contributions (data-only, parallel to `uiSlots`)
+
+For Settings/onboarding/post-onboarding flows, use structured `uiContributions` instead of legacy placeholder slots.
+
+- Discovery API: `GET /api/plugins/ui-contributions`
+- Type surface: `PluginUiContributionDefinition` (`@fusion/plugin-sdk`)
+- Structured surfaces:
+  - `settings-provider-card`
+  - `settings-config-section`
+  - `onboarding-provider-card`
+  - `onboarding-setup-help`
+  - `onboarding-provider-recommendation`
+  - `post-onboarding-recommendation`
+
+Rules:
+- Structured contributions are **data-only JSON payloads**.
+- Do **not** include `componentPath`.
+- Do **not** send live callbacks/functions through REST.
+- Use `actions: PluginUiActionDescriptor[]` so host-owned renderers bind behavior.
+
+Compatibility normalization:
+- `settings-integration-card` → `settings-config-section`
+- `onboarding-recommendation-card` → `onboarding-provider-recommendation`
+
+The API only returns normalized surface names.
 
 ---
 
@@ -1059,7 +1085,7 @@ Polls CI status for branches and provides custom API endpoints.
 Reference runtime plugin that migrates a CLI-backed provider into the plugin system.
 
 - Demonstrates: runtime adapter pattern (`runtime-adapter.ts`) and plugin-owned streaming/provider orchestration (`provider.ts`, `process-manager.ts`)
-- Demonstrates UI slot registration for `settings-provider-card`, `settings-integration-card`, `onboarding-provider-card`, `onboarding-setup-help`, and `post-onboarding-recommendation`
+- Demonstrates structured contribution registration for `settings-provider-card`, `settings-config-section`, `onboarding-provider-card`, `onboarding-setup-help`, `onboarding-provider-recommendation`, and `post-onboarding-recommendation`
 - Demonstrates dashboard probe delegation through plugin-owned `probeDroidBinary`
 - Preserves provider id `droid-cli` via `@fusion/droid-cli` compatibility shim
 

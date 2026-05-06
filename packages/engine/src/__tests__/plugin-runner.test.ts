@@ -34,6 +34,7 @@ describe("PluginRunner", () => {
     getPluginTools: ReturnType<typeof vi.fn>;
     getPluginRoutes: ReturnType<typeof vi.fn>;
     getPluginUiSlots: ReturnType<typeof vi.fn>;
+    getPluginUiContributions: ReturnType<typeof vi.fn>;
     getPluginRuntimes: ReturnType<typeof vi.fn>;
     getPluginSkills: ReturnType<typeof vi.fn>;
     getPluginWorkflowSteps: ReturnType<typeof vi.fn>;
@@ -94,6 +95,7 @@ describe("PluginRunner", () => {
       getPluginTools: vi.fn().mockReturnValue([]),
       getPluginRoutes: vi.fn().mockReturnValue([]),
       getPluginUiSlots: vi.fn().mockReturnValue([]),
+      getPluginUiContributions: vi.fn().mockReturnValue([]),
       getPluginRuntimes: vi.fn().mockReturnValue([]),
       getPluginSkills: vi.fn().mockReturnValue([]),
       getPluginWorkflowSteps: vi.fn().mockReturnValue([]),
@@ -531,6 +533,50 @@ describe("PluginRunner", () => {
       // Next call should rebuild cache
       pluginRunner.getPluginUiSlots();
       expect(mockPluginLoader.getPluginUiSlots).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("getPluginUiContributions()", () => {
+    it("returns structured contributions from pluginLoader", () => {
+      const contributions = [
+        {
+          pluginId: "plugin-a",
+          contribution: {
+            surface: "settings-config-section",
+            contributionId: "cfg-a",
+            sectionId: "openai",
+            title: "OpenAI settings",
+            pluginSettingKeys: ["openai.apiKey"],
+          },
+        },
+      ];
+      mockPluginLoader.getPluginUiContributions.mockReturnValue(contributions);
+
+      const result = pluginRunner.getPluginUiContributions();
+
+      expect(result).toEqual(contributions);
+      expect(mockPluginLoader.getPluginUiContributions).toHaveBeenCalledTimes(1);
+    });
+
+    it("uses cached contributions until invalidated", () => {
+      const contributions = [
+        {
+          pluginId: "plugin-a",
+          contribution: {
+            surface: "onboarding-provider-recommendation",
+            contributionId: "rec-a",
+            providerId: "openai",
+            title: "OpenAI",
+            reason: "default",
+          },
+        },
+      ];
+      mockPluginLoader.getPluginUiContributions.mockReturnValue(contributions);
+
+      pluginRunner.getPluginUiContributions();
+      pluginRunner.getPluginUiContributions();
+
+      expect(mockPluginLoader.getPluginUiContributions).toHaveBeenCalledTimes(1);
     });
   });
 

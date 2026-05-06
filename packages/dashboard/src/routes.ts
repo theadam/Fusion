@@ -3156,6 +3156,30 @@ export function createApiRoutes(store: TaskStore, options?: ServerOptions): Rout
     res.json(normalizedSlots);
   });
 
+  /**
+   * GET /api/plugins/ui-contributions
+   * Get all structured UI contributions from active plugins.
+   */
+  router.get("/plugins/ui-contributions", async (_req: Request, res: Response) => {
+    const contributions = options?.pluginLoader?.getPluginUiContributions() ?? [];
+    const normalizedContributions = contributions
+      .map((entry) => ({
+        pluginId: entry.pluginId,
+        contribution: {
+          ...entry.contribution,
+          order: entry.contribution.order ?? null,
+        },
+      }))
+      .sort((a, b) => {
+        const orderA = typeof a.contribution.order === "number" ? a.contribution.order : Number.MAX_SAFE_INTEGER;
+        const orderB = typeof b.contribution.order === "number" ? b.contribution.order : Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) return orderA - orderB;
+        if (a.pluginId !== b.pluginId) return a.pluginId.localeCompare(b.pluginId);
+        return a.contribution.contributionId.localeCompare(b.contribution.contributionId);
+      });
+    res.json(normalizedContributions);
+  });
+
 
   /**
    * GET /api/plugins/dashboard-views

@@ -143,6 +143,17 @@ export type {
   PluginRouteMethod,
   PluginUiSurface,
   PluginUiSlotDefinition,
+  PluginUiContributionSurface,
+  PluginUiContributionWhen,
+  PluginUiActionDescriptor,
+  SettingsProviderCardContribution,
+  SettingsConfigSectionContribution,
+  OnboardingProviderCardContribution,
+  OnboardingSetupHelpContribution,
+  OnboardingProviderRecommendationContribution,
+  PostOnboardingRecommendationContribution,
+  PluginUiContributionDefinition,
+  PluginUiContributionInputDefinition,
   PluginDashboardViewDefinition,
   PluginRuntimeManifestMetadata,
   PluginRuntimeFactory,
@@ -165,7 +176,7 @@ export type {
   PluginState,
   PluginInstallation,
 } from "./plugin-types.js";
-export { validatePluginManifest } from "./plugin-types.js";
+export { validatePluginManifest, normalizePluginUiContributionSurface, normalizePluginUiContributionDefinition } from "./plugin-types.js";
 export { PluginStore } from "./plugin-store.js";
 export type { PluginStoreEvents, PluginRegistrationInput, PluginUpdateInput } from "./plugin-store.js";
 export { PluginLoader } from "./plugin-loader.js";

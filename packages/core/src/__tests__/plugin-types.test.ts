@@ -14,8 +14,14 @@ import type {
   PluginSetupManifest,
   PluginSkillContribution,
   PluginWorkflowStepContribution,
+  PluginUiContributionDefinition,
+  PluginUiContributionInputDefinition,
 } from "../plugin-types.js";
-import { validatePluginManifest } from "../plugin-types.js";
+import {
+  normalizePluginUiContributionDefinition,
+  normalizePluginUiContributionSurface,
+  validatePluginManifest,
+} from "../plugin-types.js";
 
 describe("validatePluginManifest", () => {
   // ── Valid Manifests ─────────────────────────────────────────────────
@@ -1062,6 +1068,95 @@ describe("PluginRuntimeRegistration", () => {
     };
 
     expect(typeof registration.factory).toBe("function");
+  });
+});
+
+describe("plugin ui contribution normalization", () => {
+  it("normalizes settings-integration-card to settings-config-section", () => {
+    const normalized = normalizePluginUiContributionDefinition({
+      surface: "settings-integration-card",
+      contributionId: "settings-a",
+      sectionId: "provider-a",
+      title: "Provider settings",
+      pluginSettingKeys: ["provider.apiKey"],
+    });
+    expect(normalized.surface).toBe("settings-config-section");
+  });
+
+  it("normalizes onboarding-recommendation-card to onboarding-provider-recommendation", () => {
+    const normalized = normalizePluginUiContributionDefinition({
+      surface: "onboarding-recommendation-card",
+      contributionId: "rec-a",
+      providerId: "openai",
+      title: "OpenAI",
+      reason: "Best default",
+    });
+    expect(normalized.surface).toBe("onboarding-provider-recommendation");
+  });
+
+  it("passes through final structured surface names unchanged", () => {
+    expect(normalizePluginUiContributionSurface("settings-config-section")).toBe("settings-config-section");
+    expect(normalizePluginUiContributionSurface("onboarding-provider-recommendation")).toBe(
+      "onboarding-provider-recommendation",
+    );
+  });
+
+  it("accepts legacy surface names in input definitions for compatibility", () => {
+    const legacyInput: PluginUiContributionInputDefinition = {
+      surface: "settings-integration-card",
+      contributionId: "legacy-settings",
+      sectionId: "provider-a",
+      title: "Provider settings",
+      pluginSettingKeys: ["provider.apiKey"],
+    };
+    expect(legacyInput.surface).toBe("settings-integration-card");
+  });
+
+  it("supports all final structured contribution surfaces", () => {
+    const contributions: PluginUiContributionDefinition[] = [
+      {
+        surface: "settings-provider-card",
+        contributionId: "settings-provider",
+        providerId: "anthropic",
+        title: "Anthropic",
+        providerType: "api_key",
+      },
+      {
+        surface: "settings-config-section",
+        contributionId: "settings-config",
+        sectionId: "anthropic",
+        title: "Anthropic config",
+        pluginSettingKeys: ["anthropic.apiKey"],
+      },
+      {
+        surface: "onboarding-provider-card",
+        contributionId: "onboarding-provider",
+        providerId: "openai",
+        title: "OpenAI",
+        providerType: "oauth",
+      },
+      {
+        surface: "onboarding-setup-help",
+        contributionId: "setup-help",
+        title: "Need help?",
+        body: "Run auth login",
+        bodyFormat: "text",
+      },
+      {
+        surface: "onboarding-provider-recommendation",
+        contributionId: "provider-recommendation",
+        providerId: "openai",
+        title: "Recommended",
+        reason: "Fast setup",
+      },
+      {
+        surface: "post-onboarding-recommendation",
+        contributionId: "post-recommendation",
+        title: "Next step",
+        description: "Enable budgets",
+      },
+    ];
+    expect(contributions).toHaveLength(6);
   });
 });
 

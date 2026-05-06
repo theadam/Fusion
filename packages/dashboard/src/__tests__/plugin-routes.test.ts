@@ -92,6 +92,7 @@ function createMockPluginLoader(overrides: Partial<PluginLoader> = {}): PluginLo
     getPluginTools: vi.fn().mockReturnValue([]),
     getPluginRoutes: vi.fn().mockReturnValue([]),
     getPluginUiSlots: vi.fn().mockReturnValue([]),
+    getPluginUiContributions: vi.fn().mockReturnValue([]),
     getPluginRuntimes: vi.fn().mockReturnValue([]),
     getPluginDashboardViews: vi.fn().mockReturnValue([]),
     loadAllPlugins: vi.fn().mockResolvedValue({ loaded: 0, errors: 0 }),
@@ -908,6 +909,72 @@ describe("GET /api/plugins/ui-slots", () => {
         },
       },
     ]);
+  });
+});
+
+describe("GET /api/plugins/ui-contributions", () => {
+  let pluginStore: PluginStore;
+  let pluginLoader: PluginLoader;
+  let store: TaskStore;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pluginStore = createMockPluginStore();
+    pluginLoader = createMockPluginLoader();
+    store = createMockTaskStore({
+      getPluginStore: vi.fn().mockReturnValue(pluginStore),
+    });
+  });
+
+  function buildApp() {
+    const app = express();
+    app.use(express.json());
+    app.use("/api", createApiRoutes(store, { pluginStore, pluginLoader }));
+    return app;
+  }
+
+  it("returns normalized and sorted structured contributions", async () => {
+    (pluginLoader.getPluginUiContributions as ReturnType<typeof vi.fn>).mockReturnValue([
+      {
+        pluginId: "b-plugin",
+        contribution: {
+          surface: "onboarding-provider-recommendation",
+          contributionId: "rec-b",
+          providerId: "openai",
+          title: "OpenAI",
+          reason: "default",
+          order: 10,
+        },
+      },
+      {
+        pluginId: "a-plugin",
+        contribution: {
+          surface: "settings-config-section",
+          contributionId: "cfg-a",
+          sectionId: "openai",
+          title: "OpenAI settings",
+          pluginSettingKeys: ["openai.apiKey"],
+          order: 1,
+        },
+      },
+    ]);
+
+    const res = await performGet(buildApp(), "/api/plugins/ui-contributions");
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((entry: { pluginId: string }) => entry.pluginId)).toEqual(["a-plugin", "b-plugin"]);
+    expect(res.body[0].contribution.surface).toBe("settings-config-section");
+  });
+
+  it("returns empty array when pluginLoader is missing", async () => {
+    const app = express();
+    app.use(express.json());
+    app.use("/api", createApiRoutes(store, { pluginStore }));
+
+    const res = await performGet(app, "/api/plugins/ui-contributions");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
   });
 });
 

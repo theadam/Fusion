@@ -252,6 +252,128 @@ export interface PluginUiSlotDefinition {
  * Top-level dashboard view definition for plugin-provided navigation destinations.
  * This is separate from embedded uiSlots and is rendered via host-managed registry.
  */
+export type PluginUiContributionSurface =
+  | "settings-provider-card"
+  | "settings-config-section"
+  | "onboarding-provider-card"
+  | "onboarding-setup-help"
+  | "onboarding-provider-recommendation"
+  | "post-onboarding-recommendation";
+
+export interface PluginUiContributionWhen {
+  providerIds?: string[];
+  runtimeIds?: string[];
+  authState?: "required" | "authenticated" | "unauthenticated";
+  onboardingState?: "required" | "in-progress" | "complete";
+}
+
+export interface PluginUiActionDescriptor {
+  kind:
+    | "open-settings-section"
+    | "open-onboarding"
+    | "refresh-auth-status"
+    | "save-api-key"
+    | "toggle-cli-provider"
+    | "open-external-url";
+  target?: string;
+  label?: string;
+}
+
+interface PluginUiContributionBase {
+  surface: PluginUiContributionSurface;
+  contributionId: string;
+  title: string;
+  description?: string;
+  order?: number;
+  when?: PluginUiContributionWhen;
+}
+
+interface PluginUiProviderCardBase extends PluginUiContributionBase {
+  providerId: string;
+  providerType: "cli" | "oauth" | "api_key" | "custom";
+  settingsSectionId?: string;
+  statusSource?: { kind: string; providerId: string; route?: string };
+  actions?: PluginUiActionDescriptor[];
+}
+
+export interface SettingsProviderCardContribution extends PluginUiProviderCardBase {
+  surface: "settings-provider-card";
+}
+
+export interface SettingsConfigSectionContribution extends PluginUiContributionBase {
+  surface: "settings-config-section";
+  sectionId: string;
+  pluginSettingKeys: string[];
+  layout?: "section" | "card" | "disclosure";
+}
+
+export interface OnboardingProviderCardContribution extends PluginUiProviderCardBase {
+  surface: "onboarding-provider-card";
+  quickStart?: string;
+  recommended?: boolean;
+}
+
+export interface OnboardingSetupHelpContribution extends PluginUiContributionBase {
+  surface: "onboarding-setup-help";
+  providerId?: string;
+  body: string;
+  bodyFormat: "text" | "markdown";
+  actions?: PluginUiActionDescriptor[];
+}
+
+export interface OnboardingProviderRecommendationContribution extends PluginUiContributionBase {
+  surface: "onboarding-provider-recommendation";
+  providerId: string;
+  reason: string;
+  actions?: PluginUiActionDescriptor[];
+  priority?: number;
+}
+
+export interface PostOnboardingRecommendationContribution extends PluginUiContributionBase {
+  surface: "post-onboarding-recommendation";
+  description: string;
+  actions?: PluginUiActionDescriptor[];
+  priority?: number;
+  dismissible?: boolean;
+}
+
+export type PluginUiContributionDefinition =
+  | SettingsProviderCardContribution
+  | SettingsConfigSectionContribution
+  | OnboardingProviderCardContribution
+  | OnboardingSetupHelpContribution
+  | OnboardingProviderRecommendationContribution
+  | PostOnboardingRecommendationContribution;
+
+type LegacyPluginUiContributionSurface =
+  | "settings-integration-card"
+  | "onboarding-recommendation-card";
+
+export type PluginUiContributionInputDefinition = Omit<PluginUiContributionDefinition, "surface"> & {
+  surface: PluginUiContributionSurface | LegacyPluginUiContributionSurface;
+};
+
+export function normalizePluginUiContributionSurface(
+  surface: PluginUiContributionSurface | LegacyPluginUiContributionSurface,
+): PluginUiContributionSurface {
+  if (surface === "settings-integration-card") {
+    return "settings-config-section";
+  }
+  if (surface === "onboarding-recommendation-card") {
+    return "onboarding-provider-recommendation";
+  }
+  return surface;
+}
+
+export function normalizePluginUiContributionDefinition(
+  contribution: PluginUiContributionInputDefinition,
+): PluginUiContributionDefinition {
+  return {
+    ...contribution,
+    surface: normalizePluginUiContributionSurface(contribution.surface),
+  } as PluginUiContributionDefinition;
+}
+
 export interface PluginDashboardViewDefinition {
   /** Unique view identifier within a plugin namespace. */
   viewId: string;
@@ -450,6 +572,7 @@ export interface FusionPlugin {
   tools?: PluginToolDefinition[];
   routes?: PluginRouteDefinition[];
   uiSlots?: PluginUiSlotDefinition[];
+  uiContributions?: PluginUiContributionInputDefinition[];
   /** Plugin-contributed top-level dashboard views. */
   dashboardViews?: PluginDashboardViewDefinition[];
   /** Agent runtime registration for providing custom runtime implementations */

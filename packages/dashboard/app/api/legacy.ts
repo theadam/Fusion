@@ -19,6 +19,7 @@ import type {
   WorkflowStepResult,
   PluginInstallation,
   PluginUiSlotDefinition,
+  PluginUiContributionDefinition,
   PluginDashboardViewDefinition,
   TaskDocument,
   TaskDocumentRevision,
@@ -7788,6 +7789,12 @@ export interface PluginUiSlotEntry {
   slot: PluginUiSlotDefinition;
 }
 
+/** A structured UI contribution entry returned by GET /api/plugins/ui-contributions */
+export interface PluginUiContributionEntry {
+  pluginId: string;
+  contribution: PluginUiContributionDefinition;
+}
+
 /** A dashboard view entry returned by GET /api/plugins/dashboard-views */
 export interface PluginDashboardViewEntry {
   pluginId: string;
@@ -7808,6 +7815,11 @@ export async function fetchPluginUiSlots(projectId?: string): Promise<PluginUiSl
   return api<PluginUiSlotEntry[]>(withProjectId("/plugins/ui-slots", projectId));
 }
 
+
+/** Fetch all structured UI contributions from active plugins */
+export async function fetchPluginUiContributions(projectId?: string): Promise<PluginUiContributionEntry[]> {
+  return api<PluginUiContributionEntry[]>(withProjectId("/plugins/ui-contributions", projectId));
+}
 
 /** Fetch all top-level dashboard view definitions from active plugins */
 export async function fetchPluginDashboardViews(projectId?: string): Promise<PluginDashboardViewEntry[]> {

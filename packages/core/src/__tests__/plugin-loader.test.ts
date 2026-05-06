@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { PluginLoader } from "../plugin-loader.js";
+import * as loggerModule from "../logger.js";
 
 vi.mock("@mariozechner/pi-ai", () => ({
   AssistantMessageEventStream: class AssistantMessageEventStream {
@@ -131,8 +132,7 @@ type MockStructuredLogger = {
   error: ReturnType<typeof vi.fn>;
 };
 
-async function loadPluginLoaderWithMockedLogger() {
-  vi.resetModules();
+function mockStructuredLoggerFactory() {
   const loggerMap = new Map<string, MockStructuredLogger>();
   const createLoggerMock = vi.fn((prefix: string): MockStructuredLogger => {
     const existing = loggerMap.get(prefix);
@@ -147,12 +147,10 @@ async function loadPluginLoaderWithMockedLogger() {
     return logger;
   });
 
-  vi.doMock("../logger.js", () => ({
-    createLogger: createLoggerMock,
-  }));
-
-  const { PluginLoader: MockedPluginLoader } = await import("../plugin-loader.js");
-  return { MockedPluginLoader, createLoggerMock, loggerMap };
+  // Use a spy instead of resetModules/doMock so this suite cannot corrupt
+  // other modules' live exports (notably plugin-types normalization helpers).
+  vi.spyOn(loggerModule, "createLogger").mockImplementation(createLoggerMock);
+  return { createLoggerMock, loggerMap };
 }
 
 describe("PluginLoader", () => {
@@ -876,8 +874,12 @@ export default plugin;
   // ── structured logging ──────────────────────────────────────────────
 
   describe("structured logging", () => {
-    afterEach(() => {
-      vi.doUnmock("./logger.js");
+
+    it("keeps plugin-types normalization exports callable after logger mocking", async () => {
+      mockStructuredLoggerFactory();
+      const pluginTypes = await import("../plugin-types.js");
+      expect(typeof pluginTypes.normalizePluginUiContributionDefinition).toBe("function");
+      expect(typeof pluginTypes.normalizePluginUiContributionSurface).toBe("function");
     });
 
     it("logs when skipping a disabled plugin", async () => {
@@ -893,8 +895,8 @@ export default plugin;
       });
       await pluginStore.disablePlugin("disabled-log-test");
 
-      const { MockedPluginLoader, loggerMap } = await loadPluginLoaderWithMockedLogger();
-      const loader = new MockedPluginLoader({ pluginStore, taskStore: mockTaskStore });
+      const { loggerMap } = mockStructuredLoggerFactory();
+      const loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
 
       await expect(loader.loadPlugin("disabled-log-test")).rejects.toThrow("disabled");
       expect(loggerMap.get("plugin-loader")?.log).toHaveBeenCalledWith(
@@ -914,8 +916,8 @@ export default plugin;
         path: pluginPath,
       });
 
-      const { MockedPluginLoader, loggerMap } = await loadPluginLoaderWithMockedLogger();
-      const loader = new MockedPluginLoader({ pluginStore, taskStore: mockTaskStore });
+      const { loggerMap } = mockStructuredLoggerFactory();
+      const loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
 
       await loader.loadPlugin("already-loaded-log");
       await loader.loadPlugin("already-loaded-log");
@@ -937,8 +939,8 @@ export default plugin;
         path: pluginPath,
       });
 
-      const { MockedPluginLoader, loggerMap } = await loadPluginLoaderWithMockedLogger();
-      const loader = new MockedPluginLoader({ pluginStore, taskStore: mockTaskStore });
+      const { loggerMap } = mockStructuredLoggerFactory();
+      const loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
 
       await loader.loadPlugin("reload-log-test");
       await loader.reloadPlugin("reload-log-test");
@@ -961,8 +963,8 @@ export default plugin;
         path: pluginPath,
       });
 
-      const { MockedPluginLoader, loggerMap } = await loadPluginLoaderWithMockedLogger();
-      const loader = new MockedPluginLoader({ pluginStore, taskStore: mockTaskStore });
+      const { loggerMap } = mockStructuredLoggerFactory();
+      const loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
 
       await loader.loadPlugin(pluginId);
       await writePluginWithHooks(
@@ -1002,8 +1004,8 @@ export default plugin;
         path: pluginPath,
       });
 
-      const { MockedPluginLoader, loggerMap } = await loadPluginLoaderWithMockedLogger();
-      const loader = new MockedPluginLoader({ pluginStore, taskStore: mockTaskStore });
+      const { loggerMap } = mockStructuredLoggerFactory();
+      const loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
 
       await loader.loadPlugin(pluginId);
       await writePluginWithHooks(
@@ -1041,8 +1043,8 @@ export default plugin;
         path: pluginPath,
       });
 
-      const { MockedPluginLoader, loggerMap } = await loadPluginLoaderWithMockedLogger();
-      const loader = new MockedPluginLoader({ pluginStore, taskStore: mockTaskStore });
+      const { loggerMap } = mockStructuredLoggerFactory();
+      const loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
 
       await loader.loadPlugin(pluginId);
       await loader.stopPlugin(pluginId);
@@ -1074,8 +1076,8 @@ export default plugin;
         path: badPath,
       });
 
-      const { MockedPluginLoader, loggerMap } = await loadPluginLoaderWithMockedLogger();
-      const loader = new MockedPluginLoader({ pluginStore, taskStore: mockTaskStore });
+      const { loggerMap } = mockStructuredLoggerFactory();
+      const loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
 
       await loader.loadAllPlugins();
 
@@ -1088,8 +1090,8 @@ export default plugin;
     it("logs invokeHook failures", async () => {
       await pluginStore.init();
 
-      const { MockedPluginLoader, loggerMap } = await loadPluginLoaderWithMockedLogger();
-      const loader = new MockedPluginLoader({ pluginStore, taskStore: mockTaskStore });
+      const { loggerMap } = mockStructuredLoggerFactory();
+      const loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
 
       (loader as any).plugins.set("hook-error-log", {
         manifest: makeManifest({ id: "hook-error-log" }),
@@ -1130,8 +1132,8 @@ export default plugin;
         path: pluginPath,
       });
 
-      const { MockedPluginLoader, loggerMap } = await loadPluginLoaderWithMockedLogger();
-      const loader = new MockedPluginLoader({ pluginStore, taskStore: mockTaskStore });
+      const { loggerMap } = mockStructuredLoggerFactory();
+      const loader = new PluginLoader({ pluginStore, taskStore: mockTaskStore });
 
       await loader.loadPlugin(pluginId);
 
@@ -1567,6 +1569,56 @@ export default plugin;
   });
 
 
+
+  describe("getPluginUiContributions", () => {
+    it("returns normalized structured contributions and sorts deterministically", async () => {
+      await pluginStore.init();
+
+      const loader = new PluginLoader({
+        pluginStore,
+        taskStore: mockTaskStore,
+      });
+
+      (loader as any).plugins.set("plugin-b", {
+        manifest: makeManifest({ id: "plugin-b" }),
+        state: "started",
+        hooks: {},
+        uiContributions: [
+          {
+            surface: "onboarding-recommendation-card",
+            contributionId: "rec-b",
+            providerId: "openai",
+            title: "OpenAI",
+            reason: "default",
+            order: 10,
+          },
+        ],
+      } as FusionPlugin);
+
+      (loader as any).plugins.set("plugin-a", {
+        manifest: makeManifest({ id: "plugin-a" }),
+        state: "started",
+        hooks: {},
+        uiContributions: [
+          {
+            surface: "settings-integration-card",
+            contributionId: "cfg-a",
+            sectionId: "openai",
+            title: "OpenAI settings",
+            pluginSettingKeys: ["openai.apiKey"],
+            order: 1,
+          },
+        ],
+      } as FusionPlugin);
+
+      const contributions = loader.getPluginUiContributions();
+
+      expect(contributions).toHaveLength(2);
+      expect(contributions[0]?.pluginId).toBe("plugin-a");
+      expect(contributions[0]?.contribution.surface).toBe("settings-config-section");
+      expect(contributions[1]?.contribution.surface).toBe("onboarding-provider-recommendation");
+    });
+  });
 
   describe("getPluginDashboardViews", () => {
     it("returns empty array when no plugins loaded", async () => {

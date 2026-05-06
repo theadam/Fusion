@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { SettingsModal } from "../SettingsModal";
 import { __test_clearCache as clearPluginUiSlotsCache } from "../../hooks/usePluginUiSlots";
-import type { SettingsExportData, UpdateCheckResponse } from "../../api";
+import type { PluginUiContributionEntry, SettingsExportData, UpdateCheckResponse } from "../../api";
 
 // --- API mocks ---
 const mockFetchSettings = vi.fn();
@@ -2849,3 +2849,21 @@ describe("SettingsModal", () => {
   });
 });
 
+
+describe("plugin structured contribution contract fixtures", () => {
+  it("represents all required structured surfaces without componentPath", () => {
+    const contributions: PluginUiContributionEntry[] = [
+      { pluginId: "plugin-a", contribution: { surface: "settings-provider-card", contributionId: "a", providerId: "openai", title: "OpenAI", providerType: "api_key" } },
+      { pluginId: "plugin-a", contribution: { surface: "settings-config-section", contributionId: "b", sectionId: "openai", title: "OpenAI config", pluginSettingKeys: ["openai.apiKey"] } },
+      { pluginId: "plugin-a", contribution: { surface: "onboarding-provider-card", contributionId: "c", providerId: "openai", title: "OpenAI", providerType: "api_key" } },
+      { pluginId: "plugin-a", contribution: { surface: "onboarding-setup-help", contributionId: "d", title: "Help", body: "Use API key", bodyFormat: "text" } },
+      { pluginId: "plugin-a", contribution: { surface: "onboarding-provider-recommendation", contributionId: "e", providerId: "openai", title: "Recommended", reason: "Fast setup" } },
+      { pluginId: "plugin-a", contribution: { surface: "post-onboarding-recommendation", contributionId: "f", title: "Next step", description: "Enable memory" } },
+    ];
+
+    expect(contributions).toHaveLength(6);
+    for (const entry of contributions) {
+      expect("componentPath" in entry.contribution).toBe(false);
+    }
+  });
+});

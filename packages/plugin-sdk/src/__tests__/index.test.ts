@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { definePlugin } from "../index.js";
-import type { FusionPlugin } from "../../../core/src/plugin-types.js";
+import type { FusionPlugin, PluginUiContributionSurface } from "../../../core/src/plugin-types.js";
 import type { TaskStore } from "../../../core/src/store.js";
 import { validatePluginManifest } from "../../../core/src/plugin-types.js";
+
+type AssertNever<T extends never> = T;
+type NoStaleStructuredSurface = AssertNever<Extract<
+  PluginUiContributionSurface,
+  "settings-integration-card" | "onboarding-recommendation-card"
+>>;
 
 let validateFn: typeof validatePluginManifest;
 
@@ -238,10 +244,6 @@ describe("Plugin SDK", () => {
       expect(plugin.uiSlots).toHaveLength(1);
       expect(plugin.uiSlots![0].slotId).toBe("custom-tab");
     });
-  });
-
-
-
     it("PluginDashboardViewDefinition can be used in FusionPlugin", () => {
       const plugin: FusionPlugin = {
         manifest: { id: "test", name: "Test", version: "1.0.0" },
@@ -256,6 +258,16 @@ describe("Plugin SDK", () => {
       expect(plugin.dashboardViews).toHaveLength(1);
       expect(plugin.dashboardViews?.[0].viewId).toBe("graph");
     });
+
+    it("exposes only normalized structured surface names", () => {
+      const surface: PluginUiContributionSurface = "settings-config-section";
+      expect(surface).toBe("settings-config-section");
+
+      const compileGuard: NoStaleStructuredSurface | undefined = undefined;
+      expect(compileGuard).toBeUndefined();
+    });
+  });
+
   // ── validatePluginManifest ───────────────────────────────────────────
 
   describe("validatePluginManifest", () => {
