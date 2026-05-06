@@ -2655,6 +2655,10 @@ function deriveRunMissedHeartbeatOnStartup(runtimeConfig: AgentDetail["runtimeCo
   return runtimeConfig?.runMissedHeartbeatOnStartup === true;
 }
 
+function deriveAllowParallelExecution(runtimeConfig: AgentDetail["runtimeConfig"] | undefined): boolean {
+  return runtimeConfig?.allowParallelExecution !== false;
+}
+
 function deriveBudgetValues(runtimeConfig: AgentDetail["runtimeConfig"] | undefined): Record<string, string> {
   const bc = (runtimeConfig ?? {}).budgetConfig as Record<string, unknown> | undefined;
   const nextValues: Record<string, string> = {};
@@ -3018,6 +3022,9 @@ function ConfigTab({
   const [runMissedHeartbeatOnStartup, setRunMissedHeartbeatOnStartup] = useState<boolean>(
     () => deriveRunMissedHeartbeatOnStartup(agent.runtimeConfig),
   );
+  const [allowParallelExecution, setAllowParallelExecution] = useState<boolean>(
+    () => deriveAllowParallelExecution(agent.runtimeConfig),
+  );
 
   // Budget config state initialised from agent.runtimeConfig.budgetConfig
   const [budgetValues, setBudgetValues] = useState<Record<string, string>>(
@@ -3220,6 +3227,7 @@ function ConfigTab({
     if (heartbeatEnabled !== deriveHeartbeatEnabled(agent.runtimeConfig)) return true;
     if (autoClaimRelevantTasksEnabled !== deriveAutoClaimRelevantTasksEnabled(agent.runtimeConfig)) return true;
     if (runMissedHeartbeatOnStartup !== deriveRunMissedHeartbeatOnStartup(agent.runtimeConfig)) return true;
+    if (allowParallelExecution !== deriveAllowParallelExecution(agent.runtimeConfig)) return true;
     for (const key of ["heartbeatIntervalMs", "heartbeatTimeoutMs", "maxConcurrentRuns", "messageResponseMode"] as const) {
       const current = heartbeatValues[key]?.trim() ?? "";
       let persisted = rc[key] !== undefined && rc[key] !== null ? String(rc[key]) : "";
@@ -3442,6 +3450,7 @@ function ConfigTab({
     newRuntimeConfig.enabled = heartbeatEnabled;
     newRuntimeConfig.autoClaimRelevantTasks = autoClaimRelevantTasksEnabled;
     newRuntimeConfig.runMissedHeartbeatOnStartup = runMissedHeartbeatOnStartup;
+    newRuntimeConfig.allowParallelExecution = allowParallelExecution;
     for (const key of ["heartbeatIntervalMs", "heartbeatTimeoutMs", "maxConcurrentRuns"] as const) {
       const raw = heartbeatValues[key]?.trim();
       if (!raw) {
@@ -3537,7 +3546,7 @@ function ConfigTab({
       runtimeConfig: newRuntimeConfig,
       bundleConfig: newBundleConfig,
     };
-  }, [agent.metadata, agent.runtimeConfig, autoClaimRelevantTasksEnabled, budgetValues, bundleEntryFile, bundleExternalPath, bundleFiles, bundleMode, formValues, heartbeatEnabled, heartbeatValues, iconValue, modelValue, nameValue, reportsToValue, roleValue, runMissedHeartbeatOnStartup, runtimeMode, selectedRuntimeId, selectedSkills, titleValue, validationErrors]);
+  }, [agent.metadata, agent.runtimeConfig, allowParallelExecution, autoClaimRelevantTasksEnabled, budgetValues, bundleEntryFile, bundleExternalPath, bundleFiles, bundleMode, formValues, heartbeatEnabled, heartbeatValues, iconValue, modelValue, nameValue, reportsToValue, roleValue, runMissedHeartbeatOnStartup, runtimeMode, selectedRuntimeId, selectedSkills, titleValue, validationErrors]);
 
   const persistSettings = useCallback(async (showValidationToast: boolean, source: "auto" | "manual") => {
     const payload = buildSavePayload();
@@ -3955,6 +3964,22 @@ function ConfigTab({
               Run Missed Heartbeat On Startup
             </label>
             <span className="config-hint">When enabled, if the server was down across this agent&apos;s scheduled heartbeat tick, fire a single catch-up heartbeat at startup. Default: off.</span>
+          </div>
+
+          <div className="config-field">
+            <label className="checkbox-label" htmlFor="hb-allowParallelExecution">
+              <input
+                id="hb-allowParallelExecution"
+                type="checkbox"
+                checked={allowParallelExecution}
+                onChange={(e) => {
+                  setAllowParallelExecution(e.target.checked);
+                  void scheduleAutoSave();
+                }}
+              />
+              Allow Parallel Execution
+            </label>
+            <span className="config-hint">When disabled, the heartbeat and task execution paths serialize for this agent (heartbeat will not start while the agent&apos;s task is executing, and vice versa). Permanent agents only.</span>
           </div>
 
           <div className="config-field">

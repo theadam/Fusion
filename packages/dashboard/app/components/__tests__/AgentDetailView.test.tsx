@@ -100,7 +100,7 @@ vi.mock("../CustomModelDropdown", () => ({
 
 // Mock SkillMultiselect
 vi.mock("../SkillMultiselect", () => ({
-  SkillMultiselect: ({ value, onChange, id }: { value: string[]; onChange: (v: string[]) => void; id?: string }) => (
+  SkillMultiselect: ({ value, onChange, id: _id }: { value: string[]; onChange: (v: string[]) => void; id?: string }) => (
     <div data-testid="skill-multiselect">
       <span data-testid="skill-multiselect-value">{JSON.stringify(value)}</span>
       <button data-testid="add-skill-test" onClick={() => onChange([...value, "test-skill"])}>Add Test Skill</button>
@@ -233,7 +233,7 @@ describe("AgentDetailView", () => {
     mockUpdateAgentInstructions.mockResolvedValue({} as any);
     // Default: return skills
     mockFetchDiscoveredSkills.mockResolvedValue(MOCK_SKILLS);
-    mockFetchSkillContent.mockResolvedValue({ skillMd: "# Skill", files: [] });
+    mockFetchSkillContent.mockResolvedValue({ name: "Skill", skillMd: "# Skill", files: [] });
     mockFetchModels.mockResolvedValue({
       models: [
         { provider: "openai", id: "gpt-4o", name: "gpt-4o", reasoning: false, contextWindow: 128000 },
@@ -346,8 +346,6 @@ describe("AgentDetailView", () => {
 
     // Verify state CSS variables are defined in the global stylesheet (styles.css)
     // (previously these were in inline style blocks, now they're in the global :root)
-    const fs = await import("fs");
-    const path = await import("path");
     const stylesContent = loadAllAppCss();
     expect(stylesContent).toContain("--state-idle-bg:");
     expect(stylesContent).toContain("--state-active-bg:");
@@ -429,8 +427,6 @@ describe("AgentDetailView", () => {
 
     // Verify that the global stylesheet defines --color-success and --color-error
     // (previously checked in inline style blocks, now verified by reading styles.css)
-    const fs = await import("fs");
-    const path = await import("path");
     const stylesContent = loadAllAppCss();
     expect(stylesContent).toMatch(/--color-success:/);
     expect(stylesContent).toMatch(/--color-error:/);
@@ -452,8 +448,6 @@ describe("AgentDetailView", () => {
     // Previously the component defined local aliases like --bg-primary, --accent, etc.
     // Now these are replaced with direct global token references in the CSS classes.
     // Verify the global stylesheet defines the real tokens that the component uses.
-    const fs = await import("fs");
-    const path = await import("path");
     const stylesContent = loadAllAppCss();
     // The component classes now use --surface, --todo, --text, --card-hover directly
     expect(stylesContent).toMatch(/--surface:/);
@@ -2421,6 +2415,113 @@ describe("AgentDetailView", () => {
       });
     });
 
+    it("defaults allow-parallel-execution toggle to checked when runtimeConfig.allowParallelExecution is undefined", async () => {
+      mockFetchAgent.mockResolvedValue(createMockAgent({
+        runtimeConfig: {
+          heartbeatIntervalMs: 30000,
+        },
+      }));
+
+      const user = userEvent.setup();
+      render(
+        <AgentDetailView
+          agentId="agent-001"
+          onClose={vi.fn()}
+          addToast={vi.fn()}
+        />
+      );
+
+      await navigateToSettings(user);
+
+      await waitFor(() => {
+        expect((screen.getByLabelText("Allow Parallel Execution") as HTMLInputElement).checked).toBe(true);
+      });
+    });
+
+    it("defaults allow-parallel-execution toggle to unchecked when runtimeConfig.allowParallelExecution === false", async () => {
+      mockFetchAgent.mockResolvedValue(createMockAgent({
+        runtimeConfig: {
+          heartbeatIntervalMs: 30000,
+          allowParallelExecution: false,
+        },
+      }));
+
+      const user = userEvent.setup();
+      render(
+        <AgentDetailView
+          agentId="agent-001"
+          onClose={vi.fn()}
+          addToast={vi.fn()}
+        />
+      );
+
+      await navigateToSettings(user);
+
+      await waitFor(() => {
+        expect((screen.getByLabelText("Allow Parallel Execution") as HTMLInputElement).checked).toBe(false);
+      });
+    });
+
+    it("defaults allow-parallel-execution toggle to checked when runtimeConfig.allowParallelExecution === true", async () => {
+      mockFetchAgent.mockResolvedValue(createMockAgent({
+        runtimeConfig: {
+          heartbeatIntervalMs: 30000,
+          allowParallelExecution: true,
+        },
+      }));
+
+      const user = userEvent.setup();
+      render(
+        <AgentDetailView
+          agentId="agent-001"
+          onClose={vi.fn()}
+          addToast={vi.fn()}
+        />
+      );
+
+      await navigateToSettings(user);
+
+      await waitFor(() => {
+        expect((screen.getByLabelText("Allow Parallel Execution") as HTMLInputElement).checked).toBe(true);
+      });
+    });
+
+    it("persists allow-parallel-execution toggle changes on save", async () => {
+      mockFetchAgent.mockResolvedValue(createMockAgent({
+        runtimeConfig: {
+          enabled: true,
+          allowParallelExecution: true,
+          heartbeatIntervalMs: 30000,
+        },
+      }));
+      mockUpdateAgent.mockResolvedValue(createMockAgent() as any);
+
+      const user = userEvent.setup();
+      render(
+        <AgentDetailView
+          agentId="agent-001"
+          onClose={vi.fn()}
+          addToast={vi.fn()}
+        />
+      );
+
+      await navigateToSettings(user);
+
+      const toggle = await screen.findByLabelText("Allow Parallel Execution");
+      await user.click(toggle);
+      await user.click(screen.getByText("Save Settings"));
+
+      await waitFor(() => {
+        expect(mockUpdateAgent).toHaveBeenCalledWith(
+          "agent-001",
+          expect.objectContaining({
+            runtimeConfig: expect.objectContaining({ allowParallelExecution: false }),
+          }),
+          undefined,
+        );
+      });
+    });
+
     it("forwards projectId to updateAgent", async () => {
       const addToast = vi.fn();
       mockUpdateAgent.mockResolvedValue(createMockAgent() as any);
@@ -4367,6 +4468,7 @@ describe("AgentDetailView", () => {
       });
       mockFetchAgent.mockResolvedValue(agentWithSkills);
       mockFetchSkillContent.mockResolvedValue({
+        name: "Fusion Skill",
         skillMd: "# Fusion Skill",
         files: [],
       });
@@ -4396,7 +4498,7 @@ describe("AgentDetailView", () => {
       mockFetchAgent.mockResolvedValue(agentWithSkills);
       mockFetchSkillContent
         .mockRejectedValueOnce(new Error("Failed to load skill content"))
-        .mockResolvedValueOnce({ skillMd: "# Recovered", files: [] });
+        .mockResolvedValueOnce({ name: "Recovered", skillMd: "# Recovered", files: [] });
 
       render(
         <AgentDetailView
@@ -4423,7 +4525,7 @@ describe("AgentDetailView", () => {
       const user = userEvent.setup();
       const agentWithSkills = createMockAgent({ metadata: { skills: ["skill-1"] } });
       mockFetchAgent.mockResolvedValue(agentWithSkills);
-      mockFetchSkillContent.mockResolvedValue({ skillMd: "", files: [] });
+      mockFetchSkillContent.mockResolvedValue({ name: "Test Skill", skillMd: "", files: [] });
 
       render(
         <AgentDetailView

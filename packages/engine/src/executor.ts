@@ -104,10 +104,9 @@ const COMPLETED_TASK_WATCHDOG_MS = 60_000;
 const WORKFLOW_RERUN_WATCHDOG_MS = 15_000;
 
 /**
- * @deprecated Kept exported so existing unit tests in executor.test.ts still
- * link, but no longer called from the executor. Revision feedback is applied
- * as an in-place fix via `reopenLastStepForRevision` — earlier completed
- * steps stay done instead of being replayed.
+ * Determines the step index from which revision should restart given a set of
+ * completed steps and user feedback. Exported for unit tests; no longer called
+ * from the executor (revision is now handled via `reopenLastStepForRevision`).
  */
 export function determineRevisionResetStart(
   steps: ReadonlyArray<{ name: string }>,
@@ -1987,36 +1986,6 @@ export class TaskExecutor {
       executorLog.warn(`Failed to resolve instructions for role '${role}', continuing without custom instructions: ${msg}`);
     }
     return "";
-  }
-
-  private resolveDependencyWorktree(task: Task, allTasks: Task[]): string | null {
-    if (task.dependencies.length === 0) return null;
-
-    for (const depId of task.dependencies) {
-      const dep = allTasks.find((t) => t.id === depId);
-      if (
-        dep &&
-        dep.worktree &&
-        (dep.column === "done" || dep.column === "in-review") &&
-        existsSync(dep.worktree)
-      ) {
-        return dep.worktree;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Reuse an existing worktree directory from a dependency task.
-   * Instead of creating a new worktree with `git worktree add`, this creates
-   * a new branch in the existing worktree via `git checkout -b`. The worktree
-   * directory (and its build caches) are preserved.
-   */
-  private async reuseWorktree(branch: string, worktreePath: string): Promise<void> {
-    await execAsync(`git checkout -b "${branch}"`, {
-      cwd: worktreePath,
-    });
-    executorLog.log(`Reused worktree at ${worktreePath}, created branch ${branch}`);
   }
 
   /**
@@ -4623,7 +4592,7 @@ ${failureContext.output.slice(0, VERIFICATION_LOG_MAX_CHARS)}
         return reRunResult.allPassed;
       } finally {
         await logger.flush();
-        await session.dispose();
+        session.dispose();
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -5549,7 +5518,7 @@ and show an appropriate message to the user.\`
    * resolved SHA of the dep's tip — that's what gets squash-merged.
    */
   private async planSquashImportFromDep(
-    taskId: string,
+    _taskId: string,
     depTip: string,
     originalStartPoint: string | undefined,
   ): Promise<{ depTip: string; mainBase: string; label: string } | null> {

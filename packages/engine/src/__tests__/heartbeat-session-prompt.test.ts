@@ -87,10 +87,10 @@ describe("createHeartbeatTools", () => {
     mockTaskStore = createMockTaskStoreForTools();
   });
 
-  it("heartbeat task-scoped system prompt documents coding-capable workspace access", () => {
-    expect(HEARTBEAT_SYSTEM_PROMPT).toContain("coding-capable workspace tools");
+  it("heartbeat task-scoped system prompt documents ambient coordination scope", () => {
     expect(HEARTBEAT_SYSTEM_PROMPT).toContain("fn_task_log");
     expect(HEARTBEAT_SYSTEM_PROMPT).toContain("fn_task_document_write");
+    expect(HEARTBEAT_SYSTEM_PROMPT).toContain("executor");
   });
 
   it("heartbeat no-task system prompt documents coding-capable workspace access without task-scoped tools", () => {

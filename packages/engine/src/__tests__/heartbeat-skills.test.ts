@@ -1,23 +1,9 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { EventEmitter } from "node:events";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import {
   HeartbeatMonitor,
-  HeartbeatTriggerScheduler,
-  type AgentSession,
-  type HeartbeatExecutionOptions,
-  HEARTBEAT_SYSTEM_PROMPT,
-  HEARTBEAT_NO_TASK_SYSTEM_PROMPT,
-  HEARTBEAT_PROCEDURE,
-  HEARTBEAT_NO_TASK_PROCEDURE,
 } from "../agent-heartbeat.js";
-import { AgentLogger } from "../agent-logger.js";
-import * as agentTools from "../agent-tools.js";
-import type { AgentStore, AgentHeartbeatRun, TaskStore, TaskDetail, Agent, MessageStore, Message, AgentBudgetStatus } from "@fusion/core";
-import { createMockStore, createMockSession, createMockMessageStore, createMessage, createBudgetStatus } from "./heartbeat-test-helpers.js";
+import type { AgentStore, AgentHeartbeatRun, TaskStore, TaskDetail, Agent } from "@fusion/core";
+import { createBudgetStatus } from "./heartbeat-test-helpers.js";
 vi.mock("../logger.js", async () => {
   const { createMockLogger, formatMockError } = await import("./heartbeat-test-helpers.js");
   return {

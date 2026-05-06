@@ -191,35 +191,49 @@ function taskRelevanceScore(agent: Agent, task: TaskDetail): number {
 
 /**
  * System prompt for heartbeat agent sessions.
- * Instructs the agent to perform a single-pass check on its assigned task
- * and use `fn_task_create` / `fn_task_log` / `fn_task_document_*` tools to record findings or spawn follow-up work.
+ * This is an ambient heartbeat: task implementation runs in a separate executor path.
+ * The heartbeat handles coordination, communication, memory, and routing only.
  */
 export const HEARTBEAT_SYSTEM_PROMPT = `You are a heartbeat agent running in a short execution window.
 
 ## Your Role
 
-You are a lightweight periodic checker in the broader Fusion system, not the primary implementation agent.
-Your purpose is to keep momentum: detect issues early, surface blockers, and route work to the right place.
-Think in single-pass interventions, not long coding sessions.
+This is an ambient heartbeat. Task implementation work (coding, running tests, making commits) runs in a separate
+execution path handled by the executor. Do NOT do task body work or implementation in this heartbeat.
+
+Your purpose is to keep momentum through coordination: surface blockers, respond to messages, manage memory,
+delegate, and route work to the right place. Think in single-pass interventions, not coding sessions.
 
 Your job:
-1. Check your assigned task — read the description and PROMPT.md if present.
-2. Do ONE useful action that changes project clarity or flow.
+1. Check your assigned task context — review its state, blockedBy field, and any new comments.
+2. Do ONE useful coordination action.
 3. Use fn_task_create to spawn follow-up work, fn_task_log to record observations, and fn_task_document_write for durable artifacts.
 4. Use fn_list_agents + fn_delegate_task when work should be assigned to a specific capable agent now.
 5. Use fn_get_agent_config and fn_update_agent_config to tune direct reports before delegating recurring work.
-5. Call fn_heartbeat_done when finished with an optional summary of what was accomplished.
+6. Call fn_heartbeat_done when finished with an optional summary of what was accomplished.
 
-Examples of ONE useful action:
-- DO: summarize a blocker in fn_task_log with concrete next step(s).
+**If your bound task is blocked** (blockedBy is set in the task context):
+- Surface the blocker concretely with fn_task_log.
+- Chase the dependency: comment on the blocking task, send a message to the responsible agent, or ping an owner.
+- Look for unblocking work you can spawn or delegate right now.
+- Pivot to other relevant coordination work if the blocker cannot be immediately resolved.
+
+**If your bound task is not blocked:**
+- Surface progress, status, or coordination needs with fn_task_log or fn_task_document_write.
+- Create follow-up tasks for discovered risks or gaps.
+- Respond to new steering comments or user messages.
+
+Examples of ONE useful coordination action:
+- DO: log a concrete blocker with next steps and message the agent responsible for unblocking.
 - DO: create a focused follow-up task when a missing dependency is discovered.
 - DO: delegate a well-scoped task to an appropriate idle specialist agent.
 - DO: save a short investigation note with fn_task_document_write when the analysis is reusable.
-- DON'T: attempt full implementation, broad refactors, or multi-hour coding.
+- DON'T: attempt full implementation, run tests, commit code, or do multi-step coding work.
 - DON'T: create vague tasks like "investigate stuff" without actionable scope.
 
-Keep work lightweight — this is a single-pass check, not a full implementation run.
-You have coding-capable workspace tools (read/write/edit/bash within worktree boundaries) plus fn_task_create, fn_task_log, and fn_task_document tools.
+Keep work lightweight — this is a single-pass coordination check, not an implementation run.
+You have workspace read tools (for context gathering) plus fn_task_create, fn_task_log, fn_task_document tools,
+fn_send_message, fn_read_messages, fn_list_agents, fn_delegate_task, and memory tools.
 
 **Task Documents:** Save important findings with fn_task_document_write(key="...", content="...").
 Documents persist across sessions and are visible in the dashboard's Documents tab.
@@ -238,7 +252,8 @@ Prefer fn_delegate_task when immediate ownership by a specific agent materially 
 
 ## Common Patterns
 
-- **Stuck task:** log the concrete blocker, create a narrowly scoped unblocker task if needed, and optionally message the responsible agent.
+- **Blocked task:** log the concrete blocker, chase the dependency via fn_send_message, create a narrowly scoped unblocker task if needed.
+- **Stuck task with no blockedBy:** log the observation and create a follow-up task to investigate the root cause.
 - **Completed task with follow-up risk:** create explicit follow-up task(s) for residual risk instead of burying notes in a long log.
 - **New user/agent comments:** summarize what changed, identify required action, and route via task creation/delegation.
 - **Dependency drift:** log the mismatch and create reconciliation tasks with clear dependencies.
@@ -847,6 +862,9 @@ export class HeartbeatMonitor {
     // End the heartbeat run tracking
     await this.store.endHeartbeatRun(runId, completionResult.status === "completed" ? "completed" : "terminated");
 
+    if (completionResult.status === "terminated") {
+      this.onTerminated?.(agentId, completionResult.stderrExcerpt ?? "Run terminated");
+    }
     this.onRunCompleted?.(agentId, completedRun);
   }
 
@@ -1500,54 +1518,7 @@ export class HeartbeatMonitor {
               return (await this.store.getRunDetail(agentId, run.id))!;
             }
 
-            const blockedBy = typeof liveTaskDetail.blockedBy === "string" ? liveTaskDetail.blockedBy.trim() : "";
-            const isBlockedTask = liveTaskDetail.status === "queued" && blockedBy.length > 0;
-
-            if (isBlockedTask) {
-              const commentCount = (liveTaskDetail.comments?.length ?? 0) + (liveTaskDetail.steeringComments?.length ?? 0);
-              const lastCommentId = liveTaskDetail.comments?.at(-1)?.id;
-              const lastSteeringCommentId = liveTaskDetail.steeringComments?.at(-1)?.id;
-              const contextHash = Buffer.from(
-                JSON.stringify({ commentCount, lastCommentId, lastSteeringCommentId, blockedBy }),
-              )
-                .toString("base64")
-                .slice(0, 16);
-
-              const currentBlockedState: BlockedStateSnapshot = {
-                taskId: resolvedTaskId,
-                blockedBy,
-                recordedAt: new Date().toISOString(),
-                contextHash,
-              };
-
-              const previousBlockedState = await this.store.getLastBlockedState(agentId);
-              if (previousBlockedState && isBlockedStateDuplicate(currentBlockedState, previousBlockedState)) {
-                await this.completeRun(agentId, run.id, {
-                  status: "completed",
-                  resultJson: { reason: "blocked_duplicate", taskId: resolvedTaskId, blockedBy },
-                });
-                return (await this.store.getRunDetail(agentId, run.id))!;
-              }
-
-              const blockedMessage = `Task is blocked by ${blockedBy}; waiting for dependency/context changes before retrying.`;
-              await taskStore.addComment(resolvedTaskId, blockedMessage, "agent", undefined, runContext);
-              // Audit trail: record comment mutation (FN-1404)
-              await audit.database({ type: "task:comment:add", target: resolvedTaskId, metadata: { blockedBy } });
-              await this.store.setLastBlockedState(agentId, currentBlockedState);
-
-              heartbeatLog.log(`Task ${resolvedTaskId} is blocked by ${blockedBy} — recorded blocked state`);
-              await this.completeRun(agentId, run.id, {
-                status: "completed",
-                resultJson: { reason: "blocked", taskId: resolvedTaskId, blockedBy },
-              });
-              return (await this.store.getRunDetail(agentId, run.id))!;
-            }
           }
-        }
-
-        // Clear blocked state when task is no longer blocked (only for task-scoped runs)
-        if (!isNoTaskRun) {
-          await this.store.clearLastBlockedState(agentId);
         }
 
         // Track usage via callbacks
@@ -2516,11 +2487,13 @@ export class HeartbeatTriggerScheduler {
   private updatedListener: ((agent: import("@fusion/core").Agent) => void) | null = null;
   private configRevisionListener: ((agentId: string, revision: AgentConfigRevision) => void) | null = null;
   private deletedListener: ((agentId: string) => void) | null = null;
+  private isTaskExecuting?: (taskId: string) => boolean;
 
-  constructor(store: AgentStore, callback: TriggerCallback, taskStore?: TaskStore) {
+  constructor(store: AgentStore, callback: TriggerCallback, taskStore?: TaskStore, options?: { isTaskExecuting?: (taskId: string) => boolean }) {
     this.store = store;
     this.callback = callback;
     this.taskStore = taskStore;
+    this.isTaskExecuting = options?.isTaskExecuting;
   }
 
   /**
@@ -2797,7 +2770,7 @@ export class HeartbeatTriggerScheduler {
           return;
         }
 
-        const runtimeConfig = (agent.runtimeConfig ?? {}) as { enabled?: boolean };
+        const runtimeConfig = (agent.runtimeConfig ?? {}) as { enabled?: boolean; allowParallelExecution?: boolean };
         if (runtimeConfig.enabled === false) {
           heartbeatLog.log(`Assignment trigger skipped for ${agent.id} (disabled)`);
           return;
@@ -2807,6 +2780,12 @@ export class HeartbeatTriggerScheduler {
         const activeRun = await this.store.getActiveHeartbeatRun(agent.id);
         if (activeRun) {
           heartbeatLog.log(`Assignment trigger skipped for ${agent.id} (active run)`);
+          return;
+        }
+
+        // Guard: when parallel execution is disabled, skip if the bound task is actively executing
+        if (runtimeConfig.allowParallelExecution === false && this.isTaskExecuting?.(taskId)) {
+          heartbeatLog.log(`Assignment tick skipped for ${agent.id} (parallel execution disabled, task ${taskId} executing)`);
           return;
         }
 
@@ -3017,6 +2996,13 @@ export class HeartbeatTriggerScheduler {
       const activeRun = await this.store.getActiveHeartbeatRun(agentId);
       if (activeRun) {
         heartbeatLog.log(`Timer tick skipped for ${agentId} (active run)`);
+        return;
+      }
+
+      // Guard: when parallel execution is disabled, skip if the agent's bound task is actively executing
+      const timerRc = (agent.runtimeConfig ?? {}) as { allowParallelExecution?: boolean };
+      if (timerRc.allowParallelExecution === false && agent.taskId && this.isTaskExecuting?.(agent.taskId)) {
+        heartbeatLog.log(`Timer tick skipped for ${agentId} (parallel execution disabled, task ${agent.taskId} executing)`);
         return;
       }
 

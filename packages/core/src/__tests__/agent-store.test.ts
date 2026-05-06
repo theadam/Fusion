@@ -22,7 +22,7 @@ import {
   CheckoutConflictError,
   getCanonicalAgentAssetDirectoryName,
   type AgentCapability,
-  type AgentState,
+  type AgentRating,
 } from "../types.js";
 
 function makeTmpDir(): string {
@@ -1225,29 +1225,29 @@ describe("AgentStore", () => {
       // Create a normal agent
       const normal = await store.createAgent({ name: "Normal Agent", role: "executor" });
 
-      // Create a task-worker agent
-      const taskWorker = await store.createAgent({
+      // Create a task-worker agent (return value not needed — just populate the DB)
+      await store.createAgent({
         name: "executor-FN-TEST",
         role: "executor",
         metadata: { agentKind: "task-worker" },
       });
 
       // Create a spawned child agent
-      const spawned = await store.createAgent({
+      await store.createAgent({
         name: "spawned-agent",
         role: "executor",
         metadata: { type: "spawned" },
       });
 
       // Create an agent with taskWorker metadata
-      const withTaskWorker = await store.createAgent({
+      await store.createAgent({
         name: "task-worker-agent",
         role: "executor",
         metadata: { taskWorker: true },
       });
 
       // Create an agent with managedBy metadata
-      const managedBy = await store.createAgent({
+      await store.createAgent({
         name: "managed-agent",
         role: "executor",
         metadata: { managedBy: "task-executor" },
@@ -1264,8 +1264,8 @@ describe("AgentStore", () => {
     });
 
     it("includeEphemeral filter works with state filter", async () => {
-      // Create a normal agent
-      const normal = await store.createAgent({ name: "Normal Agent", role: "executor" });
+      // Create a normal agent (return value not needed — just to ensure it exists in DB)
+      await store.createAgent({ name: "Normal Agent", role: "executor" });
 
       // Create a task-worker agent
       const taskWorker = await store.createAgent({
@@ -2297,7 +2297,7 @@ describe("AgentStore", () => {
       const base = new Date("2026-01-01T00:00:00.000Z").getTime();
 
       try {
-        const ratings = [];
+        const ratings: AgentRating[] = [];
         for (let i = 0; i < scores.length; i++) {
           vi.setSystemTime(new Date(base + i * 1000));
           ratings.push(

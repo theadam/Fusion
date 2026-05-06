@@ -66,9 +66,11 @@ describe("projectStorage", () => {
         "kb-dashboard-view-mode",
         "kb-dashboard-current-project",
         "kb-dashboard-recent-projects",
+        "fn-agent-log-markdown",
+        "fn-agent-log-tool-output",
       ]),
     );
-    expect(GLOBAL_STORAGE_KEYS).toHaveLength(5);
+    expect(GLOBAL_STORAGE_KEYS).toHaveLength(7);
   });
 
   it("includes all project-scoped storage keys", () => {

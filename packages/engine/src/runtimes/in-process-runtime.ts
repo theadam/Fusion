@@ -484,6 +484,7 @@ export class InProcessRuntime
             });
           },
           this.taskStore,
+          { isTaskExecuting: (taskId) => this.executor.getExecutingTaskIds().has(taskId) },
         );
         this.triggerScheduler.start();
 

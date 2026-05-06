@@ -1717,7 +1717,6 @@ describe("TaskExecutor worktree recovery", () => {
     mockedExistsSync.mockReturnValue(true);
 
     // Mock git worktree list to not include our path
-    let callCount = 0;
     mockedExecSync.mockImplementation((cmd: string | string[]) => {
       const command = typeof cmd === "string" ? cmd : cmd[0];
       if (command.includes("git worktree list")) {
@@ -3171,7 +3170,7 @@ describe("TaskExecutor pause behavior", () => {
       },
     }) as any);
 
-    const executor = new TaskExecutor(store, "/tmp/test");
+    const _executor = new TaskExecutor(store, "/tmp/test");
 
     // Simulate unpause of an in-progress task that has no active session
     // (e.g., engine restarted while task was paused in-progress)
@@ -3291,7 +3290,7 @@ describe("TaskExecutor pause behavior", () => {
       },
     }) as any);
 
-    const executor = new TaskExecutor(store, "/tmp/test");
+    const _executor = new TaskExecutor(store, "/tmp/test");
 
     store._trigger("task:updated", {
       id: "FN-001",
@@ -3394,7 +3393,7 @@ describe("TaskExecutor pause behavior", () => {
       },
     }) as any);
 
-    const executor = new TaskExecutor(store, "/tmp/test");
+    const _executor = new TaskExecutor(store, "/tmp/test");
 
     // Unpause a todo task — executor should NOT try to execute it
     store._trigger("task:updated", {

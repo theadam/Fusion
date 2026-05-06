@@ -3646,6 +3646,15 @@ export interface AgentHeartbeatConfig {
    * down across a scheduled tick. Default: false.
    */
   runMissedHeartbeatOnStartup?: boolean;
+  /**
+   * When true (default), an agent's heartbeat runs and its task execution session can run
+   * concurrently. When false, the two paths serialize: a heartbeat will not start while the
+   * agent's bound task has an active executor session, and an executor session will not start
+   * while the agent has an active heartbeat run.
+   *
+   * Permanent agents only — ignored for ephemeral agents. Default: true when unset.
+   */
+  allowParallelExecution?: boolean;
 }
 
 /** Per-agent budget configuration, stored in agent.runtimeConfig.budgetConfig */
