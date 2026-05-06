@@ -151,6 +151,11 @@ function shouldShowBadge(entry: AgentLogEntry, previousEntry?: AgentLogEntry): b
   return !previousEntry || previousEntry.agent !== entry.agent || previousEntry.type !== entry.type;
 }
 
+interface RenderEntry {
+  entry: AgentLogEntry;
+  hiddenToolBoundaryId: number;
+}
+
 type AgentLogRenderGroup =
   | {
     kind: "single";
@@ -165,28 +170,35 @@ type AgentLogRenderGroup =
     showBadge: boolean;
   };
 
-function buildRenderGroups(entries: AgentLogEntry[], entryKeys: string[]): AgentLogRenderGroup[] {
+function buildRenderGroups(renderEntries: RenderEntry[], entryKeys: string[]): AgentLogRenderGroup[] {
   const groups: AgentLogRenderGroup[] = [];
 
-  for (let i = 0; i < entries.length; i += 1) {
-    const entry = entries[i];
+  for (let i = 0; i < renderEntries.length; i += 1) {
+    const { entry, hiddenToolBoundaryId } = renderEntries[i];
     const rowKey = entryKeys[i] ?? `${getEntrySignature(entry)}|fallback`;
-    const previousEntry = i > 0 ? entries[i - 1] : undefined;
-    const showBadge = shouldShowBadge(entry, previousEntry);
+    const previousRenderEntry = i > 0 ? renderEntries[i - 1] : undefined;
+    const previousEntry = previousRenderEntry?.entry;
+    const showBadge = shouldShowBadge(entry, previousEntry)
+      || (previousRenderEntry !== undefined && previousRenderEntry.hiddenToolBoundaryId !== hiddenToolBoundaryId);
 
     if (entry.type === "text" || entry.type === "thinking") {
       const groupedEntries: AgentLogEntry[] = [entry];
       let j = i + 1;
-      while (j < entries.length) {
-        const nextEntry = entries[j];
-        if (nextEntry.type !== entry.type || nextEntry.agent !== entry.agent) {
+      while (j < renderEntries.length) {
+        const next = renderEntries[j];
+        const nextEntry = next.entry;
+        if (
+          nextEntry.type !== entry.type
+          || nextEntry.agent !== entry.agent
+          || next.hiddenToolBoundaryId !== hiddenToolBoundaryId
+        ) {
           break;
         }
         groupedEntries.push(nextEntry);
         j += 1;
       }
 
-      const endKey = entryKeys[j - 1] ?? `${getEntrySignature(entries[j - 1])}|fallback`;
+      const endKey = entryKeys[j - 1] ?? `${getEntrySignature(renderEntries[j - 1].entry)}|fallback`;
       groups.push({
         kind: entry.type,
         entries: groupedEntries,
@@ -281,9 +293,26 @@ export function AgentLogViewer({
     writeBooleanPref(TOOL_OUTPUT_TOGGLE_STORAGE_KEY, showToolOutput);
   }, [showToolOutput]);
 
+  const renderEntries = useMemo(() => {
+    if (showToolOutput) {
+      return entries.map((entry) => ({ entry, hiddenToolBoundaryId: 0 }));
+    }
+
+    const filtered: RenderEntry[] = [];
+    let hiddenToolBoundaryId = 0;
+    for (const entry of entries) {
+      if (isToolLikeType(entry.type)) {
+        hiddenToolBoundaryId += 1;
+        continue;
+      }
+      filtered.push({ entry, hiddenToolBoundaryId });
+    }
+    return filtered;
+  }, [entries, showToolOutput]);
+
   const visibleEntries = useMemo(
-    () => (showToolOutput ? entries : entries.filter((e) => !isToolLikeType(e.type))),
-    [entries, showToolOutput],
+    () => renderEntries.map((renderEntry) => renderEntry.entry),
+    [renderEntries],
   );
 
   const chronologicalEntryKeys = useMemo(
@@ -292,8 +321,8 @@ export function AgentLogViewer({
   );
 
   const renderGroups = useMemo(
-    () => buildRenderGroups(visibleEntries, chronologicalEntryKeys),
-    [visibleEntries, chronologicalEntryKeys],
+    () => buildRenderGroups(renderEntries, chronologicalEntryKeys),
+    [renderEntries, chronologicalEntryKeys],
   );
 
   // Keep live-follow pinned to the bottom when new streamed entries append.

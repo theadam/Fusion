@@ -46,6 +46,15 @@ export function buildCliWithRealDashboardAssets() {
 
   runBuildCommand("pnpm --filter @fusion/dashboard build:client", workspaceRoot);
   runBuildCommand("pnpm build", cliRoot);
+
+  if (hasBuiltDashboardAssets()) {
+    return;
+  }
+
+  // Fallback for environments where build:client alone does not refresh the
+  // dashboard dist/client bundle consumed by the CLI copy step.
+  runBuildCommand("pnpm --filter @fusion/dashboard build", workspaceRoot);
+  runBuildCommand("pnpm build", cliRoot);
 }
 
 export function readClientIndexHtml() {

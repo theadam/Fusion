@@ -1623,6 +1623,25 @@ describe("AgentLogViewer", () => {
       expect(container.querySelector(".agent-log-tool-error")).toBeTruthy();
     });
 
+    it("keeps the latest non-tool message visible as its own row when tools are hidden", () => {
+      const entries = [
+        makeEntry({ text: "Starting plan", type: "text", agent: "executor", timestamp: "2026-01-01T00:00:00Z" }),
+        makeEntry({ text: "read file", type: "tool", agent: "executor", timestamp: "2026-01-01T00:00:01Z" }),
+        makeEntry({ text: "Final answer", type: "text", agent: "executor", timestamp: "2026-01-01T00:00:02Z" }),
+      ];
+      const { container } = render(<AgentLogViewer entries={entries} loading={false} />);
+      const toggle = container.querySelector("[data-testid='agent-log-tool-output-toggle']") as HTMLButtonElement;
+
+      fireEvent.click(toggle);
+
+      const textRows = container.querySelectorAll(".agent-log-text");
+      expect(textRows).toHaveLength(2);
+      expect(textRows[0].textContent).toContain("Starting plan");
+      expect(textRows[1].textContent).toContain("Final answer");
+      expect(container.querySelectorAll(".agent-log-agent-badge")).toHaveLength(2);
+      expect(container.querySelectorAll(".agent-log-timestamp")).toHaveLength(2);
+    });
+
     it("does not render any tool log entries when off (only agent text)", () => {
       const entries = [
         makeEntry({ text: "Read", type: "tool", agent: "executor", detail: "some/path" }),
