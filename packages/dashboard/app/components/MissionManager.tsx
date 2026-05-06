@@ -878,6 +878,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
 
       setMissionEvents((prev) => {
         if (!append) {
+          missionEventsRef.current = incomingEvents;
           return incomingEvents;
         }
 
@@ -888,6 +889,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
             merged.push(event);
           }
         }
+        missionEventsRef.current = merged;
         return merged;
       });
 
