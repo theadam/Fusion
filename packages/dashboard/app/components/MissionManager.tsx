@@ -3608,8 +3608,12 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
     );
   });
 
-  const renderMissionListContent = ({ hideBottomButtons = false }: { hideBottomButtons?: boolean } = {}) => (
-            <div className="mission-list">
+  const renderMissionListContent = ({ hideBottomButtons = false }: { hideBottomButtons?: boolean } = {}) => {
+    const showMobileTopPlanButton = isMobile && missions.length > 0 && !isCreatingMission;
+    const showBottomPlanButton = !hideBottomButtons && !showMobileTopPlanButton;
+
+    return (
+      <div className="mission-list">
               {/* Create mission form */}
               {isCreatingMission && (
                 <div className="mission-form-card">
@@ -3636,6 +3640,18 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
                       Cancel
                     </button>
                   </div>
+                </div>
+              )}
+
+              {showMobileTopPlanButton && (
+                <div className="mission-list__top-action">
+                  <button
+                    className="btn btn-sm btn-task-create mission-list__primary-cta"
+                    onClick={() => setShowInterviewModal(true)}
+                  >
+                    <Sparkles size={14} />
+                    Plan New Mission
+                  </button>
                 </div>
               )}
 
@@ -3738,7 +3754,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
                       </div>
                     </div>
                   )}
-                  {!hideBottomButtons && (
+                  {showBottomPlanButton && (
                     <div className="mission-list__footer-actions">
                       <button className="mission-add-btn" onClick={() => setShowInterviewModal(true)}>
                         <Sparkles size={16} />
@@ -3749,7 +3765,8 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
                 </div>
               )}
             </div>
-  );
+    );
+  };
 
   const renderDeleteConfirmPanel = () => (
     <div className="mission-confirm-panel mission-confirm-panel--danger">

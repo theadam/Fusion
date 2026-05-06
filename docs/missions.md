@@ -29,6 +29,8 @@ Mission: Improve Reliability
 
 Use the Mission Manager UI to create missions and build hierarchy interactively.
 
+On mobile, Mission Manager now surfaces the primary **Plan New Mission** CTA at the top of the mission list for faster access, while desktop keeps the split-layout sidebar CTA as the primary entry point.
+
 ### CLI
 
 ```bash

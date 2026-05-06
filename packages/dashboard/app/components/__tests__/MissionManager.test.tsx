@@ -3223,6 +3223,28 @@ describe("MissionManager", () => {
   });
 
   describe("mobile stacked layout", () => {
+    it("shows a single top-of-list Plan New Mission CTA above mission cards", async () => {
+      mockViewport("mobile");
+      globalThis.fetch = createFetchMock();
+      render(<MissionManager isOpen={true} onClose={vi.fn()} addToast={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText("Build Auth System")).toBeInTheDocument());
+
+      const missionList = document.querySelector(".mission-list") as HTMLElement;
+      const topAction = missionList.querySelector(".mission-list__top-action") as HTMLElement;
+      expect(topAction).toBeInTheDocument();
+
+      const missionItems = missionList.querySelectorAll(".mission-list__item");
+      expect(missionItems.length).toBeGreaterThan(0);
+      const firstItem = missionItems[0] as HTMLElement;
+      expect(topAction.compareDocumentPosition(firstItem) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+      const topCtas = missionList.querySelectorAll(".mission-list__primary-cta");
+      expect(topCtas).toHaveLength(1);
+      expect(topCtas[0]).toHaveTextContent("Plan New Mission");
+      expect(document.querySelector(".mission-list__footer-actions")).toBeNull();
+    });
+
     it("renders stacked body on mobile and hides desktop split", async () => {
       mockViewport("mobile");
       globalThis.fetch = createDetailFetchMock();

@@ -501,6 +501,16 @@
   width: auto;
 }
 
+.mission-list__top-action {
+  display: flex;
+}
+
+.mission-list__primary-cta {
+  width: 100%;
+  justify-content: center;
+  gap: var(--space-sm);
+}
+
 .mission-list__footer {
   display: flex;
   flex-direction: column;
