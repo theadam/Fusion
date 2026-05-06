@@ -18,6 +18,7 @@ import type {
   WorkflowStepInput,
   WorkflowStepResult,
   PluginInstallation,
+  PluginSetupCheckResult,
   PluginUiSlotDefinition,
   PluginUiContributionDefinition,
   PluginDashboardViewDefinition,
@@ -7760,6 +7761,23 @@ export async function updatePluginSettings(
   return api<Record<string, unknown>>(withProjectId(`/plugins/${encodeURIComponent(id)}/settings`, projectId), {
     method: "PUT",
     body: JSON.stringify({ settings }),
+  });
+}
+
+export type PluginSetupStatusResponse =
+  | { hasSetup: false }
+  | { hasSetup: false; status: Extract<PluginSetupCheckResult, { status: "error" }> }
+  | ({ hasSetup: true } & PluginSetupCheckResult);
+
+/** Fetch plugin setup status */
+export async function fetchPluginSetupStatus(id: string, projectId?: string): Promise<PluginSetupStatusResponse> {
+  return api<PluginSetupStatusResponse>(withProjectId(`/plugins/${encodeURIComponent(id)}/setup-status`, projectId));
+}
+
+/** Trigger plugin setup install hook */
+export async function installPluginSetup(id: string, projectId?: string): Promise<{ success: boolean; error?: string }> {
+  return api<{ success: boolean; error?: string }>(withProjectId(`/plugins/${encodeURIComponent(id)}/setup/install`, projectId), {
+    method: "POST",
   });
 }
 

@@ -196,10 +196,6 @@ export function createPluginRouter(
 ): Router {
   const router = Router();
 
-  // ── Error Handler ───────────────────────────────────────────────
-
-  router.use(catchHandler);
-
   // ── Management Routes ───────────────────────────────────────────
 
   /**
@@ -364,6 +360,88 @@ export function createPluginRouter(
     // Return updated plugin
     const updatedPlugin = await pluginStore.getPlugin(id);
     res.json(updatedPlugin);
+  }));
+
+  /**
+   * GET /plugins/:id/setup-status
+   * Check plugin setup status.
+   */
+  router.get("/:id/setup-status", catchHandler(async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+
+    let plugin: import("@fusion/core").PluginInstallation;
+    try {
+      plugin = await pluginStore.getPlugin(id);
+    } catch (err: unknown) {
+      if (
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+        || (err instanceof Error && err.message.includes("not found"))
+      ) {
+        throw notFound(`Plugin "${id}" not found`);
+      }
+      throw internalError(err instanceof Error ? err.message : "Unknown error");
+    }
+
+    if (!pluginRunner?.checkPluginSetup || !pluginRunner.getPluginSetupInfo) {
+      throw internalError("Plugin runner not available");
+    }
+
+    const setupInfo = pluginRunner.getPluginSetupInfo();
+    const hasSetup = setupInfo.some((entry) => entry.pluginId === id);
+
+    if (!hasSetup) {
+      res.json({ hasSetup: false });
+      return;
+    }
+
+    if (plugin.state !== "started") {
+      res.json({
+        hasSetup: false,
+        status: { status: "error", error: "Plugin not loaded" },
+      });
+      return;
+    }
+
+    const status = await pluginRunner.checkPluginSetup(id);
+    res.json({ hasSetup: true, ...status });
+  }));
+
+  /**
+   * POST /plugins/:id/setup/install
+   * Trigger plugin setup install hook.
+   */
+  router.post("/:id/setup/install", catchHandler(async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+
+    let plugin: import("@fusion/core").PluginInstallation;
+    try {
+      plugin = await pluginStore.getPlugin(id);
+    } catch (err: unknown) {
+      if (
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+        || (err instanceof Error && err.message.includes("not found"))
+      ) {
+        throw notFound(`Plugin "${id}" not found`);
+      }
+      throw internalError(err instanceof Error ? err.message : "Unknown error");
+    }
+
+    if (!plugin.enabled) {
+      throw badRequest("Plugin must be enabled before setup install");
+    }
+
+    if (!pluginRunner?.installPluginSetup || !pluginRunner.getPluginSetupInfo) {
+      throw internalError("Plugin runner not available");
+    }
+
+    const setupInfo = pluginRunner.getPluginSetupInfo();
+    const setup = setupInfo.find((entry) => entry.pluginId === id);
+    if (!setup?.hooks.install) {
+      throw badRequest("Plugin has no install hook");
+    }
+
+    const result = await pluginRunner.installPluginSetup(id);
+    res.json(result ?? { success: true });
   }));
 
   /**

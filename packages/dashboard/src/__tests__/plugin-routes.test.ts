@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import type { TaskStore, PluginStore, PluginLoader, PluginInstallation } from "@fusion/core";
 import { createApiRoutes } from "../routes.js";
+import { createPluginRouter } from "../plugin-routes.js";
 import { get as performGet, request as performRequest } from "../test-request.js";
 import * as projectStoreResolver from "../project-store-resolver.js";
 
@@ -975,6 +976,122 @@ describe("GET /api/plugins/ui-contributions", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
+  });
+});
+
+describe("createPluginRouter plugin setup routes", () => {
+  let pluginStore: PluginStore;
+  let pluginLoader: PluginLoader;
+  let pluginRunner: {
+    getPluginRoutes: ReturnType<typeof vi.fn>;
+    checkPluginSetup: ReturnType<typeof vi.fn>;
+    installPluginSetup: ReturnType<typeof vi.fn>;
+    getPluginSetupInfo: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pluginStore = createMockPluginStore();
+    pluginLoader = createMockPluginLoader();
+    pluginRunner = {
+      getPluginRoutes: vi.fn().mockReturnValue([]),
+      checkPluginSetup: vi.fn().mockResolvedValue({ status: "installed", version: "1.0.0" }),
+      installPluginSetup: vi.fn().mockResolvedValue({ success: true }),
+      getPluginSetupInfo: vi.fn().mockReturnValue([]),
+    };
+  });
+
+  function buildApp() {
+    const app = express();
+    app.use(express.json());
+    app.use("/plugins", createPluginRouter(pluginStore, pluginLoader, pluginRunner));
+    return app;
+  }
+
+  it("returns 404 for missing plugin setup status", async () => {
+    (pluginStore.getPlugin as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Plugin \"missing\" not found"));
+
+    const res = await REQUEST(buildApp(), "GET", "/plugins/missing/setup-status");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns hasSetup false when plugin has no setup metadata", async () => {
+    (pluginStore.getPlugin as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...INSTALLED_PLUGIN, state: "started" });
+    pluginRunner.getPluginSetupInfo.mockReturnValueOnce([]);
+
+    const res = await REQUEST(buildApp(), "GET", "/plugins/my-plugin/setup-status");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ hasSetup: false });
+  });
+
+  it("returns plugin not loaded status when setup metadata exists but plugin is stopped", async () => {
+    (pluginStore.getPlugin as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...INSTALLED_PLUGIN, state: "installed" });
+    pluginRunner.getPluginSetupInfo.mockReturnValueOnce([
+      {
+        pluginId: "my-plugin",
+        manifest: { binaryName: "tool", description: "desc" },
+        hooks: { checkSetup: vi.fn() },
+      },
+    ]);
+
+    const res = await REQUEST(buildApp(), "GET", "/plugins/my-plugin/setup-status");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      hasSetup: false,
+      status: { status: "error", error: "Plugin not loaded" },
+    });
+  });
+
+  it("returns setup status when setup metadata exists and plugin is started", async () => {
+    (pluginStore.getPlugin as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...INSTALLED_PLUGIN, state: "started" });
+    pluginRunner.getPluginSetupInfo.mockReturnValueOnce([
+      {
+        pluginId: "my-plugin",
+        manifest: { binaryName: "tool", description: "desc" },
+        hooks: { checkSetup: vi.fn() },
+      },
+    ]);
+
+    const res = await REQUEST(buildApp(), "GET", "/plugins/my-plugin/setup-status");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ hasSetup: true, status: "installed", version: "1.0.0" });
+  });
+
+  it("rejects setup install when plugin has no install hook", async () => {
+    (pluginStore.getPlugin as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...INSTALLED_PLUGIN, enabled: true });
+    pluginRunner.getPluginSetupInfo.mockReturnValueOnce([
+      {
+        pluginId: "my-plugin",
+        manifest: { binaryName: "tool", description: "desc" },
+        hooks: { checkSetup: vi.fn() },
+      },
+    ]);
+
+    const res = await REQUEST(buildApp(), "POST", "/plugins/my-plugin/setup/install", {});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("no install hook");
+  });
+
+  it("returns setup install result payload", async () => {
+    (pluginStore.getPlugin as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...INSTALLED_PLUGIN, enabled: true });
+    pluginRunner.getPluginSetupInfo.mockReturnValueOnce([
+      {
+        pluginId: "my-plugin",
+        manifest: { binaryName: "tool", description: "desc" },
+        hooks: { checkSetup: vi.fn(), install: vi.fn() },
+      },
+    ]);
+    pluginRunner.installPluginSetup.mockResolvedValueOnce({ success: false, error: "install failed" });
+
+    const res = await REQUEST(buildApp(), "POST", "/plugins/my-plugin/setup/install", {});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: false, error: "install failed" });
   });
 });
 
