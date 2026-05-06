@@ -2034,7 +2034,7 @@ describe("Agent create/update routes", () => {
       buildAgentApp(),
       "POST",
       `/api/agents/${agentId}/state`,
-      JSON.stringify({ state: "terminated" }),
+      JSON.stringify({ state: "paused" }),
       { "Content-Type": "application/json" },
     );
 

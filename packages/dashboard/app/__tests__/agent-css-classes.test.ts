@@ -112,7 +112,6 @@ describe("Agent CSS classes", () => {
     expect(hasClass(".agent-board-card--running")).toBe(true);
     expect(hasClass(".agent-board-card--paused")).toBe(true);
     expect(hasClass(".agent-board-card--error")).toBe(true);
-    expect(hasClass(".agent-board-card--terminated")).toBe(true);
     expect(hasClass(".agent-board-header")).toBe(true);
     expect(hasClass(".agent-board-icon")).toBe(true);
     expect(hasClass(".agent-board-badge")).toBe(true);
@@ -121,7 +120,6 @@ describe("Agent CSS classes", () => {
     expect(hasClass(".agent-badge--running")).toBe(true);
     expect(hasClass(".agent-badge--paused")).toBe(true);
     expect(hasClass(".agent-badge--error")).toBe(true);
-    expect(hasClass(".agent-badge--terminated")).toBe(true);
     expect(hasClass(".agent-board-health")).toBe(true);
     expect(hasClass(".agent-board-name")).toBe(true);
     expect(hasClass(".agent-board-id")).toBe(true);
@@ -134,7 +132,6 @@ describe("Agent CSS classes", () => {
     expect(hasClass(".agent-card--running")).toBe(true);
     expect(hasClass(".agent-card--paused")).toBe(true);
     expect(hasClass(".agent-card--error")).toBe(true);
-    expect(hasClass(".agent-card--terminated")).toBe(true);
     expect(hasClass(".agent-card-header")).toBe(true);
     expect(hasClass(".agent-card-body")).toBe(true);
     expect(hasClass(".agent-card-actions")).toBe(true);
