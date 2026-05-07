@@ -111,26 +111,12 @@ export function ExperimentalAgentOnboardingModal({
 
   if (!isOpen) return null;
 
-  const instructionsExcerpt = summary?.instructionsText
-    ? summary.instructionsText.length > 220
-      ? `${summary.instructionsText.slice(0, 220)}…`
-      : summary.instructionsText
-    : "";
-
-  const heartbeatSummary = summary
-    ? [
-      summary.heartbeatProcedurePath ? `Procedure: ${summary.heartbeatProcedurePath}` : null,
-      summary.heartbeatIntervalMs ? `Interval: ${summary.heartbeatIntervalMs}ms` : null,
-      summary.heartbeatEnabled !== undefined ? `Enabled: ${summary.heartbeatEnabled ? "yes" : "no"}` : null,
-    ].filter((value): value is string => Boolean(value)).join(" • ")
-    : "";
-
-  const runtimeSummary = summary
-    ? [
-      summary.modelHint ? `Model hint: ${summary.modelHint}` : null,
-      summary.runtimeHint ? `Runtime hint: ${summary.runtimeHint}` : null,
-    ].filter((value): value is string => Boolean(value)).join(" • ")
-    : "";
+  const renderSummaryValue = (value: string | number | null | undefined) => {
+    if (value === undefined || value === null || value === "") {
+      return <em className="experimental-agent-onboarding-modal__summary-empty">Not set</em>;
+    }
+    return <span>{value}</span>;
+  };
 
   const start = async () => {
     setViewState("loading");
@@ -209,62 +195,58 @@ export function ExperimentalAgentOnboardingModal({
         {viewState === "summary" && summary && (
           <div className="form-group">
             <label>{isEditMode ? "Updated draft ready for review" : "Draft ready for review"}</label>
+            <p className="experimental-agent-onboarding-modal__summary-intro">
+              Review this generated draft. Nothing is applied until you confirm.
+            </p>
             <div className="experimental-agent-onboarding-modal__summary card">
               <div className="experimental-agent-onboarding-modal__summary-section">
-                <h4>Profile</h4>
-                <p><strong>Name:</strong> {summary.name}</p>
-                <p><strong>Role:</strong> {summary.role}</p>
-                {summary.title && <p><strong>Title:</strong> {summary.title}</p>}
-                {summary.icon && <p><strong>Icon:</strong> {summary.icon}</p>}
-                {summary.templateId && <p><strong>Template:</strong> {summary.templateId}</p>}
-                {summary.patternAgentId && <p><strong>Pattern agent:</strong> {summary.patternAgentId}</p>}
-                {summary.reportsTo && <p><strong>Reports to:</strong> {summary.reportsTo}</p>}
-                {summary.rationale && <p><strong>Why:</strong> {summary.rationale}</p>}
+                <h4>Identity</h4>
+                <dl className="experimental-agent-onboarding-modal__summary-list">
+                  <div><dt>Name</dt><dd>{renderSummaryValue(summary.name)}</dd></div>
+                  <div><dt>Role</dt><dd>{renderSummaryValue(summary.role)}</dd></div>
+                  <div><dt>Title</dt><dd>{renderSummaryValue(summary.title)}</dd></div>
+                  <div><dt>Icon</dt><dd>{renderSummaryValue(summary.icon)}</dd></div>
+                  <div><dt>Reports To</dt><dd>{renderSummaryValue(summary.reportsTo)}</dd></div>
+                </dl>
               </div>
-
-              {summary.soul && (
-                <div className="experimental-agent-onboarding-modal__summary-section">
-                  <h4>Soul / personality</h4>
-                  <p className="experimental-agent-onboarding-modal__summary-block">{summary.soul}</p>
-                </div>
-              )}
 
               <div className="experimental-agent-onboarding-modal__summary-section">
-                <h4>Core instructions</h4>
-                <p className="experimental-agent-onboarding-modal__summary-block">{instructionsExcerpt}</p>
+                <h4>Configuration</h4>
+                <dl className="experimental-agent-onboarding-modal__summary-list">
+                  <div><dt>Inline Instructions</dt><dd className="experimental-agent-onboarding-modal__summary-block">{renderSummaryValue(summary.instructionsText)}</dd></div>
+                  <div><dt>Soul</dt><dd className="experimental-agent-onboarding-modal__summary-block">{renderSummaryValue(summary.soul)}</dd></div>
+                  <div><dt>Agent Memory</dt><dd className="experimental-agent-onboarding-modal__summary-block">{renderSummaryValue(summary.memory)}</dd></div>
+                  <div><dt>Skills</dt><dd>{renderSummaryValue(summary.skills?.join(", "))}</dd></div>
+                  <div><dt>Thinking Level</dt><dd>{renderSummaryValue(summary.thinkingLevel)}</dd></div>
+                  <div><dt>Max Turns</dt><dd>{renderSummaryValue(summary.maxTurns)}</dd></div>
+                  <div><dt>Template</dt><dd>{renderSummaryValue(summary.templateId)}</dd></div>
+                  <div><dt>Pattern Agent</dt><dd>{renderSummaryValue(summary.patternAgentId)}</dd></div>
+                </dl>
               </div>
 
-              {heartbeatSummary && (
+              {(summary.heartbeatProcedurePath || summary.heartbeatIntervalMs || summary.heartbeatEnabled !== undefined || summary.modelHint || summary.runtimeHint) && (
                 <div className="experimental-agent-onboarding-modal__summary-section">
-                  <h4>Heartbeat summary</h4>
-                  <p>{heartbeatSummary}</p>
+                  <h4>Runtime Hints</h4>
+                  <dl className="experimental-agent-onboarding-modal__summary-list">
+                    <div><dt>Heartbeat Procedure Path</dt><dd>{renderSummaryValue(summary.heartbeatProcedurePath)}</dd></div>
+                    <div><dt>Heartbeat Interval</dt><dd>{renderSummaryValue(summary.heartbeatIntervalMs ? `${summary.heartbeatIntervalMs}ms` : undefined)}</dd></div>
+                    <div><dt>Heartbeat Enabled</dt><dd>{renderSummaryValue(summary.heartbeatEnabled === undefined ? undefined : summary.heartbeatEnabled ? "yes" : "no")}</dd></div>
+                    <div><dt>Model Hint</dt><dd>{renderSummaryValue(summary.modelHint)}</dd></div>
+                    <div><dt>Runtime Hint</dt><dd>{renderSummaryValue(summary.runtimeHint)}</dd></div>
+                  </dl>
                 </div>
               )}
 
-              {runtimeSummary && (
+              {summary.rationale && (
                 <div className="experimental-agent-onboarding-modal__summary-section">
-                  <h4>Runtime summary</h4>
-                  <p>{runtimeSummary}</p>
-                </div>
-              )}
-
-              {summary.memory && (
-                <div className="experimental-agent-onboarding-modal__summary-section">
-                  <h4>Starter memory / playbook</h4>
-                  <p className="experimental-agent-onboarding-modal__summary-block">{summary.memory}</p>
-                </div>
-              )}
-
-              {summary.skills && summary.skills.length > 0 && (
-                <div className="experimental-agent-onboarding-modal__summary-section">
-                  <h4>Skills</h4>
-                  <p>{summary.skills.join(", ")}</p>
+                  <h4>Rationale</h4>
+                  <p className="experimental-agent-onboarding-modal__summary-block">{summary.rationale}</p>
                 </div>
               )}
             </div>
             <div className="modal-actions">
               <button className="btn" onClick={() => void handleClose()}>Cancel</button>
-              <button className="btn btn-primary" onClick={() => onUseDraft(summary)}>{isEditMode ? "Apply draft to settings" : "Continue to agent form"}</button>
+              <button className="btn btn-primary" onClick={() => onUseDraft(summary)}>{isEditMode ? "Apply draft to settings form" : "Apply draft to agent form"}</button>
             </div>
           </div>
         )}
