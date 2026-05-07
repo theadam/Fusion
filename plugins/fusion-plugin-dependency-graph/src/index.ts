@@ -1,5 +1,5 @@
 import type { Task, TaskDetail, WorkflowStep } from "@fusion/core";
-import type { PluginDashboardViewContext } from "@fusion/dashboard/app/plugins/pluginViewRegistry";
+import type { PluginDashboardViewContext } from "@fusion/dashboard/app/plugins/types";
 import { definePlugin } from "@fusion/plugin-sdk";
 import { createElement } from "react";
 import { DependencyGraph } from "./DependencyGraph";

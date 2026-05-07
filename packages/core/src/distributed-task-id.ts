@@ -82,11 +82,60 @@ export function createDistributedTaskIdAllocator(db: Database): DistributedTaskI
   };
 
   const ensureStateRow = (prefix: string): void => {
+    // Seed nextSequence past any pre-existing task ID for this prefix. Without
+    // this, projects whose tasks were originally allocated through
+    // TaskStore.allocateId() (config.nextId) would have mesh-routed task
+    // creates restart at 1 and collide with historical FN-001 / FN-002 / …
+    // IDs (regression introduced when the dashboard task-create route was
+    // wired to reserveDistributedTaskId in FN-3450).
+    //
+    // We take the max of:
+    //   - 1 (historical default)
+    //   - the legacy config.nextId counter, when the configured taskPrefix
+    //     matches `prefix`
+    //   - one past the highest numeric suffix on any existing task for this
+    //     prefix (live tasks + archived), to handle DBs where config.nextId
+    //     ever drifted below the real high-water mark
+    let seedSequence = 1;
+    try {
+      const configRow = db
+        .prepare("SELECT nextId, settings FROM config WHERE id = 1")
+        .get() as { nextId: number | null; settings: string | null } | undefined;
+      if (configRow) {
+        const settings = configRow.settings ? (JSON.parse(configRow.settings) as { taskPrefix?: string }) : null;
+        const configuredPrefix = (settings?.taskPrefix ?? "KB").trim().toUpperCase();
+        if (configuredPrefix === prefix && typeof configRow.nextId === "number" && configRow.nextId > seedSequence) {
+          seedSequence = configRow.nextId;
+        }
+      }
+    } catch {
+      // Best-effort: if the config row/column is missing (fresh test DB) we
+      // fall back to the historical default of 1.
+    }
+    const idPattern = `${prefix}-%`;
+    const probeTable = (table: string): void => {
+      try {
+        const row = db
+          .prepare(
+            `SELECT MAX(CAST(substr(id, ${prefix.length + 2}) AS INTEGER)) AS maxSeq
+             FROM ${table}
+             WHERE id LIKE ? AND substr(id, ${prefix.length + 2}) GLOB '[0-9]*'`,
+          )
+          .get(idPattern) as { maxSeq: number | null } | undefined;
+        if (row && typeof row.maxSeq === "number" && row.maxSeq + 1 > seedSequence) {
+          seedSequence = row.maxSeq + 1;
+        }
+      } catch {
+        // Table may not exist (tests, isolated DBs); ignore.
+      }
+    };
+    probeTable("tasks");
+    probeTable("archivedTasks");
     db.prepare(
       `INSERT OR IGNORE INTO distributed_task_id_state (
         prefix, nextSequence, committedClusterTaskCount, lastCommittedTaskId, updatedAt
-      ) VALUES (?, 1, 0, NULL, ?)`
-    ).run(prefix, new Date().toISOString());
+      ) VALUES (?, ?, 0, NULL, ?)`
+    ).run(prefix, seedSequence, new Date().toISOString());
   };
 
   return {

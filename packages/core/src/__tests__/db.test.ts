@@ -112,10 +112,6 @@ describe("Database", () => {
       expect(tableNames).toContain("roadmap_features");
       // Verification cache (migration 61)
       expect(tableNames).toContain("verification_cache");
-      expect(tableNames).toContain("project_auth_users");
-      expect(tableNames).toContain("project_auth_memberships");
-      expect(tableNames).toContain("project_auth_providers");
-      expect(tableNames).toContain("project_auth_sessions");
       expect(tableNames).toContain("distributed_task_id_state");
       expect(tableNames).toContain("distributed_task_id_reservations");
     });
@@ -165,17 +161,10 @@ describe("Database", () => {
       expect(indexNames).toContain("idxRoadmapFeaturesMilestoneOrder");
       // Verification cache index (migration 61)
       expect(indexNames).toContain("idxVerificationCacheRecordedAt");
-      expect(indexNames).toContain("idxProjectAuthUsersEmail");
-      expect(indexNames).toContain("idxProjectAuthMembershipsUserId");
-      expect(indexNames).toContain("idxProjectAuthMembershipsRole");
-      expect(indexNames).toContain("idxProjectAuthProvidersUserId");
-      expect(indexNames).toContain("idxProjectAuthSessionsUserId");
-      expect(indexNames).toContain("idxProjectAuthSessionsMembershipId");
-      expect(indexNames).toContain("idxProjectAuthSessionsExpiry");
     });
 
     it("seeds schema version", () => {
-      expect(db.getSchemaVersion()).toBe(66);
+      expect(db.getSchemaVersion()).toBe(67);
     });
     it("seeds lastModified", () => {
       const ts = db.getLastModified();
@@ -197,7 +186,7 @@ describe("Database", () => {
 
     it("is idempotent - calling init() twice does not fail", () => {
       expect(() => db.init()).not.toThrow();
-      expect(db.getSchemaVersion()).toBe(66);
+      expect(db.getSchemaVersion()).toBe(67);
     });
     it("does not overwrite existing config on re-init", () => {
       // Update the config
@@ -970,7 +959,7 @@ describe("schema migrations", () => {
     db.init();
 
     // Verify version bumped to 29 (includes v1→v2 through v26→v29)
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
 
     // Verify new columns exist and existing data is intact
     const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
@@ -995,11 +984,11 @@ describe("schema migrations", () => {
     const db = new Database(fusionDir);
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
 
     // Re-init should not fail
     db.init();
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
 
     db.close();
   });
@@ -1034,7 +1023,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
 
     const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     expect(cols.map((col) => col.name)).toContain("priority");
@@ -1075,7 +1064,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
 
     const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     const colNames = cols.map((col) => col.name);
@@ -1144,7 +1133,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
 
     const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     const colNames = cols.map((col) => col.name);
@@ -1247,7 +1236,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
 
     const cols = db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>;
     expect(cols.map((col) => col.name)).toContain("attachments");
@@ -1321,7 +1310,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
 
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'agentRatings'").all() as Array<{ name: string }>;
     expect(tables).toEqual([{ name: "agentRatings" }]);
@@ -1345,7 +1334,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
 
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'mission_events'").all() as Array<{ name: string }>;
     expect(tables).toEqual([{ name: "mission_events" }]);
@@ -1449,7 +1438,7 @@ describe("schema migrations", () => {
     db.init();
 
     // Verify version bumped to 29
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
 
     // Verify new columns exist and existing data is intact
     const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
@@ -1918,7 +1907,7 @@ describe("createDatabase factory", () => {
     const db = createDatabase(fusionDir);
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(66);
+    expect(db.getSchemaVersion()).toBe(67);
     expect(db.getLastModified()).toBeGreaterThan(0);
 
     db.close();
@@ -2032,32 +2021,45 @@ describe("TaskStore — verification cache", () => {
   });
 });
 
-describe("migration v63 project auth tables", () => {
-  it("migrates from v62 and creates project auth tables", () => {
+describe("migration v67 drops orphan project auth tables", () => {
+  it("drops project_auth_* tables left over from the removed pluggable auth feature", () => {
     const temp = makeTmpDir();
     const fusion = join(temp, ".fusion");
     const localDb = new Database(fusion);
     localDb.init();
-    localDb.prepare("UPDATE __meta SET value = '62' WHERE key = 'schemaVersion'").run();
-    localDb.prepare("DROP TABLE IF EXISTS project_auth_sessions").run();
-    localDb.prepare("DROP TABLE IF EXISTS project_auth_providers").run();
-    localDb.prepare("DROP TABLE IF EXISTS project_auth_memberships").run();
-    localDb.prepare("DROP TABLE IF EXISTS project_auth_users").run();
+    // Simulate a user who ran the old migration 63 (schema version 63–66) and
+    // therefore has the orphan project_auth_* tables sitting in their DB. We
+    // recreate them by hand and roll the schemaVersion back so the new
+    // migration runs on the next init.
+    localDb.exec(`CREATE TABLE IF NOT EXISTS project_auth_users (id TEXT PRIMARY KEY)`);
+    localDb.exec(`CREATE TABLE IF NOT EXISTS project_auth_memberships (id TEXT PRIMARY KEY, userId TEXT, FOREIGN KEY (userId) REFERENCES project_auth_users(id) ON DELETE CASCADE)`);
+    localDb.exec(`CREATE TABLE IF NOT EXISTS project_auth_providers (id TEXT PRIMARY KEY, userId TEXT, FOREIGN KEY (userId) REFERENCES project_auth_users(id) ON DELETE CASCADE)`);
+    localDb.exec(`CREATE TABLE IF NOT EXISTS project_auth_sessions (id TEXT PRIMARY KEY, userId TEXT, membershipId TEXT, FOREIGN KEY (userId) REFERENCES project_auth_users(id) ON DELETE CASCADE, FOREIGN KEY (membershipId) REFERENCES project_auth_memberships(id) ON DELETE CASCADE)`);
+    localDb.prepare("UPDATE __meta SET value = '66' WHERE key = 'schemaVersion'").run();
     localDb.close();
 
     const migrated = new Database(fusion);
     migrated.init();
-    expect(migrated.getSchemaVersion()).toBe(66);
+    expect(migrated.getSchemaVersion()).toBe(67);
     const tables = migrated
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'project_auth_%' ORDER BY name")
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'project_auth_%'")
       .all() as Array<{ name: string }>;
-    expect(tables.map((t) => t.name)).toEqual([
-      "project_auth_memberships",
-      "project_auth_providers",
-      "project_auth_sessions",
-      "project_auth_users",
-    ]);
+    expect(tables).toEqual([]);
     migrated.close();
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it("is a no-op on fresh DBs that never had the auth tables", () => {
+    const temp = makeTmpDir();
+    const fusion = join(temp, ".fusion");
+    const fresh = new Database(fusion);
+    fresh.init();
+    expect(fresh.getSchemaVersion()).toBe(67);
+    const tables = fresh
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'project_auth_%'")
+      .all() as Array<{ name: string }>;
+    expect(tables).toEqual([]);
+    fresh.close();
     rmSync(temp, { recursive: true, force: true });
   });
 });

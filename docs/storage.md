@@ -195,10 +195,6 @@ Additional backend notes:
 | `project_insight_run_events` | Append-only per-run lifecycle trail (`seq`, `type`, `message`, optional `status`/`classification`/`metadata`) used by cancel/retry/timeout auditing and API inspection. |
 | `todo_lists` | Project-scoped todo list metadata (`projectId`, title, created/updated timestamps). |
 | `todo_items` | Todo list items (`listId` FK) with completion state, completion timestamp, and deterministic `sortOrder`. |
-| `project_auth_users` | Project-scoped user identities (email/display name/active state) used for membership and session relationships. |
-| `project_auth_memberships` | Project-scoped membership records linking users to fixed v1 roles (`owner`, `admin`, `editor`, `viewer`). |
-| `project_auth_providers` | Per-project external auth-provider links for users (provider + external user ID + metadata). |
-| `project_auth_sessions` | Project-scoped auth sessions tied to a user + membership with expiry and revocation timestamps. |
 | `ai_sessions` *(migration-created)* | Persisted AI interactive sessions (planning/interview/subtask) with status and conversation history. |
 | `messages` *(migration-created)* | Inter-agent/user message mailbox storage. |
 | `agentRatings` *(migration-created)* | Agent performance ratings (1-5), optional reviewer metadata, and run/task attribution. |
@@ -216,8 +212,6 @@ Additional backend notes:
 | `eval_runs` | Eval run lifecycle state (status, trigger, scope, evaluation window boundaries, evaluated task IDs/counts, aggregate scores, provenance). |
 | `eval_task_results` | Per-task eval outcomes linked to runs (`runId` FK cascade), including durable task snapshots and structured score payloads. `categoryScores[]` stores canonical per-category fields (`category`, `deterministicScore`, `aiScore`, `finalScore`, `weight`, `band`, `rationale`, `evidence[]`), plus `overallScore` derived from category finals. Also stores deterministic/AI signal payloads, summary rationale, structured follow-up suggestions (`suggestionId`, `dedupeKey`, recommendation, lifecycle state, suppression fields, optional `createdTaskId` linkage), and a bounded `TaskEvaluationEvidenceBundle` (fixed source-order groups, capped entry counts, max 500-char excerpts with truncation marker) embedded in result metadata for backward-compatible persistence. |
 | `eval_run_events` | Append-only eval run event trail (`runId` FK cascade, ordered by `seq`) for orchestration/debug auditing and downstream API/UI drill-down. |
-
-Scope boundary note: the `project_auth_*` tables are strictly project-database membership/auth domain data. They do **not** replace or migrate global remote-access credentials/tokens, daemon auth, or model-provider credential settings (which remain in their existing global/project settings stores).
 
 ---
 

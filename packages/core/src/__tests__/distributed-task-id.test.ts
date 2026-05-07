@@ -60,6 +60,30 @@ describe("distributed-task-id allocator", () => {
     expect(state.committedClusterTaskCount).toBe(0);
   });
 
+  it("seeds nextSequence past existing tasks for the configured prefix", async () => {
+    // Regression: FN-3450 wired the dashboard task-create route to the
+    // distributed allocator. On databases whose tasks were originally
+    // allocated through TaskStore.allocateId() (config.nextId), the first
+    // mesh-routed reservation used to restart at 1 and produce FN-001 even
+    // when FN-3700 already existed. The allocator must now resume past any
+    // existing task ID for the prefix.
+    const db = new Database("/tmp/fusion-test", { inMemory: true });
+    db.init();
+    db.prepare("UPDATE config SET nextId = 3701, settings = ? WHERE id = 1").run(
+      JSON.stringify({ taskPrefix: "FN" }),
+    );
+    db.prepare(
+      "INSERT INTO tasks (id, description, \"column\", createdAt, updatedAt) VALUES (?, '', 'todo', ?, ?)",
+    ).run("FN-3700", new Date().toISOString(), new Date().toISOString());
+    const allocator = createDistributedTaskIdAllocator(db);
+
+    const reservation = await allocator.reserveDistributedTaskId({ prefix: "FN", nodeId: "node-a" });
+    expect(reservation.taskId).toBe("FN-3701");
+
+    const state = await allocator.getDistributedTaskIdState({ prefix: "FN" });
+    expect(state.nextSequence).toBe(3702);
+  });
+
   it("state reports committed count independently from nextSequence", async () => {
     const { allocator } = createAllocator();
     const first = await allocator.reserveDistributedTaskId({ prefix: "FN", nodeId: "node-a" });

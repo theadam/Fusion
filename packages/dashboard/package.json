@@ -22,6 +22,22 @@
     "./planning": {
       "types": "./src/planning.ts",
       "import": "./src/planning.ts"
+    },
+    "./app/components/TaskCard": {
+      "types": "./app/components/TaskCard.tsx",
+      "import": "./app/components/TaskCard.tsx"
+    },
+    "./app/utils/taskStuck": {
+      "types": "./app/utils/taskStuck.ts",
+      "import": "./app/utils/taskStuck.ts"
+    },
+    "./app/plugins/pluginViewRegistry": {
+      "types": "./app/plugins/pluginViewRegistry.tsx",
+      "import": "./app/plugins/pluginViewRegistry.tsx"
+    },
+    "./app/plugins/types": {
+      "types": "./app/plugins/types.ts",
+      "import": "./app/plugins/types.ts"
     }
   },
   "publishConfig": {

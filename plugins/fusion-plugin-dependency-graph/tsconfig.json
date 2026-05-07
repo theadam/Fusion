@@ -6,7 +6,12 @@
     "jsx": "react-jsx",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "types": ["react"]
+    "types": ["react"],
+    "paths": {
+      "@fusion/dashboard/app/components/TaskCard": ["./src/dashboard-interop.d.ts"],
+      "@fusion/dashboard/app/utils/taskStuck": ["./src/dashboard-interop.d.ts"],
+      "@fusion/dashboard/app/plugins/types": ["../../packages/dashboard/app/plugins/types.ts"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts"],
   "exclude": ["src/__tests__/**"]
