@@ -12,6 +12,7 @@ Plugin-provided top-level **Graph** dashboard view for Fusion.
 - **Interaction**: drag-to-pan canvas background, drag-to-reposition nodes, cursor-centered wheel zoom, pinch-to-zoom with stationary midpoint, keyboard shortcuts, zoom toolbar, reset, and fit-to-graph
 - **Fit-to-graph**: computes node bounding box with layout node dimensions and applies zoom/pan so the graph fits in viewport with padding
 - **Initial auto-fit**: when no saved scoped positions exist, the first non-empty render auto-fits once; subsequent updates preserve user navigation state
+- **Position persistence**: dragged node positions are stored per project in browser localStorage and restored on reload
 - **Animated transitions**: fit/reset operations animate `transform` (`var(--transition-normal)`), while continuous drag/wheel/pinch stays transition-free for responsiveness
 - **Node rendering**: each graph node renders the real dashboard `TaskCard` via `GraphTaskNode` (no duplicated card markup)
 - **In-progress behavior**: steps are visible by default and active-task glow (`agent-active`) is preserved because node cards reuse TaskCard directly
@@ -22,6 +23,14 @@ Plugin-provided top-level **Graph** dashboard view for Fusion.
 - **Graph node classes**: `.graph-task-node`, `.graph-task-node--active`, `.graph-task-node--in-review`, `.graph-task-node--highlighted`, `.graph-task-node--dimmed`, `.graph-node--highlighted`, and `.graph-node--dimmed` are available for graph-specific layering/highlight states while card internals remain owned by `TaskCard.css`
 - **Graph edge classes**: `.graph-edge--highlighted` and `.graph-edge--dimmed` are applied during dependency-chain emphasis states
 - **Drag behavior**: graph nodes pass `disableDrag={true}` to `TaskCard` so card-level HTML5 drag does not conflict with canvas pan/zoom
+
+## Position persistence
+
+- Storage key format: `kb:${projectId}:dependency-graph-positions` (falls back to `dependency-graph-positions` when no project is selected)
+- Read path: positions load on graph mount and whenever `projectId` changes, then merge with fresh auto-layout so new tasks still receive layout defaults
+- Write path: positions persist on drag end only (not on every drag frame), filtered to currently visible tasks for stale cleanup
+- Reset behavior: Fit to graph / Reset view clear persisted positions and re-apply auto-layout
+- Implementation detail: the plugin ships local `scopedStorage` helpers duplicated from dashboard `projectStorage` to stay plugin-isolated while preserving the same `kb:${projectId}:${baseKey}` convention
 
 ## Dependency chain highlighting
 

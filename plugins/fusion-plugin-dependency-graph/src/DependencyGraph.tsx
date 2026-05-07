@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Task } from "@fusion/core";
 import { GraphTaskNode } from "./GraphTaskNode";
 import { GraphToolbar } from "./GraphToolbar";
@@ -8,18 +8,12 @@ import { computeAutoLayout } from "./layout";
 import { useGraphData } from "./useGraphData";
 import { useGraphInteraction } from "./useGraphInteraction";
 import { useDependencyChain } from "./hooks/useDependencyChain";
+import { useGraphPositions } from "./hooks/useGraphPositions";
+import { mergePositions, type NodePositions } from "./utils/graphPositionStorage";
 import "./DependencyGraph.css";
 
 const NODE_WIDTH = 280;
 const NODE_HEIGHT = 100;
-const POSITION_STORAGE_KEY = "fusion-plugin-dependency-graph:positions";
-
-function getScopedPositionItem(projectId?: string): string | null {
-  if (typeof window === "undefined") return null;
-  if (typeof window.localStorage?.getItem !== "function") return null;
-  const key = projectId ? `kb:${projectId}:${POSITION_STORAGE_KEY}` : POSITION_STORAGE_KEY;
-  return window.localStorage.getItem(key);
-}
 
 export interface DependencyGraphProps {
   tasks: Task[];
@@ -78,18 +72,20 @@ export function DependencyGraph({
     () => computeAutoLayout(graphData, { nodeWidth: NODE_WIDTH, nodeHeight: NODE_HEIGHT, horizontalGap: 40, verticalGap: 80 }),
     [graphData],
   );
+  const visibleTaskIds = useMemo(() => new Set(filteredTasks.map((task) => task.id)), [filteredTasks]);
+  const { savedPositions, persistPositions, clearSavedPositions } = useGraphPositions({ projectId, visibleTaskIds });
   const [positions, setPositions] = useState<Map<string, { x: number; y: number }>>(autoLayoutPositions);
   const [isNodeDragging, setIsNodeDragging] = useState(false);
 
   useEffect(() => {
-    setPositions((current) => {
-      const next = new Map<string, { x: number; y: number }>();
-      for (const [taskId, layoutPosition] of autoLayoutPositions.entries()) {
-        next.set(taskId, current.get(taskId) ?? layoutPosition);
-      }
-      return next;
-    });
-  }, [autoLayoutPositions]);
+    const autoLayoutRecord: NodePositions = {};
+    for (const [taskId, position] of autoLayoutPositions.entries()) {
+      autoLayoutRecord[taskId] = position;
+    }
+
+    const merged = savedPositions ? mergePositions(autoLayoutRecord, savedPositions, visibleTaskIds) : autoLayoutRecord;
+    setPositions(new Map(Object.entries(merged)));
+  }, [autoLayoutPositions, savedPositions, visibleTaskIds]);
 
   const {
     transform,
@@ -110,7 +106,7 @@ export function DependencyGraph({
     if (initialFitDoneRef.current) return;
     if (filteredTasks.length === 0) return;
 
-    const hasSavedPositions = Boolean(getScopedPositionItem(projectId));
+    const hasSavedPositions = Boolean(savedPositions && Object.keys(savedPositions).length > 0);
     if (hasSavedPositions) {
       initialFitDoneRef.current = true;
       return;
@@ -121,7 +117,7 @@ export function DependencyGraph({
 
     fitToGraph(positions, viewport.clientWidth, viewport.clientHeight, { nodeWidth: NODE_WIDTH, nodeHeight: NODE_HEIGHT });
     initialFitDoneRef.current = true;
-  }, [filteredTasks.length, fitToGraph, positions, projectId]);
+  }, [filteredTasks.length, fitToGraph, positions, savedPositions]);
 
   const bounds = useMemo(() => {
     const values = Array.from(positions.values());
@@ -130,6 +126,20 @@ export function DependencyGraph({
     const maxY = Math.max(...values.map((pos) => pos.y + NODE_HEIGHT));
     return { width: maxX, height: maxY };
   }, [positions]);
+
+  const handleResetLayout = useCallback(() => {
+    clearSavedPositions();
+    const freshLayout = computeAutoLayout(graphData, { nodeWidth: NODE_WIDTH, nodeHeight: NODE_HEIGHT, horizontalGap: 40, verticalGap: 80 });
+    setPositions(freshLayout);
+  }, [clearSavedPositions, graphData]);
+
+  const handleNodeDragEnd = useCallback(() => {
+    const positionRecord: NodePositions = {};
+    for (const [taskId, position] of positions.entries()) {
+      positionRecord[taskId] = position;
+    }
+    persistPositions(positionRecord);
+  }, [persistPositions, positions]);
 
   return (
     <section className="dependency-graph" data-testid="dependency-graph">
@@ -230,6 +240,7 @@ export function DependencyGraph({
                       });
                     }}
                     onNodeDragStateChange={setIsNodeDragging}
+                    onNodeDragEnd={handleNodeDragEnd}
                     isHighlighted={highlightedTaskIds.size > 0 && highlightedTaskIds.has(node.task.id)}
                     isDimmed={highlightedTaskIds.size > 0 && !highlightedTaskIds.has(node.task.id)}
                     onOpenDetail={onOpenDetail ?? ((task) => onOpenTaskDetail?.(task.id))}
@@ -274,11 +285,16 @@ export function DependencyGraph({
           zoomOut(viewport.clientWidth, viewport.clientHeight);
         }}
         onFitToGraph={() => {
+          handleResetLayout();
           const viewport = viewportRef.current;
           if (!viewport) return;
-          fitToGraph(positions, viewport.clientWidth, viewport.clientHeight, { nodeWidth: NODE_WIDTH, nodeHeight: NODE_HEIGHT });
+          const freshLayout = computeAutoLayout(graphData, { nodeWidth: NODE_WIDTH, nodeHeight: NODE_HEIGHT, horizontalGap: 40, verticalGap: 80 });
+          fitToGraph(freshLayout, viewport.clientWidth, viewport.clientHeight, { nodeWidth: NODE_WIDTH, nodeHeight: NODE_HEIGHT });
         }}
-        onResetView={resetView}
+        onResetView={() => {
+          handleResetLayout();
+          resetView();
+        }}
       />
     </section>
   );

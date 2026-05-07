@@ -37,6 +37,7 @@ export interface GraphTaskNodeProps extends TaskCardBridgeProps, Pick<HTMLAttrib
   isDimmed?: boolean;
   onNodePositionChange: (taskId: string, position: GraphPosition) => void;
   onNodeDragStateChange?: (isDragging: boolean) => void;
+  onNodeDragEnd?: () => void;
 }
 
 const ACTIVE_STATUSES = new Set(["planning", "researching", "executing", "finalizing", "merging", "merging-fix"]);
@@ -60,6 +61,7 @@ export function GraphTaskNode({
   onClick,
   onNodePositionChange,
   onNodeDragStateChange,
+  onNodeDragEnd,
   ...taskCardProps
 }: GraphTaskNodeProps) {
   const { task, globalPaused, taskStuckTimeoutMs, lastFetchTimeMs } = taskCardProps;
@@ -88,6 +90,7 @@ export function GraphTaskNode({
     scale,
     onPositionChange: onNodePositionChange,
     onDragStateChange: onNodeDragStateChange,
+    onDragEnd: onNodeDragEnd,
   });
 
   return (
