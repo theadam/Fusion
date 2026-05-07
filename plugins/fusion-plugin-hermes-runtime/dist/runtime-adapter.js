@@ -6,6 +6,23 @@
  * session pass `--resume <id>` to continue the conversation.
  */
 import { invokeHermesCli, resolveCliSettings } from "./cli-spawn.js";
+function buildRuntimeContextSection(options) {
+    const skillNames = Array.isArray(options.skills) ? options.skills.filter((value) => typeof value === "string" && value.trim().length > 0) : [];
+    const skillSelection = options.skillSelection;
+    const selectionSkillNames = Array.isArray(skillSelection?.requestedSkillNames)
+        ? skillSelection.requestedSkillNames.filter((value) => typeof value === "string" && value.trim().length > 0)
+        : [];
+    const mergedSkills = skillNames.length > 0 ? skillNames : selectionSkillNames;
+    const lines = [
+        "Fusion runtime context:",
+        `- Tool mode: ${options.tools ?? "coding"}`,
+    ];
+    if (mergedSkills.length > 0) {
+        lines.push(`- Requested skills: ${mergedSkills.join(", ")}`);
+    }
+    lines.push("- If fn_* tools are available in your runtime, use them directly for coordination/memory/task actions.");
+    return lines.join("\n");
+}
 export class HermesRuntimeAdapter {
     id = "hermes";
     name = "Hermes Runtime";
@@ -28,13 +45,18 @@ export class HermesRuntimeAdapter {
                 onToolStart: options.onToolStart,
                 onToolEnd: options.onToolEnd,
             },
+            runtimeContext: options.runtimeContext,
+            fusedSystemPrompt: [options.systemPrompt.trim(), buildRuntimeContextSection(options).trim()].filter((part) => part.length > 0).join("\n\n"),
             dispose: () => undefined,
         };
         return { session, sessionFile: undefined };
     }
     async promptWithFallback(session, prompt, _options) {
         const resumeId = session.sessionId || undefined;
-        const result = await invokeHermesCli(prompt, this.settings, resumeId);
+        const promptWithContext = resumeId
+            ? prompt
+            : `${session.fusedSystemPrompt}\n\nUser request:\n${prompt}`;
+        const result = await invokeHermesCli(promptWithContext, this.settings, resumeId);
         session.sessionId = result.sessionId;
         session.lastModelDescription = this.describeFromSettings();
         if (result.body) {

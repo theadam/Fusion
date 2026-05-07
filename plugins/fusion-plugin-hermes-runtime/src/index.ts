@@ -9,6 +9,7 @@
 
 import { definePlugin } from "@fusion/plugin-sdk";
 import { resolveCliSettings } from "./cli-spawn.js";
+import { installFusionSkillIntoHermesHome } from "./fusion-skill-install.js";
 import { HermesRuntimeAdapter } from "./runtime-adapter.js";
 import type {
   FusionPlugin,
@@ -51,8 +52,20 @@ const plugin: FusionPlugin = definePlugin({
   hooks: {
     onLoad: (ctx) => {
       const settings = resolveCliSettings(ctx.settings);
+      const skillInstall = installFusionSkillIntoHermesHome({ profile: settings.profile });
+
+      if (skillInstall.outcome === "warning") {
+        ctx.logger.warn(
+          `Hermes Runtime Plugin: Fusion skill auto-install warning: ${skillInstall.reason ?? "unknown"}`,
+        );
+      } else if (skillInstall.outcome === "skipped") {
+        ctx.logger.warn(
+          `Hermes Runtime Plugin: Fusion skill auto-install skipped: ${skillInstall.reason ?? "unknown"}`,
+        );
+      }
+
       ctx.logger.info(
-        `Hermes Runtime Plugin loaded — binary=${settings.binaryPath} model=${settings.model ?? "(default)"}`,
+        `Hermes Runtime Plugin loaded — binary=${settings.binaryPath} model=${settings.model ?? "(default)"} fusionSkill=${skillInstall.outcome}`,
       );
       ctx.emitEvent("hermes-runtime:loaded", {
         runtimeId: HERMES_RUNTIME_ID,
@@ -82,6 +95,11 @@ export {
   parseHermesOutput,
   listHermesProfiles,
 } from "./cli-spawn.js";
+export {
+  installFusionSkillIntoHermesHome,
+  resolveBundledFusionSkillSource,
+  resolveHermesHome,
+} from "./fusion-skill-install.js";
 export type { HermesCliSettings, HermesCliResult, HermesProfileSummary } from "./cli-spawn.js";
 
 // Probe re-export for the dashboard's runtime-provider-probes façade.

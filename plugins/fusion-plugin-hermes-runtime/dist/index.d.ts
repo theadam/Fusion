@@ -15,6 +15,7 @@ export default plugin;
 export { hermesRuntimeMetadata, hermesRuntimeFactory, HERMES_RUNTIME_ID };
 export { HermesRuntimeAdapter } from "./runtime-adapter.js";
 export { resolveCliSettings, invokeHermesCli, buildHermesArgs, parseHermesOutput, listHermesProfiles, } from "./cli-spawn.js";
+export { installFusionSkillIntoHermesHome, resolveBundledFusionSkillSource, resolveHermesHome, } from "./fusion-skill-install.js";
 export type { HermesCliSettings, HermesCliResult, HermesProfileSummary } from "./cli-spawn.js";
 export { probeHermesBinary } from "./probe.js";
 export type { HermesBinaryStatus } from "./probe.js";

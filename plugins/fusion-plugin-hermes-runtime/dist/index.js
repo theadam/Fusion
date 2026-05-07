@@ -8,6 +8,7 @@
  */
 import { definePlugin } from "@fusion/plugin-sdk";
 import { resolveCliSettings } from "./cli-spawn.js";
+import { installFusionSkillIntoHermesHome } from "./fusion-skill-install.js";
 import { HermesRuntimeAdapter } from "./runtime-adapter.js";
 // ── Hermes Runtime Metadata ───────────────────────────────────────────────────
 const HERMES_RUNTIME_ID = "hermes";
@@ -37,7 +38,14 @@ const plugin = definePlugin({
     hooks: {
         onLoad: (ctx) => {
             const settings = resolveCliSettings(ctx.settings);
-            ctx.logger.info(`Hermes Runtime Plugin loaded — binary=${settings.binaryPath} model=${settings.model ?? "(default)"}`);
+            const skillInstall = installFusionSkillIntoHermesHome({ profile: settings.profile });
+            if (skillInstall.outcome === "warning") {
+                ctx.logger.warn(`Hermes Runtime Plugin: Fusion skill auto-install warning: ${skillInstall.reason ?? "unknown"}`);
+            }
+            else if (skillInstall.outcome === "skipped") {
+                ctx.logger.warn(`Hermes Runtime Plugin: Fusion skill auto-install skipped: ${skillInstall.reason ?? "unknown"}`);
+            }
+            ctx.logger.info(`Hermes Runtime Plugin loaded — binary=${settings.binaryPath} model=${settings.model ?? "(default)"} fusionSkill=${skillInstall.outcome}`);
             ctx.emitEvent("hermes-runtime:loaded", {
                 runtimeId: HERMES_RUNTIME_ID,
                 version: HERMES_RUNTIME_VERSION,
@@ -57,6 +65,7 @@ export default plugin;
 export { hermesRuntimeMetadata, hermesRuntimeFactory, HERMES_RUNTIME_ID };
 export { HermesRuntimeAdapter } from "./runtime-adapter.js";
 export { resolveCliSettings, invokeHermesCli, buildHermesArgs, parseHermesOutput, listHermesProfiles, } from "./cli-spawn.js";
+export { installFusionSkillIntoHermesHome, resolveBundledFusionSkillSource, resolveHermesHome, } from "./fusion-skill-install.js";
 // Probe re-export for the dashboard's runtime-provider-probes façade.
 export { probeHermesBinary } from "./probe.js";
 //# sourceMappingURL=index.js.map

@@ -248,6 +248,19 @@ Expected outcome: Plugin is removed by ID.
 3. Confirm plugin source path and dependencies are valid.
 4. If needed, uninstall and reinstall the plugin.
 
+### Hermes runtime plugin loaded but Fusion skill is missing in Hermes
+
+The Hermes runtime plugin auto-installs the bundled Fusion skill on plugin load.
+
+1. Confirm the plugin is `started`.
+2. Check the Hermes skill path:
+   - default profile: `${HERMES_HOME:-~/.hermes}/skills/fusion`
+   - named profile: `${HERMES_HOME:-~/.hermes}/profiles/<profile>/skills/fusion`
+3. Review plugin warnings; startup continues even if skill mirroring fails.
+4. Reload/disable+enable the plugin to re-run the self-healing install attempt.
+
+Manual post-install skill setup is typically not required for Hermes runtime anymore.
+
 ### Plugin installed but features are not visible
 
 1. Confirm plugin state is `started`.

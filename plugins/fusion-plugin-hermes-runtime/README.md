@@ -29,6 +29,21 @@ After install, run `hermes login` (or `hermes auth`) to configure a provider. Th
 
 Verify with `hermes --version`.
 
+## Fusion skill auto-install
+
+When the Hermes runtime plugin loads, it attempts to auto-install/mirror Fusion's bundled `fusion` skill into the active Hermes profile skill directory:
+
+- default profile: `${HERMES_HOME:-~/.hermes}/skills/fusion`
+- named profile: `${HERMES_HOME:-~/.hermes}/profiles/<profile>/skills/fusion`
+
+The installer is idempotent and self-healing:
+
+- leaves an already-correct install untouched
+- replaces prior Fusion installs it can positively identify
+- avoids replacing unrelated user-managed directories
+
+If the bundled Fusion skill source is missing or filesystem writes fail, the plugin logs a warning and still starts the Hermes runtime.
+
 ## Limitations
 
 Because we drive the CLI's `chat -q` mode:
