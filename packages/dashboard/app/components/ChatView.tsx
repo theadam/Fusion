@@ -1994,14 +1994,19 @@ export function ChatView({ projectId, addToast }: ChatViewProps) {
                 <button
                   type="button"
                   className="chat-input-send"
-                  // Mobile send pattern: previous code intercepted pointerdown
-                  // and touchstart to call handleSend directly, which silently
-                  // dropped quick taps on iOS (only long press worked). The
-                  // canonical iOS pattern is preventDefault on mousedown to
-                  // stop focus from leaving the textarea (keyboard stays up,
-                  // viewport doesn't reflow), then run the action on click.
-                  // This works for quick taps because click fires reliably
-                  // from the synthesized touch sequence.
+                  // Keep keyboard up when sending. preventDefault fires on
+                  // pointerdown for touch pointers (BEFORE iOS blurs the
+                  // textarea — the synthesized mousedown is too late on
+                  // iOS), and on mousedown for desktop. Crucially we do NOT
+                  // call preventDefault on touchstart and we do NOT run the
+                  // action here — both of those broke quick taps. Click
+                  // still fires from the iOS touch sequence and runs the
+                  // action reliably.
+                  onPointerDown={(event) => {
+                    if (event.pointerType && event.pointerType !== "mouse") {
+                      event.preventDefault();
+                    }
+                  }}
                   onMouseDown={(event) => {
                     event.preventDefault();
                   }}

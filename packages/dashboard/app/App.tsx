@@ -1336,6 +1336,7 @@ function AppInner() {
           lastFetchTimeMs={lastFetchTimeMs}
           currentProjectPath={currentProject.path}
           onOpenProjectDirectory={handleOpenProjectDirectory}
+          keyboardOpen={mobileKeyboardOpen}
         />
       )}
       <MobileNavBar

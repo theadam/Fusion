@@ -25,6 +25,10 @@ interface ExecutorStatusBarProps {
   currentProjectPath?: string;
   /** Opens the workspace-aware file browser to the project workspace. */
   onOpenProjectDirectory?: () => void;
+  /** When true on mobile, hide the bar so it doesn't slide over messages
+   *  during visualViewport pans (position:fixed is anchored to layout
+   *  viewport, which iOS leaves below the keyboard). */
+  keyboardOpen?: boolean;
 }
 
 /**
@@ -74,7 +78,8 @@ function getStateDisplay(state: ExecutorState): { label: string; color: string; 
  * - Executor state badge (idle/running/paused)
  * - Last activity timestamp
  */
-export function ExecutorStatusBar({ tasks, projectId, taskStuckTimeoutMs, backgroundSessions, backgroundGenerating, backgroundNeedsInput, onOpenBackgroundSession, onDismissBackgroundSession, lastFetchTimeMs, currentProjectPath, onOpenProjectDirectory }: ExecutorStatusBarProps) {
+export function ExecutorStatusBar({ tasks, projectId, taskStuckTimeoutMs, backgroundSessions, backgroundGenerating, backgroundNeedsInput, onOpenBackgroundSession, onDismissBackgroundSession, lastFetchTimeMs, currentProjectPath, onOpenProjectDirectory, keyboardOpen }: ExecutorStatusBarProps) {
+  if (keyboardOpen) return null;
   const { stats, loading, error } = useExecutorStats(tasks, projectId, taskStuckTimeoutMs, lastFetchTimeMs);
   const [isProjectPathVisible, setIsProjectPathVisible] = useState(false);
 
