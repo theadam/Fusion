@@ -171,6 +171,78 @@ describe("TaskCard", () => {
     expect(screen.queryByText("paused by agent")).toBeNull();
   });
 
+  it("renders branch and base branch metadata when both are present", () => {
+    const { container } = render(
+      <TaskCard
+        task={makeTask({ branch: "feature/fn-3423-card-branches", baseBranch: "main" })}
+        onOpenDetail={noop}
+        addToast={noop}
+      />,
+    );
+
+    const branchRow = container.querySelector(".card-branch-row");
+    expect(branchRow).not.toBeNull();
+    expect(screen.getByText("Branch")).toBeDefined();
+    expect(screen.getByText("feature/fn-3423-card-branches")).toBeDefined();
+    expect(screen.getByText("Base")).toBeDefined();
+    expect(screen.getByText("main")).toBeDefined();
+  });
+
+  it("renders only working branch metadata when baseBranch is absent", () => {
+    render(
+      <TaskCard
+        task={makeTask({ branch: "feature/working-only", baseBranch: undefined })}
+        onOpenDetail={noop}
+        addToast={noop}
+      />,
+    );
+
+    expect(screen.getByText("Branch")).toBeDefined();
+    expect(screen.getByText("feature/working-only")).toBeDefined();
+    expect(screen.queryByText("Base")).toBeNull();
+  });
+
+  it("renders only base branch metadata when branch is absent", () => {
+    render(
+      <TaskCard
+        task={makeTask({ branch: undefined, baseBranch: "release/2026-05" })}
+        onOpenDetail={noop}
+        addToast={noop}
+      />,
+    );
+
+    expect(screen.getByText("Base")).toBeDefined();
+    expect(screen.getByText("release/2026-05")).toBeDefined();
+    expect(screen.queryByText("Branch")).toBeNull();
+  });
+
+  it("does not render branch metadata row when both branch fields are absent", () => {
+    const { container } = render(
+      <TaskCard
+        task={makeTask({ branch: undefined, baseBranch: undefined })}
+        onOpenDetail={noop}
+        addToast={noop}
+      />,
+    );
+
+    expect(container.querySelector(".card-branch-row")).toBeNull();
+  });
+
+  it("keeps long branch names readable via text and title semantics", () => {
+    const longBranch = "feature/fn-3423-display-very-long-working-branch-name-for-card-metadata";
+    const { container } = render(
+      <TaskCard
+        task={makeTask({ branch: longBranch, baseBranch: "main" })}
+        onOpenDetail={noop}
+        addToast={noop}
+      />,
+    );
+
+    const branchChip = container.querySelector(".card-branch-chip");
+    expect(branchChip?.getAttribute("title")).toBe(longBranch);
+    expect(screen.getByText(longBranch)).toBeDefined();
+  });
+
   it("renders fast-mode indicator only when executionMode is fast", () => {
     const { container, rerender } = render(
       <TaskCard task={makeTask({ executionMode: "fast" })} onOpenDetail={noop} addToast={noop} />,
@@ -1328,6 +1400,18 @@ describe("TaskCard memo comparator provenance behavior", () => {
   it("returns false when sourceAgentId changes", () => {
     const previousTask = makeTask({ sourceType: "automation", sourceAgentId: "agent-a" });
     const nextTask = makeTask({ sourceType: "automation", sourceAgentId: "agent-b" });
+
+    expect(
+      __test_areTaskCardPropsEqual(
+        { task: previousTask, onOpenDetail: noop, addToast: noop } as any,
+        { task: nextTask, onOpenDetail: noop, addToast: noop } as any,
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false when branch changes", () => {
+    const previousTask = makeTask({ branch: "feature/old", baseBranch: "main" });
+    const nextTask = makeTask({ branch: "feature/new", baseBranch: "main" });
 
     expect(
       __test_areTaskCardPropsEqual(

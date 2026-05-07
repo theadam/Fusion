@@ -79,6 +79,43 @@
   word-break: break-word;
 }
 
+.card-branch-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+}
+
+.card-branch-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--space-xs);
+  padding: calc(var(--space-xs) / 4) calc(var(--space-sm) - (var(--space-xs) / 4));
+  border-radius: var(--radius-pill);
+  border: var(--btn-border-width) solid color-mix(in srgb, var(--text-muted) 35%, transparent);
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+  color: var(--text-muted);
+  font-size: 0.625rem;
+}
+
+.card-branch-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.card-branch-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
 /* z-index + position: relative so .card-dep-badge tooltip renders above .card-title */
 .card-meta {
   display: flex;
@@ -1078,6 +1115,18 @@
   .card-agent-created-badge {
     font-size: 0.5625rem;
     padding: calc(var(--space-xs) / 4) var(--space-sm);
+  }
+
+  .card-branch-row {
+    gap: calc(var(--space-xs) / 2);
+  }
+
+  .card-branch-chip {
+    max-width: 100%;
+  }
+
+  .card-branch-value {
+    max-width: 18ch;
   }
 
   /* Card: wrap dependency badges */

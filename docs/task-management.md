@@ -110,6 +110,8 @@ fn task unarchive FN-001
 
 ### Branch metadata semantics
 
+Task cards on the board surface branch metadata when present so users can scan both the working branch and merge target without opening task details.
+
 Task branch fields are intentionally distinct:
 
 - `task.branch` — the actual working branch used for the task worktree (for example `fusion/fn-1234` or a conflict-suffixed variant).

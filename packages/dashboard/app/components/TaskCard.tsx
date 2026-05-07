@@ -407,6 +407,7 @@ function areTaskCardPropsEqual(previous: TaskCardProps, next: TaskCardProps): bo
     previousTask.size === nextTask.size &&
     previousTask.blockedBy === nextTask.blockedBy &&
     previousTask.worktree === nextTask.worktree &&
+    previousTask.branch === nextTask.branch &&
     previousTask.baseBranch === nextTask.baseBranch &&
     previousTask.breakIntoSubtasks === nextTask.breakIntoSubtasks &&
     previousTask.currentStep === nextTask.currentStep &&
@@ -709,6 +710,7 @@ function TaskCardComponent({
   const canEdit = EDITABLE_COLUMNS.has(task.column) && !isAgentActive && !isPaused && !queued && onUpdateTask;
   const hasGitHubBadge = Boolean(task.prInfo || task.issueInfo);
   const isGitHubImportedTask = task.sourceType === "github_import";
+  const hasBranchMetadata = Boolean(task.branch || task.baseBranch);
   const sourceIssueUrl = getIssueUrlFromMetadata(task.sourceMetadata);
   const isAgentCreated = isAgentCreatedTask(task);
   const sourceAgentName = getSourceAgentName(task);
@@ -1494,6 +1496,22 @@ function TaskCardComponent({
       <div className="card-title" title={task.title || task.description || undefined}>
         {truncate(task.title, MAX_TITLE_LENGTH) || truncate(task.description, MAX_TITLE_LENGTH) || task.id}
       </div>
+      {hasBranchMetadata && (
+        <div className="card-branch-row" aria-label="Branch metadata">
+          {task.branch && (
+            <span className="card-branch-chip" title={task.branch}>
+              <span className="card-branch-label">Branch</span>
+              <span className="card-branch-value">{task.branch}</span>
+            </span>
+          )}
+          {task.baseBranch && (
+            <span className="card-branch-chip" title={task.baseBranch}>
+              <span className="card-branch-label">Base</span>
+              <span className="card-branch-value">{task.baseBranch}</span>
+            </span>
+          )}
+        </div>
+      )}
       {showProgressSection && (() => {
         const progressPercent = (unifiedProgress.completed / unifiedProgress.total) * 100;
         return (

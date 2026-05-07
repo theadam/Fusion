@@ -772,7 +772,6 @@ export function ChatView({ projectId, addToast }: ChatViewProps) {
   const hideSkillMenuTimeoutRef = useRef<number | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const preserveComposerFocusRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingAttachmentsRef = useRef<PendingAttachment[]>([]);
   const mentionCursorPosRef = useRef(0);
@@ -1068,25 +1067,6 @@ export function ChatView({ projectId, addToast }: ChatViewProps) {
     sendMessage,
   ]);
 
-  const focusComposerInput = useCallback(() => {
-    if (typeof window === "undefined") return;
-    if (window.innerWidth > 768) return;
-    const input = inputRef.current;
-    if (!input || input.disabled) return;
-
-    const previousScrollX = window.scrollX;
-    const previousScrollY = window.scrollY;
-    input.focus({ preventScroll: true });
-
-    // iOS can still jump layout viewport on focus changes even with preventScroll.
-    // Restore scroll position on the next frame to keep the thread anchored.
-    window.requestAnimationFrame(() => {
-      if (window.scrollX !== previousScrollX || window.scrollY !== previousScrollY) {
-        window.scrollTo(previousScrollX, previousScrollY);
-      }
-    });
-  }, []);
-
   const handleSkillSelect = useCallback(
     (skill: DiscoveredSkill) => {
       setMessageInput((currentInput) => {
@@ -1332,13 +1312,6 @@ export function ChatView({ projectId, addToast }: ChatViewProps) {
   );
 
   const handleInputBlur = useCallback(() => {
-    if (preserveComposerFocusRef.current) {
-      window.requestAnimationFrame(() => {
-        focusComposerInput();
-      });
-      return;
-    }
-
     if (hideSkillMenuTimeoutRef.current !== null) {
       window.clearTimeout(hideSkillMenuTimeoutRef.current);
     }
@@ -1352,7 +1325,7 @@ export function ChatView({ projectId, addToast }: ChatViewProps) {
       fileMention.dismissMention();
       hideSkillMenuTimeoutRef.current = null;
     }, 120);
-  }, [fileMention, focusComposerInput]);
+  }, [fileMention]);
 
   const handleInputFocus = useCallback(() => {
     if (hideSkillMenuTimeoutRef.current !== null) {
