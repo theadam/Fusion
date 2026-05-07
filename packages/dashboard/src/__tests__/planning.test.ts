@@ -361,6 +361,18 @@ describe("planning module", () => {
       expect(session?.agent).toBeDefined();
     });
 
+    it("passes builtin web tool allowlist when creating non-streaming planning agent", async () => {
+      const createFnAgentSpy = vi.fn(async () => createMockAgent(STANDARD_QUESTION_RESPONSES));
+      __setCreateFnAgent(createFnAgentSpy as any);
+
+      await createSession(getUniqueIp(), initialPlan, undefined, TEST_ROOT_DIR);
+
+      expect(createFnAgentSpy).toHaveBeenCalledWith(expect.objectContaining({
+        tools: "readonly",
+        builtinToolsAllowlist: ["WebSearch", "WebFetch"],
+      }));
+    });
+
     it("cleans up session on agent failure", async () => {
       __setCreateFnAgent(async () => {
         throw new Error("Agent creation failed");
@@ -447,6 +459,7 @@ describe("planning module", () => {
       const callArg = createFnAgentSpy.mock.calls[0]?.[0] as Record<string, unknown>;
       expect(callArg?.defaultProvider).toBeUndefined();
       expect(callArg?.defaultModelId).toBeUndefined();
+      expect(callArg?.builtinToolsAllowlist).toEqual(["WebSearch", "WebFetch"]);
     });
 
     it("uses custom prompt from promptOverrides when provided", async () => {

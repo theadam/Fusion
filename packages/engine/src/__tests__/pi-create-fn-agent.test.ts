@@ -694,6 +694,40 @@ describe("createFnAgent", () => {
     expect(createSessionArgs.customTools.map((tool) => tool.name)).toContain("fn_list_agents");
   });
 
+  it("does not allow extra builtin tools in readonly sessions by default", async () => {
+    const { createFnAgent } = await import("../pi.js");
+
+    await createFnAgent({
+      cwd: "/tmp",
+      systemPrompt: "test",
+      tools: "readonly",
+    });
+
+    const createSessionArgs = createAgentSessionMock.mock.calls[0]?.[0] as { tools?: string[] };
+    expect(createSessionArgs.tools).toBeUndefined();
+  });
+
+  it("passes opt-in builtin web tool allowlist to createAgentSession", async () => {
+    const { createFnAgent } = await import("../pi.js");
+
+    await createFnAgent({
+      cwd: "/tmp",
+      systemPrompt: "test",
+      tools: "readonly",
+      builtinToolsAllowlist: ["WebSearch", "WebFetch"],
+    });
+
+    const createSessionArgs = createAgentSessionMock.mock.calls[0]?.[0] as { tools?: string[] };
+    expect(createSessionArgs.tools).toEqual(expect.arrayContaining([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "WebSearch",
+      "WebFetch",
+    ]));
+  });
+
   it("keeps caller customTools in coding sessions", async () => {
     createCodingToolsMock.mockReturnValueOnce([{ name: "read" }, { name: "write" }] as any);
     const customTool = {

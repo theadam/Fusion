@@ -35,6 +35,8 @@ import * as engineModule from "@fusion/engine";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AgentResult = any;
+
+const PLANNING_BUILTIN_WEB_TOOLS = ["WebSearch", "WebFetch"] as const;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let createFnAgent: any = engineCreateFnAgent;
 
@@ -785,6 +787,7 @@ export async function createSession(
     cwd: rootDir,
     systemPrompt,
     tools: "readonly",
+    builtinToolsAllowlist: [...PLANNING_BUILTIN_WEB_TOOLS],
     onThinking: () => {
       // Non-streaming path ignores thinking output
     },
@@ -1296,6 +1299,7 @@ async function createPlanningAgent(
     cwd: rootDir,
     systemPrompt,
     tools: "readonly",
+    builtinToolsAllowlist: [...PLANNING_BUILTIN_WEB_TOOLS],
     ...(modelProvider && modelId
       ? {
           defaultProvider: modelProvider,

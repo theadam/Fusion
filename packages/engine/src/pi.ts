@@ -429,11 +429,15 @@ export interface FallbackModelUsedPayload {
   timestamp?: string;
 }
 
+export type BuiltinWebToolName = "WebSearch" | "WebFetch";
+
 export interface AgentOptions {
   cwd: string;
   systemPrompt: string;
   tools?: "coding" | "readonly";
   customTools?: ToolDefinition[];
+  /** Optional allowlist of builtin runtime web tools to keep enabled. */
+  builtinToolsAllowlist?: BuiltinWebToolName[];
   onText?: (delta: string) => void;
   onThinking?: (delta: string) => void;
   onToolStart?: (name: string, args?: Record<string, unknown>) => void;
@@ -1243,7 +1247,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
     if (options.beforeSpawnSession) {
       await options.beforeSpawnSession();
     }
-    return createAgentSession({
+    const createSessionOptions: Parameters<typeof createAgentSession>[0] = {
       cwd: options.cwd,
       authStorage,
       modelRegistry,
@@ -1253,7 +1257,18 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
       sessionManager,
       settingsManager,
       ...(modelOverride ? { model: modelOverride } : {}),
-    });
+    };
+
+    if (options.builtinToolsAllowlist && options.builtinToolsAllowlist.length > 0) {
+      createSessionOptions.tools = [
+        ...new Set([
+          ...customToolList.map((tool) => tool.name),
+          ...options.builtinToolsAllowlist,
+        ]),
+      ];
+    }
+
+    return createAgentSession(createSessionOptions);
   };
 
   const emitFallbackUsed = async (triggerPoint: "session-creation" | "prompt-time"): Promise<void> => {

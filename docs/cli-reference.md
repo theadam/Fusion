@@ -400,6 +400,8 @@ For AI-guided task specification, see [Planning mode](#planning-mode).
 
 Use planning mode to turn a rough idea into a triage task through an interactive AI-guided Q&A flow.
 
+When supported by your configured runtime/model provider, planning sessions can also use builtin `WebSearch` and `WebFetch` tools for live context gathering.
+
 ```bash
 fn task plan [description]
 ```

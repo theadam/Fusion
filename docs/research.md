@@ -274,6 +274,8 @@ When `available` is `false`, the response includes `reason` and `setupInstructio
 
 AI agents (triage, executor, and custom roles) can use research tools during planning and execution sessions. These tools are registered in the pi extension (`packages/cli/src/extension.ts`).
 
+Additionally, planning-mode sessions and the LLM synthesis agent can opt into runtime builtin `WebSearch`/`WebFetch` tools (when the selected runtime supports them), complementing configured research providers.
+
 ### Available tools
 
 | Tool | Description |
