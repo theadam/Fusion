@@ -13,9 +13,10 @@
 import "./PluginManager.css";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Package, Settings, Trash2, Plus, X, RefreshCw, RotateCcw, ExternalLink } from "lucide-react";
-import { fetchPlugins, installPlugin, enablePlugin, disablePlugin, uninstallPlugin, fetchPluginSettings, updatePluginSettings, reloadPlugin } from "../api";
+import { fetchPlugins, installPlugin, enablePlugin, disablePlugin, uninstallPlugin, fetchPluginSettings, updatePluginSettings, reloadPlugin, fetchPluginSetupStatus, installPluginSetup } from "../api";
 import { DirectoryPicker } from "./DirectoryPicker";
 import type { PluginInstallation, PluginState, PluginSettingSchema } from "@fusion/core";
+import type { PluginSetupStatusResponse } from "../api";
 import type { ToastType } from "../hooks/useToast";
 import { useConfirm } from "../hooks/useConfirm";
 import { subscribeSse } from "../sse-bus";
@@ -46,7 +47,15 @@ interface BundledPlugin {
   experimental?: boolean;
 }
 
+interface BuiltinPlugin {
+  id: string;
+  name: string;
+  path: string;
+  hasSetup: boolean;
+}
+
 export const DEFAULT_AGENT_BROWSER_PLUGIN_ID = "fusion-plugin-agent-browser-runtime";
+export const BUILTIN_AGENT_BROWSER_PLUGIN_ID = "fusion-plugin-agent-browser";
 
 export const AGENT_BROWSER_SETTINGS_SCHEMA: Record<string, PluginSettingSchema> = {
   enabled: { type: "boolean", label: "Enable Agent Browser", group: "General" },
@@ -79,6 +88,7 @@ export const AGENT_BROWSER_SETTINGS_SCHEMA: Record<string, PluginSettingSchema> 
   },
 };
 
+// Legacy bundled/runtime plugin catalog surfaced as quick-install cards.
 const BUNDLED_PLUGINS: BundledPlugin[] = [
   {
     id: DEFAULT_AGENT_BROWSER_PLUGIN_ID,
@@ -113,6 +123,16 @@ const BUNDLED_PLUGINS: BundledPlugin[] = [
     id: "fusion-plugin-dependency-graph",
     name: "Dependency Graph",
     path: "./plugins/fusion-plugin-dependency-graph",
+  },
+];
+
+// Rich installable-plugin catalog used for setup-aware built-in rows.
+const BUILTIN_PLUGINS: BuiltinPlugin[] = [
+  {
+    id: BUILTIN_AGENT_BROWSER_PLUGIN_ID,
+    name: "Agent Browser",
+    path: "./plugins/fusion-plugin-agent-browser",
+    hasSetup: true,
   },
 ];
 
@@ -154,6 +174,9 @@ export function PluginManager({ addToast, projectId }: PluginManagerProps) {
   const [pluginSettings, setPluginSettings] = useState<Record<string, unknown>>({});
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [installingBundledPluginId, setInstallingBundledPluginId] = useState<string | null>(null);
+  const [builtinSetupStatusById, setBuiltinSetupStatusById] = useState<Record<string, PluginSetupStatusResponse>>({});
+  const [loadingBuiltinSetupId, setLoadingBuiltinSetupId] = useState<string | null>(null);
+  const [installingBuiltinSetupId, setInstallingBuiltinSetupId] = useState<string | null>(null);
   const { confirm } = useConfirm();
 
   const loadPlugins = useCallback(async () => {
@@ -171,6 +194,40 @@ export function PluginManager({ addToast, projectId }: PluginManagerProps) {
   useEffect(() => {
     loadPlugins();
   }, [loadPlugins]);
+
+  useEffect(() => {
+    const installedBuiltinsWithSetup = BUILTIN_PLUGINS.filter((builtinPlugin) => (
+      builtinPlugin.hasSetup && plugins.some((plugin) => plugin.id === builtinPlugin.id)
+    ));
+
+    if (installedBuiltinsWithSetup.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void Promise.all(installedBuiltinsWithSetup.map(async (builtinPlugin) => {
+      try {
+        const response = await fetchPluginSetupStatus(builtinPlugin.id, projectId);
+        if (cancelled) {
+          return;
+        }
+        setBuiltinSetupStatusById((prev) => ({ ...prev, [builtinPlugin.id]: response }));
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setBuiltinSetupStatusById((prev) => ({
+          ...prev,
+          [builtinPlugin.id]: { hasSetup: true, status: "error", error: "Failed to check setup status" },
+        }));
+      }
+    }));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [plugins, projectId]);
 
   // SSE live updates for plugin lifecycle events
   const pluginsRef = useRef<PluginInstallation[]>([]);
@@ -282,6 +339,39 @@ export function PluginManager({ addToast, projectId }: PluginManagerProps) {
       addToast(`Failed to install ${plugin.name}: ${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       setInstallingBundledPluginId(null);
+    }
+  };
+
+  const handleInstallBuiltinPlugin = async (plugin: BuiltinPlugin) => {
+    try {
+      setInstallingBundledPluginId(plugin.id);
+      await installPlugin({ path: plugin.path }, projectId);
+      addToast(`${plugin.name} installed successfully`, "success");
+      await loadPlugins();
+    } catch (err) {
+      addToast(`Failed to install ${plugin.name}: ${err instanceof Error ? err.message : String(err)}`, "error");
+    } finally {
+      setInstallingBundledPluginId(null);
+    }
+  };
+
+  const handleInstallBuiltinSetup = async (plugin: BuiltinPlugin) => {
+    try {
+      setInstallingBuiltinSetupId(plugin.id);
+      const result = await installPluginSetup(plugin.id, projectId);
+      if (!result.success) {
+        addToast(`Failed to install ${plugin.name} setup: ${result.error ?? "unknown error"}`, "error");
+        return;
+      }
+      addToast(`${plugin.name} setup installed`, "success");
+      setLoadingBuiltinSetupId(plugin.id);
+      const setupStatus = await fetchPluginSetupStatus(plugin.id, projectId);
+      setBuiltinSetupStatusById((prev) => ({ ...prev, [plugin.id]: setupStatus }));
+    } catch (err) {
+      addToast(`Failed to install ${plugin.name} setup: ${err instanceof Error ? err.message : String(err)}`, "error");
+    } finally {
+      setInstallingBuiltinSetupId(null);
+      setLoadingBuiltinSetupId(null);
     }
   };
 
@@ -601,6 +691,80 @@ export function PluginManager({ addToast, projectId }: PluginManagerProps) {
   // access enable/disable, settings, and uninstall controls.
   const installedPlugins = plugins;
 
+  const renderBuiltinPluginSection = () => (
+    <section className="plugin-builtins-section" aria-label="Built-in Plugins">
+      <div className="plugin-builtins-header">
+        <h4 className="plugin-builtins-heading">Built-in Plugins</h4>
+        <p className="plugin-builtins-description">
+          Install and configure shipped plugins with optional setup workflows.
+        </p>
+      </div>
+      <div className="plugin-builtins-list" aria-label="Built-in plugin recommendations">
+        {BUILTIN_PLUGINS.map((builtinPlugin) => {
+          const installedPlugin = installedPluginsById.get(builtinPlugin.id);
+          const isInstalled = Boolean(installedPlugin);
+          const setupStatus = builtinSetupStatusById[builtinPlugin.id];
+          const requiresSetupAction =
+            isInstalled
+            && builtinPlugin.hasSetup
+            && setupStatus?.hasSetup
+            && (setupStatus.status === "not-installed" || setupStatus.status === "error");
+          const setupReady = isInstalled && setupStatus?.hasSetup && setupStatus.status === "installed";
+          const setupCheckInFlight = loadingBuiltinSetupId === builtinPlugin.id;
+
+          return (
+            <div key={builtinPlugin.id} className="plugin-builtins-item">
+              <div className="plugin-builtins-meta">
+                <span className="plugin-builtins-name">{builtinPlugin.name}</span>
+                <span className={`plugin-builtins-status ${isInstalled ? "plugin-builtins-status--installed" : "plugin-builtins-status--available"}`}>
+                  {isInstalled ? "Installed" : "Not installed"}
+                </span>
+                {requiresSetupAction && (
+                  <span className="plugin-builtins-setup-status plugin-builtins-setup-status--warning">Setup required</span>
+                )}
+                {setupReady && (
+                  <span className="plugin-builtins-setup-status plugin-builtins-setup-status--ready">Setup ready</span>
+                )}
+                {setupCheckInFlight && (
+                  <span className="plugin-builtins-setup-status plugin-builtins-setup-status--pending">Checking setup...</span>
+                )}
+              </div>
+              <button
+                className={`btn ${(isInstalled && !requiresSetupAction) ? "btn-secondary" : "btn-primary"} btn-sm`}
+                onClick={() => {
+                  if (!isInstalled) {
+                    void handleInstallBuiltinPlugin(builtinPlugin);
+                    return;
+                  }
+
+                  if (requiresSetupAction) {
+                    void handleInstallBuiltinSetup(builtinPlugin);
+                    return;
+                  }
+
+                  if (installedPlugin) {
+                    void handleSelectPlugin(installedPlugin);
+                  }
+                }}
+                disabled={
+                  installingBundledPluginId === builtinPlugin.id
+                  || installingBuiltinSetupId === builtinPlugin.id
+                  || setupCheckInFlight
+                }
+              >
+                {!isInstalled
+                  ? (installingBundledPluginId === builtinPlugin.id ? "Installing..." : `Install ${builtinPlugin.name}`)
+                  : requiresSetupAction
+                    ? (installingBuiltinSetupId === builtinPlugin.id ? "Setting up..." : "Install Setup")
+                    : "Manage"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+
   const renderBundledRuntimeSection = () => (
     <section className="plugin-bundled-runtime-section" aria-label="Bundled Plugins">
       <div className="plugin-bundled-runtime-header">
@@ -754,6 +918,7 @@ export function PluginManager({ addToast, projectId }: PluginManagerProps) {
               ))}
             </div>
           )}
+          {renderBuiltinPluginSection()}
           {renderBundledRuntimeSection()}
         </>
       )}

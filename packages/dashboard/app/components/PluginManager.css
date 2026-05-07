@@ -257,6 +257,108 @@
   color: var(--text-muted);
 }
 
+.plugin-builtins-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.plugin-builtins-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.plugin-builtins-heading {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.plugin-builtins-description {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.plugin-builtins-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.plugin-builtins-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: var(--btn-border-width) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.plugin-builtins-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  row-gap: var(--space-xs);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.plugin-builtins-name {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.plugin-builtins-status {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--btn-border-width) var(--space-xs);
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.plugin-builtins-status--installed {
+  background: var(--status-done-bg);
+  color: var(--done);
+}
+
+.plugin-builtins-status--available {
+  background: var(--status-todo-bg);
+  color: var(--todo);
+}
+
+.plugin-builtins-setup-status {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--btn-border-width) var(--space-xs);
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.plugin-builtins-setup-status--warning {
+  background: var(--status-in-review-bg);
+  color: var(--color-warning);
+}
+
+.plugin-builtins-setup-status--ready {
+  background: var(--status-done-bg);
+  color: var(--color-success);
+}
+
+.plugin-builtins-setup-status--pending {
+  background: var(--status-todo-bg);
+  color: var(--color-warning);
+}
+
 .plugin-bundled-runtime-list {
   width: 100%;
   display: flex;
@@ -337,6 +439,7 @@
 }
 
 @media (min-width: 769px) {
+  .plugin-builtins-status,
   .plugin-bundled-runtime-status {
     margin-left: auto;
   }
@@ -422,11 +525,13 @@
     min-height: 36px;
   }
 
+  .plugin-builtins-item,
   .plugin-bundled-runtime-item {
     flex-direction: column;
     align-items: stretch;
   }
 
+  .plugin-builtins-item .btn,
   .plugin-bundled-runtime-item .btn {
     min-height: 36px;
   }

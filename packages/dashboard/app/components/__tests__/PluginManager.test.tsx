@@ -91,6 +91,8 @@ vi.mock("../../api", () => ({
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   })),
+  fetchPluginSetupStatus: vi.fn(() => Promise.resolve({ hasSetup: false })),
+  installPluginSetup: vi.fn(() => Promise.resolve({ success: true })),
   browseDirectory: vi.fn(() => Promise.resolve({
     currentPath: "/home",
     parentPath: "/",
@@ -107,6 +109,7 @@ vi.mock("../../hooks/useConfirm", () => ({
 // Import after vi.mock so the mock is in place
 import {
   AGENT_BROWSER_SETTINGS_SCHEMA,
+  BUILTIN_AGENT_BROWSER_PLUGIN_ID,
   DEFAULT_AGENT_BROWSER_PLUGIN_ID,
   PluginManager,
   STATE_COLORS,
@@ -119,6 +122,8 @@ import {
   uninstallPlugin,
   fetchPluginSettings,
   updatePluginSettings,
+  fetchPluginSetupStatus,
+  installPluginSetup,
 } from "../../api";
 
 const addToast = vi.fn();
@@ -177,6 +182,8 @@ beforeEach(() => {
   vi.mocked(uninstallPlugin).mockResolvedValue();
   vi.mocked(fetchPluginSettings).mockResolvedValue({ apiKey: "test-key" });
   vi.mocked(updatePluginSettings).mockResolvedValue({ apiKey: "updated-key" });
+  vi.mocked(fetchPluginSetupStatus).mockResolvedValue({ hasSetup: false });
+  vi.mocked(installPluginSetup).mockResolvedValue({ success: true });
   
   // EventSource mock setup
   const eventSourceInstance = {
@@ -255,6 +262,70 @@ describe("PluginManager", () => {
     expect(screen.getByText("OpenClaw Runtime")).toBeTruthy();
     expect(screen.getByText("Droid Runtime")).toBeTruthy();
     expect(screen.getByText("Dependency Graph")).toBeTruthy();
+  });
+
+  it("renders built-in agent browser entry with install action when uninstalled", async () => {
+    render(<PluginManager addToast={addToast} />);
+
+    await waitFor(() => {
+      expect(fetchPlugins).toHaveBeenCalled();
+    });
+
+    const builtInCard = screen.getAllByText("Agent Browser").find((node) => node.closest(".plugin-builtins-item"))?.closest(".plugin-builtins-item");
+    expect(builtInCard).toBeTruthy();
+    expect(within(builtInCard as HTMLElement).getByRole("button", { name: /Install Agent Browser/i })).toBeTruthy();
+  });
+
+  it("shows setup-required action for installed built-in agent browser", async () => {
+    vi.mocked(fetchPlugins).mockResolvedValueOnce([
+      {
+        ...mockPlugins[0],
+        id: BUILTIN_AGENT_BROWSER_PLUGIN_ID,
+        name: "Agent Browser",
+      },
+    ]);
+    vi.mocked(fetchPluginSetupStatus).mockResolvedValueOnce({ hasSetup: true, status: "not-installed" });
+
+    render(<PluginManager addToast={addToast} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Setup required")).toBeTruthy();
+    });
+
+    const builtInCard = screen.getAllByText("Agent Browser").find((node) => node.closest(".plugin-builtins-item"))?.closest(".plugin-builtins-item");
+    expect(builtInCard).toBeTruthy();
+    const setupButton = within(builtInCard as HTMLElement).getByRole("button", { name: /Install Setup/i });
+    await userEvent.click(setupButton);
+
+    await waitFor(() => {
+      expect(installPluginSetup).toHaveBeenCalledWith(BUILTIN_AGENT_BROWSER_PLUGIN_ID, undefined);
+    });
+  });
+
+  it("shows manage action when installed built-in agent browser setup is ready", async () => {
+    vi.mocked(fetchPlugins).mockResolvedValueOnce([
+      {
+        ...mockPlugins[0],
+        id: BUILTIN_AGENT_BROWSER_PLUGIN_ID,
+        name: "Agent Browser",
+      },
+    ]);
+    vi.mocked(fetchPluginSetupStatus).mockResolvedValueOnce({ hasSetup: true, status: "installed", version: "1.0.0" });
+
+    render(<PluginManager addToast={addToast} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Setup ready")).toBeTruthy();
+    });
+
+    const builtInCard = screen.getAllByText("Agent Browser").find((node) => node.closest(".plugin-builtins-item"))?.closest(".plugin-builtins-item");
+    expect(builtInCard).toBeTruthy();
+    const manageButton = within(builtInCard as HTMLElement).getByRole("button", { name: /^Manage$/i });
+    await userEvent.click(manageButton);
+
+    await waitFor(() => {
+      expect(fetchPluginSettings).toHaveBeenCalledWith(BUILTIN_AGENT_BROWSER_PLUGIN_ID, undefined);
+    });
   });
 
   it("installs bundled plugins from the bundled plugin section", async () => {
