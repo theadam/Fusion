@@ -496,8 +496,34 @@ export function defaultTestWorkerBudget(env = process.env) {
 
 const { totalWorkers, concurrency } = defaultTestWorkerBudget(process.env);
 
+const isolatedHomesToCleanup = new Set();
+
+function cleanupIsolatedHomes() {
+  for (const homePath of isolatedHomesToCleanup) {
+    try {
+      rmSync(homePath, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup only.
+    }
+    isolatedHomesToCleanup.delete(homePath);
+  }
+}
+
+process.on("exit", cleanupIsolatedHomes);
+process.on("SIGINT", () => {
+  cleanupIsolatedHomes();
+  process.exit(130);
+});
+process.on("SIGTERM", () => {
+  cleanupIsolatedHomes();
+  process.exit(143);
+});
+
 export function createIsolatedHomeEnv(env = process.env) {
-  const isolatedHome = realpathSync(mkdtempSync(path.join(tmpdir(), "fusion-test-home-root-")));
+  const rawIsolatedHome = mkdtempSync(path.join(tmpdir(), "fusion-test-home-root-"));
+  const isolatedHome = realpathSync(rawIsolatedHome);
+  isolatedHomesToCleanup.add(isolatedHome);
+
   const nextEnv = {
     ...env,
     HOME: isolatedHome,
@@ -622,6 +648,7 @@ export function main(argv = process.argv.slice(2)) {
   recordCachePass(activePackages, packageDirByName, { noCache });
   } finally {
     rmSync(isolatedHome, { recursive: true, force: true });
+    isolatedHomesToCleanup.delete(isolatedHome);
   }
 }
 
