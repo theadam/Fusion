@@ -10,6 +10,7 @@ export default defineConfig({
       "@fusion/core": fileURLToPath(new URL("../../packages/core/src/index.ts", import.meta.url)),
       "@fusion/plugin-sdk": fileURLToPath(new URL("../../packages/plugin-sdk/src/index.ts", import.meta.url)),
       "@fusion/dashboard": fileURLToPath(new URL("../../packages/dashboard", import.meta.url)),
+      "lucide-react": fileURLToPath(new URL("../../packages/dashboard/node_modules/lucide-react", import.meta.url)),
     },
   },
   test: {

@@ -56,6 +56,7 @@ Behavior:
 - Renders directed bezier dependency edges (dependent → dependency) with arrowheads
 - Supports pan/zoom and fit-to-graph controls via floating toolbar actions
 - Dependency graph nodes reuse the same `TaskCard` UI as board/list views, so status badges, progress/steps, mission badges, retry/archive controls, and active-task glow stay visually consistent
+- Active graph nodes also add a dedicated top status indicator bar and current-step row highlighting so in-progress execution state stays visible even when zoomed out
 
 ## Chat View
 

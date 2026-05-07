@@ -1,3 +1,9 @@
+declare module "@fusion/dashboard/app/utils/taskStuck" {
+  import type { Task } from "@fusion/core";
+
+  export function isTaskStuck(task: Task, taskStuckTimeoutMs?: number, lastFetchTimeMs?: number): boolean;
+}
+
 declare module "@fusion/dashboard/app/components/TaskCard" {
   import type { Column, Task, TaskDetail } from "@fusion/core";
   import type { ReactElement } from "react";
