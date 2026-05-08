@@ -3916,19 +3916,18 @@ export class TaskExecutor {
           };
         }
 
-        const stepIndex = step - 1;
-        if (!Number.isInteger(stepIndex) || stepIndex < 0) {
+        if (!Number.isInteger(step) || step < 0) {
           return {
             content: [{
               type: "text" as const,
-              text: `Invalid step number: ${step}. Steps are 1-indexed.`,
+              text: `Invalid step number: ${step}. Steps are 0-indexed.`,
             }],
             details: {},
           };
         }
 
-        const task = await store.updateStep(taskId, stepIndex, status as StepStatus);
-        const stepInfo = task.steps[stepIndex];
+        const task = await store.updateStep(taskId, step, status as StepStatus);
+        const stepInfo = task.steps[step];
         const persistedStatus = stepInfo.status;
         const progress = task.steps.filter((s) => s.status === "done").length;
 
@@ -4198,6 +4197,29 @@ export class TaskExecutor {
         reviewerLog.log(`${taskId}: ${reviewType} review for Step ${step} (${step_name})`);
         await store.logEntry(taskId, `${reviewType} review requested for Step ${step} (${step_name})`);
 
+        // Auto-advance the step to "in-progress" if the agent is requesting a
+        // review without having flipped it themselves. Some runtimes (notably
+        // permanent-agent CEO sessions on the openai-codex transport) skip the
+        // bookkeeping fn_task_update call entirely. Tying step state to the
+        // review tool keeps the dashboard accurate without a second tool call.
+        // Skip the auto-update if the step is already done/skipped (don't
+        // regress completed work) — updateStep guards against that anyway.
+        try {
+          const currentTask = await store.getTask(taskId);
+          if (
+            Number.isInteger(step) &&
+            step >= 0 &&
+            step < currentTask.steps.length &&
+            currentTask.steps[step].status === "pending"
+          ) {
+            await store.updateStep(taskId, step, "in-progress");
+          }
+        } catch (autoUpdateErr) {
+          reviewerLog.warn(
+            `${taskId}: failed to auto-advance Step ${step} to in-progress on review entry: ${autoUpdateErr instanceof Error ? autoUpdateErr.message : String(autoUpdateErr)}`,
+          );
+        }
+
         try {
           const settings = await store.getSettings();
           // Run the reviewer via semaphore.runNested so its slot accounting
@@ -4268,6 +4290,31 @@ export class TaskExecutor {
               codeReviewVerdicts.set(step, "REVISE");
             } else if (result.verdict === "APPROVE") {
               codeReviewVerdicts.delete(step);
+              // Auto-mark the step as done once its code review passes. The
+              // recoverApprovedStepsOnResume path (executor.ts) already does
+              // this on engine restart from log scan; doing it inline avoids
+              // depending on the agent's follow-up fn_task_update call, which
+              // permanent-agent runtimes routinely skip.
+              try {
+                const currentTask = await store.getTask(taskId);
+                if (
+                  Number.isInteger(step) &&
+                  step >= 0 &&
+                  step < currentTask.steps.length &&
+                  currentTask.steps[step].status !== "done" &&
+                  currentTask.steps[step].status !== "skipped"
+                ) {
+                  await store.updateStep(taskId, step, "done");
+                  await store.logEntry(
+                    taskId,
+                    `Step ${step} (${step_name}) auto-marked done by code review APPROVE`,
+                  );
+                }
+              } catch (autoDoneErr) {
+                reviewerLog.warn(
+                  `${taskId}: failed to auto-mark Step ${step} done after APPROVE: ${autoDoneErr instanceof Error ? autoDoneErr.message : String(autoDoneErr)}`,
+                );
+              }
             }
           }
 
