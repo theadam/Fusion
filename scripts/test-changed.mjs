@@ -698,12 +698,22 @@ const isolatedHomesToCleanup = new Set();
 // unconditionally, even if cleanup's rm silently failed.
 const knownIsolatedHomeBasenames = new Set();
 
-function cleanupIsolatedHomePath(homePath) {
-  try {
-    rmSync(homePath, { recursive: true, force: true });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[test-changed] failed to remove isolated HOME ${homePath}: ${message}`);
+function cleanupIsolatedHomePath(homePath, retries = 3, delayMs = 200) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      rmSync(homePath, { recursive: true, force: true });
+      break;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt < retries) {
+        // EBUSY on macOS: SQLite WAL still mmap'd or orphan child holding fd.
+        // Spin briefly to give the OS time to release the handle.
+        const end = Date.now() + delayMs;
+        while (Date.now() < end) { /* busy-wait */ }
+      } else {
+        console.warn(`[test-changed] failed to remove isolated HOME ${homePath} after ${retries + 1} attempts: ${message}`);
+      }
+    }
   }
   isolatedHomesToCleanup.delete(homePath);
 }
