@@ -277,6 +277,7 @@ Intentional exclusions from shared snapshots:
 ### Task Evaluations
 
 - `EvalStore` (`eval-store.ts`, `eval-types.ts`) persists eval runs and task-level eval outcomes.
+- Dashboard/API surface is implemented under `/api/evals` (`packages/dashboard/src/evals-routes.ts`) with `EvalsView.tsx` in the app.
 - Backed by `eval_runs`, `eval_task_results`, and `eval_run_events`.
 - Data model stores structured scoring/evidence/signal payloads plus durable `taskSnapshot` metadata so historical eval results remain readable even if the live task row later changes or is removed.
 - Lifecycle safeguards mirror other core stores: deterministic list ordering, transition guards, terminal immutability for run rows, and active-run conflict protection for scheduled/task-completion triggers.
@@ -642,6 +643,7 @@ Key server capabilities:
   - Note: this **hyphenated `dev-server-*` family is the canonical runtime owner** today; see `docs/dev-server-module-boundary-audit.md` for the FN-2212 boundary/consolidation audit covering parallel `devserver-*` modules.
 - Plugin management routes (`plugin-routes.ts`)
 - Insights routes (`insights-routes.ts`)
+- Evals routes (`evals-routes.ts`) — `/api/evals` read surface for eval result listing/filtering, drill-down detail, and eval run metadata
 - Research routes (`research-routes.ts`) — `/api/research` surface for runs, details, cancel/retry, exports, create-task, and attach-task actions; supports graceful degradation envelopes via availability payloads when capabilities are unavailable
 - Roadmap routes (`roadmap-routes.ts`)
 - Project-scoped store reuse via `project-store-resolver.ts`

@@ -289,6 +289,10 @@ vi.mock("../../components/ResearchView", () => ({
   ),
 }));
 
+vi.mock("../../components/EvalsView", () => ({
+  EvalsView: () => <div data-testid="evals-view">Evals</div>,
+}));
+
 vi.mock("../../components/TodoView", () => ({
   TodoView: ({ onPlanningMode }: { onPlanningMode?: (initialPlan: string) => void }) => (
     <div className="todo-view" data-testid="todo-view">
@@ -1561,6 +1565,26 @@ describe("App view switching", () => {
     await waitFor(() => {
       expect(screen.getByTestId("research-view")).toBeInTheDocument();
       expect(localStorage.getItem(taskViewStorageKey())).toBe("research");
+    });
+
+    localStorage.removeItem("kb-dashboard-view-mode");
+    localStorage.removeItem(taskViewStorageKey());
+  });
+
+  it("opens evals view from overflow and persists view selection", async () => {
+    localStorage.setItem("kb-dashboard-view-mode", "project");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-toggle-overflow-trigger")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("view-toggle-overflow-trigger"));
+    fireEvent.click(await screen.findByTestId("view-overflow-evals"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("evals-view")).toBeInTheDocument();
+      expect(localStorage.getItem(taskViewStorageKey())).toBe("evals");
     });
 
     localStorage.removeItem("kb-dashboard-view-mode");

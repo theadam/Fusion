@@ -226,6 +226,7 @@ export function MobileNavBar({
 
   const isMoreActive =
     view === "documents"
+    || view === "evals"
     || view === "research"
     || view === "insights"
     || view === "memory"
@@ -600,6 +601,15 @@ export function MobileNavBar({
             >
               <FileText />
               <span>Documents</span>
+            </button>
+            <button
+              type="button"
+              className="mobile-more-item"
+              data-testid="mobile-more-item-evals"
+              onClick={() => handleMoreAction(() => onChangeView("evals"))}
+            >
+              <Target />
+              <span>Evals</span>
             </button>
 
             {showSkillsInMore && (

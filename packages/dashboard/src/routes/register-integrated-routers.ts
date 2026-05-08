@@ -4,6 +4,7 @@ import type { ServerOptions } from "../server.js";
 import { createMissionRouter } from "../mission-routes.js";
 import { createRoadmapRouter } from "../roadmap-routes.js";
 import { createInsightsRouter } from "../insights-routes.js";
+import { createEvalsRouter } from "../evals-routes.js";
 import { createResearchRouter } from "../research-routes.js";
 import { createTodoRouter } from "../todo-routes.js";
 import { createDevServerRouter } from "../dev-server-routes.js";
@@ -34,6 +35,7 @@ export function registerIntegratedRouters({
 
   router.use("/roadmaps", createRoadmapRouter(store));
   router.use("/insights", createInsightsRouter(store));
+  router.use("/evals", createEvalsRouter(store));
   router.use("/research", createResearchRouter(store));
   router.use("/todos", createTodoRouter(store));
 }

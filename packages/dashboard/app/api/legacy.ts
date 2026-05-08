@@ -68,6 +68,8 @@ import type {
   InsightStatus,
   InsightRun,
   InsightRunTrigger,
+  EvalRun,
+  EvalTaskResult,
   ResearchRunStatus,
   TaskPriority,
   TaskSourceIssue,
@@ -8497,6 +8499,35 @@ export function getInsightCreateTaskData(
 }
 
 // ── Research API ────────────────────────────────────────────────────────────
+
+export interface EvalsListOptions {
+  q?: string;
+  runId?: string;
+  scoreMin?: number;
+  scoreMax?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export function listEvals(options: EvalsListOptions = {}, projectId?: string): Promise<{ results: EvalTaskResult[]; count: number }> {
+  const params = new URLSearchParams();
+  if (options.q) params.set("q", options.q);
+  if (options.runId) params.set("runId", options.runId);
+  if (options.scoreMin !== undefined) params.set("scoreMin", String(options.scoreMin));
+  if (options.scoreMax !== undefined) params.set("scoreMax", String(options.scoreMax));
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.offset !== undefined) params.set("offset", String(options.offset));
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return api<{ results: EvalTaskResult[]; count: number }>(withProjectId(`/evals${suffix}`, projectId));
+}
+
+export function getEval(id: string, projectId?: string): Promise<{ result: EvalTaskResult }> {
+  return api<{ result: EvalTaskResult }>(withProjectId(`/evals/${encodeURIComponent(id)}`, projectId));
+}
+
+export function listEvalRuns(projectId?: string): Promise<{ runs: EvalRun[] }> {
+  return api<{ runs: EvalRun[] }>(withProjectId("/evals/runs", projectId));
+}
 
 export interface CreateResearchRunInput {
   query: string;

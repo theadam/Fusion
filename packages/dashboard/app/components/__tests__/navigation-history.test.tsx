@@ -182,6 +182,10 @@ vi.mock("../../components/ResearchView", () => ({
   ResearchView: () => <div data-testid="research-view">Research</div>,
 }));
 
+vi.mock("../../components/EvalsView", () => ({
+  EvalsView: () => <div data-testid="evals-view">Evals</div>,
+}));
+
 vi.mock("../../components/TodoView", () => ({
   TodoView: () => <div data-testid="todo-view">Todo</div>,
 }));
@@ -430,6 +434,24 @@ describe("Navigation history integration", () => {
     });
 
     // pushState should have been called for the view change
+    expect((window.history.pushState as any).mock.calls.length).toBeGreaterThan(pushCallsBefore);
+  });
+
+  it("pushes history entry when switching to evals from overflow", async () => {
+    localStorage.setItem("kb-dashboard-view-mode", "project");
+    const taskViewStorageKey = scopedKey("kb-dashboard-task-view", DEFAULT_PROJECT_ID);
+    localStorage.setItem(taskViewStorageKey, "board");
+
+    await renderAppAndWait();
+
+    const pushCallsBefore = (window.history.pushState as any).mock.calls.length;
+    fireEvent.click(screen.getByTestId("view-toggle-overflow-trigger"));
+    fireEvent.click(screen.getByTestId("view-overflow-evals"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("evals-view")).toBeTruthy();
+    });
+
     expect((window.history.pushState as any).mock.calls.length).toBeGreaterThan(pushCallsBefore);
   });
 

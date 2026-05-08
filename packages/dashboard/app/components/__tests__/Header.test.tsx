@@ -248,6 +248,17 @@ describe("Header", () => {
       expect(onChangeView).toHaveBeenCalledWith("research");
       expect(screen.queryByTestId("view-overflow-research")).toBeNull();
     });
+
+    it("routes to evals from the desktop view overflow", () => {
+      const onChangeView = vi.fn();
+      renderHeader({ onChangeView });
+
+      fireEvent.click(screen.getByTestId("view-toggle-overflow-trigger"));
+      fireEvent.click(screen.getByTestId("view-overflow-evals"));
+
+      expect(onChangeView).toHaveBeenCalledWith("evals");
+      expect(screen.queryByTestId("view-overflow-evals")).toBeNull();
+    });
   });
 
   describe("terminal split button", () => {

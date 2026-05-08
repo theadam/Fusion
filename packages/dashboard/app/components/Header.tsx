@@ -364,6 +364,7 @@ export function Header({
 
   const hasViewOverflowItems = useMemo(() => {
     return !!(
+      onChangeView ||
       experimentalFeatures?.researchView ||
       todosEnabled ||
       experimentalFeatures?.insights ||
@@ -374,7 +375,7 @@ export function Header({
       !hideFullNav ||
       pluginDashboardViews.some((entry) => entry.view.placement !== "primary")
     );
-  }, [experimentalFeatures, todosEnabled, showSkillsTab, hideFullNav, pluginDashboardViews, hasRoadmapsPluginView]);
+  }, [onChangeView, experimentalFeatures, todosEnabled, showSkillsTab, hideFullNav, pluginDashboardViews, hasRoadmapsPluginView]);
 
   const getEffectiveViewport = useCallback(() => {
     const vv = window.visualViewport;
@@ -1191,6 +1192,18 @@ export function Header({
                     role="menu"
                     aria-label="More views"
                   >
+                    <button
+                      className={`view-toggle-overflow-item${view === "evals" ? " active" : ""}`}
+                      onClick={() => {
+                        onChangeView("evals");
+                        setIsViewOverflowOpen(false);
+                      }}
+                      role="menuitem"
+                      data-testid="view-overflow-evals"
+                    >
+                      <Target size={14} />
+                      <span>Evals</span>
+                    </button>
                     {experimentalFeatures?.researchView && (
                       <button
                         className={`view-toggle-overflow-item${view === "research" ? " active" : ""}`}

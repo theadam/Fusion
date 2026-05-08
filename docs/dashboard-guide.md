@@ -245,6 +245,20 @@ Features:
 
 For mission planning context and handoff structure, see [Missions guide](./missions.md).
 
+## Evals View
+
+Evals view is a dedicated dashboard surface for reviewing scheduled task-evaluation output.
+
+Navigation:
+- Desktop: **Header → More views → Evals**
+- Mobile: **More** sheet → **Evals**
+
+Features:
+- Filter eval results by free-text query, run, and score range
+- Review list summaries (task, eval/run identity, timestamps, and score)
+- Drill into full rationale, category scores, evidence references, and suggested follow-ups
+- Open Scheduled Evals settings directly when setup is disabled
+
 ## Insights View
 
 Insights view surfaces categorized project insights and lets you turn findings into work.

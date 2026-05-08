@@ -5,7 +5,7 @@ import { getScopedItem, setScopedItem } from "../utils/projectStorage";
 import { isPluginViewId } from "../plugins/pluginViewRegistry";
 
 export type ViewMode = "overview" | "project";
-export type BuiltInTaskView = "board" | "list" | "graph" | "agents" | "missions" | "chat" | "documents" | "research" | "roadmaps" | "skills" | "mailbox" | "insights" | "memory" | "devserver" | "dev-server";
+export type BuiltInTaskView = "board" | "list" | "graph" | "agents" | "missions" | "chat" | "documents" | "research" | "evals" | "roadmaps" | "skills" | "mailbox" | "insights" | "memory" | "devserver" | "dev-server";
 export type PluginTaskView = `plugin:${string}:${string}`;
 export type TaskView = BuiltInTaskView | PluginTaskView;
 
@@ -18,6 +18,7 @@ const BUILT_IN_TASK_VIEWS: readonly BuiltInTaskView[] = [
   "chat",
   "documents",
   "research",
+  "evals",
   "roadmaps",
   "skills",
   "mailbox",

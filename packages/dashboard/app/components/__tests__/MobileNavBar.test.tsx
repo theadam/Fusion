@@ -475,6 +475,17 @@ describe("MobileNavBar", () => {
     expect(props.onChangeView).toHaveBeenCalledWith("research");
   });
 
+  it("evals item in more sheet calls onChangeView with 'evals'", () => {
+    const props = createDefaultProps();
+    const { container } = render(<MobileNavBar {...props} />);
+
+    fireEvent.click(screen.getByTestId("mobile-nav-tab-more"));
+    fireEvent.click(screen.getByTestId("mobile-more-item-evals"));
+
+    expect(container.querySelector(".mobile-more-sheet")).toBeNull();
+    expect(props.onChangeView).toHaveBeenCalledWith("evals");
+  });
+
   it("activity log item in more sheet calls onOpenActivityLog", () => {
     const props = createDefaultProps();
     const { container } = render(<MobileNavBar {...props} />);

@@ -80,6 +80,7 @@ const AgentsView = lazy(() => import("./components/AgentsView").then((m) => ({ d
 const DocumentsView = lazy(() => import("./components/DocumentsView").then((m) => ({ default: m.DocumentsView })));
 const InsightsView = lazy(() => import("./components/InsightsView").then((m) => ({ default: m.InsightsView })));
 const ResearchView = lazy(() => import("./components/ResearchView").then((m) => ({ default: m.ResearchView })));
+const EvalsView = lazy(() => import("./components/EvalsView").then((m) => ({ default: m.EvalsView })));
 const NodesView = lazy(() => import("./components/NodesView").then((m) => ({ default: m.NodesView })));
 const ChatView = lazy(() => import("./components/ChatView").then((m) => ({ default: m.ChatView })));
 const RoadmapsView = lazy(() => import("./components/RoadmapsView").then((m) => ({ default: m.RoadmapsView })));
@@ -104,6 +105,7 @@ function prefetchLazyViews() {
     void import("./components/DocumentsView");
     void import("./components/InsightsView");
     void import("./components/ResearchView");
+    void import("./components/EvalsView");
     void import("./components/NodesView");
     void import("./components/ChatView");
     void import("./components/RoadmapsView");
@@ -1176,6 +1178,24 @@ function AppInner() {
       );
     }
 
+    if (taskView === "evals") {
+      return (
+        <PageErrorBoundary>
+          <Suspense fallback={null}>
+            <EvalsView
+              projectId={currentProject?.id}
+              onOpenSettings={(section) => modalManager.openSettings(section as SectionId)}
+              onOpenTaskDetail={(taskId) => {
+                void fetchTaskDetail(taskId, currentProject?.id)
+                  .then((task) => openDetailTask(task as TaskDetail))
+                  .catch((error) => addToast(error instanceof Error ? error.message : "Failed to open task detail", "error"));
+              }}
+            />
+          </Suspense>
+        </PageErrorBoundary>
+      );
+    }
+
     if (taskView === "memory") {
       if (!settingsLoaded || !memoryEnabled) {
         return null;
@@ -1464,7 +1484,7 @@ function AppInner() {
         }}
         pluginDashboardViews={pluginDashboardViews}
       />
-      {viewMode === "project" && currentProject && taskView !== "chat" && taskView !== "mailbox" && taskView !== "insights" && taskView !== "devserver" && taskView !== "dev-server" && taskView !== "graph" && !isPluginViewId(taskView) && (
+      {viewMode === "project" && currentProject && taskView !== "chat" && taskView !== "mailbox" && taskView !== "insights" && taskView !== "evals" && taskView !== "devserver" && taskView !== "dev-server" && taskView !== "graph" && !isPluginViewId(taskView) && (
         <QuickChatFAB
           projectId={currentProject.id}
           addToast={addToast}
