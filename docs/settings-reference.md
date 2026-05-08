@@ -96,7 +96,7 @@ Defaults from `DEFAULT_GLOBAL_SETTINGS`; key scope from `GLOBAL_SETTINGS_KEYS`.
 | `researchGlobalMaxSearchResults` | `number` | `undefined` | Maximum search results per provider query. |
 | `researchGlobalFetchTimeoutMs` | `number` | `30000` | Timeout for individual HTTP fetches in milliseconds. |
 | `researchGlobalUserAgent` | `string` | `"FusionResearchBot/1.0"` | User-Agent header for HTTP requests made by research providers. |
-| `experimentalFeatures` | `Record<string, boolean>` | `{}` | Global-scoped experimental feature flags. Includes `experimentalFeatures.researchView`, which gates all Research surfaces and tools (dashboard view, engine task-session tools, and CLI `fn_research_*` tools). |
+| `experimentalFeatures` | `Record<string, boolean>` | `{}` | Global-scoped experimental feature flags. Includes `experimentalFeatures.researchView`, which gates all Research surfaces and tools (dashboard view, engine task-session tools, and CLI `fn_research_*` tools), and `experimentalFeatures.evalsView`, which gates Evals surfaces (dashboard view, Settings → Scheduled Evals, and scheduled-eval cron execution). |
 | `remoteAccess` | `RemoteAccessSettings` | `{ activeProvider: null, providers: {...}, tokenStrategy: {...}, lifecycle: {...} }` | Global-scoped remote access provider + token strategy configuration used by Remote Access routes and tunnel lifecycle controls. |
 
 ### Notification providers (pluggable)
@@ -898,6 +898,7 @@ Common built-in dashboard flags include:
 - `devServerView`
 - `todoView` (enables dashboard Todo View; see [Todo View](./todo-view.md))
 - `researchView`
+- `evalsView` (gates Evals dashboard view, Settings → Scheduled Evals section, and scheduled-eval cron execution)
 - `remoteAccess`
 - `agentOnboarding` (enables the **AI Interview** option inside the New Agent dialog)
 

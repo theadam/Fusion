@@ -1,0 +1,165 @@
+import { definePlugin } from "@fusion/plugin-sdk";
+import type { FusionPlugin, PluginContext, PluginRouteDefinition, PluginRouteResponse } from "@fusion/plugin-sdk";
+import { requestReview, startWork } from "./agent-actions.js";
+import { FusionApiClient } from "./fusion-api-client.js";
+import { createNotifier } from "./notifier.js";
+import { runQuickCapture } from "./quick-capture.js";
+import {
+  agentActionsEnabled,
+  getFusionBaseUrl,
+  getFusionToken,
+  getNotifyColumns,
+  getPollingIntervalMs,
+  getQuickCaptureColumn,
+  settingsSchema,
+} from "./settings.js";
+import { StubGlassesTransport } from "./transport.js";
+
+type PluginDb = {
+  exec(sql: string): void;
+  prepare(sql: string): {
+    all(...args: unknown[]): unknown;
+    run(...args: unknown[]): unknown;
+  };
+};
+
+type PluginInstance = {
+  client: FusionApiClient;
+  transport: StubGlassesTransport;
+  notifier: ReturnType<typeof createNotifier>;
+};
+
+const instances = new Map<string, PluginInstance>();
+
+function getDbFromTaskStore(ctx: PluginContext): PluginDb {
+  const pluginStore = ctx.taskStore.getPluginStore();
+  const db = (pluginStore as unknown as { db?: PluginDb }).db;
+  if (!db) throw new Error("Plugin database unavailable");
+  return db;
+}
+
+function getInstanceOrResponse(ctx: PluginContext): { instance?: PluginInstance; error?: PluginRouteResponse } {
+  const instance = instances.get(ctx.pluginId);
+  if (!instance) return { error: { status: 503, body: { error: "Plugin instance not initialized" } } };
+  return { instance };
+}
+
+const routes: PluginRouteDefinition[] = [
+  {
+    method: "GET",
+    path: "/status",
+    handler: async (_req, ctx) => {
+      const { instance, error } = getInstanceOrResponse(ctx);
+      if (!instance) return error as PluginRouteResponse;
+      return {
+        status: 200,
+        body: {
+          connected: instance.transport.connected,
+          lastPollTime: instance.notifier.getLastPollTime() ?? null,
+          notifyOnColumns: getNotifyColumns(ctx.settings),
+        },
+      };
+    },
+  },
+  {
+    method: "POST",
+    path: "/quick-capture",
+    handler: async (req, ctx) => {
+      const { instance, error } = getInstanceOrResponse(ctx);
+      if (!instance) return error as PluginRouteResponse;
+      const text = typeof (req as { body?: { text?: unknown } }).body?.text === "string" ? (req as { body?: { text?: string } }).body?.text ?? "" : "";
+      if (!text.trim()) return { status: 400, body: { error: "text is required" } };
+      const result = await runQuickCapture(text, { apiClient: instance.client, defaultColumn: getQuickCaptureColumn(ctx.settings) });
+      return { status: 200, body: result };
+    },
+  },
+  {
+    method: "POST",
+    path: "/actions/start-work",
+    handler: async (req, ctx) => {
+      const { instance, error } = getInstanceOrResponse(ctx);
+      if (!instance) return error as PluginRouteResponse;
+      const taskId = typeof (req as { body?: { taskId?: unknown } }).body?.taskId === "string" ? (req as { body?: { taskId?: string } }).body?.taskId : undefined;
+      if (!taskId) return { status: 400, body: { error: "taskId is required" } };
+      const card = await startWork(taskId, { apiClient: instance.client, enableAgentActions: agentActionsEnabled(ctx.settings), logger: ctx.logger });
+      return { status: 200, body: { ok: true, card: card ?? null } };
+    },
+  },
+  {
+    method: "POST",
+    path: "/actions/request-review",
+    handler: async (req, ctx) => {
+      const { instance, error } = getInstanceOrResponse(ctx);
+      if (!instance) return error as PluginRouteResponse;
+      const taskId = typeof (req as { body?: { taskId?: unknown } }).body?.taskId === "string" ? (req as { body?: { taskId?: string } }).body?.taskId : undefined;
+      if (!taskId) return { status: 400, body: { error: "taskId is required" } };
+      const card = await requestReview(taskId, { apiClient: instance.client, enableAgentActions: agentActionsEnabled(ctx.settings), logger: ctx.logger });
+      return { status: 200, body: { ok: true, card: card ?? null } };
+    },
+  },
+  {
+    method: "POST",
+    path: "/reconnect",
+    handler: async (_req, ctx) => {
+      const { instance, error } = getInstanceOrResponse(ctx);
+      if (!instance) return error as PluginRouteResponse;
+      await instance.transport.disconnect();
+      await instance.transport.connect();
+      return { status: 200, body: { ok: true } };
+    },
+  },
+];
+
+const plugin: FusionPlugin = definePlugin({
+  manifest: {
+    id: "fusion-plugin-even-realities-glasses",
+    name: "Even Realities Glasses",
+    version: "0.1.0",
+    description: "Task-focused card bridge between Fusion and Even Realities glasses.",
+    author: "Fusion Team",
+    fusionVersion: ">=0.1.0",
+    settingsSchema,
+  },
+  state: "installed",
+  routes,
+  hooks: {
+    onSchemaInit: (db) => {
+      (db as PluginDb).exec(`
+        CREATE TABLE IF NOT EXISTS even_realities_seen_tasks (
+          taskId TEXT PRIMARY KEY,
+          lastColumn TEXT NOT NULL,
+          updatedAt TEXT NOT NULL
+        )
+      `);
+    },
+    onLoad: async (ctx) => {
+      const token = getFusionToken(ctx.settings);
+      if (!token) {
+        ctx.logger.warn("fusionApiToken is missing; even-realities plugin not initialized");
+        return;
+      }
+      const db = getDbFromTaskStore(ctx);
+      const client = new FusionApiClient(getFusionBaseUrl(ctx.settings), token);
+      const transport = new StubGlassesTransport();
+      await transport.connect();
+      const notifier = createNotifier({
+        apiClient: client,
+        transport,
+        getSettings: () => ({ pollingIntervalMs: getPollingIntervalMs(ctx.settings), notifyColumns: getNotifyColumns(ctx.settings) }),
+        logger: ctx.logger,
+        db,
+      });
+      notifier.start();
+      instances.set(ctx.pluginId, { client, transport, notifier });
+    },
+    onUnload: async () => {
+      for (const [pluginId, instance] of instances.entries()) {
+        instance.notifier.stop();
+        await instance.transport.disconnect();
+        instances.delete(pluginId);
+      }
+    },
+  },
+});
+
+export default plugin;

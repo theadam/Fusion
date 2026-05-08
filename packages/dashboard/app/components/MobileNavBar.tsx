@@ -82,6 +82,7 @@ export interface MobileNavBarProps {
     devServerView?: boolean;
     todoView?: boolean;
     researchView?: boolean;
+    evalsView?: boolean;
     nodesView?: boolean;
   };
   onOpenNodes?: () => void;
@@ -228,7 +229,7 @@ export function MobileNavBar({
 
   const isMoreActive =
     view === "documents"
-    || view === "evals"
+    || (Boolean(experimentalFeatures?.evalsView) && view === "evals")
     || view === "research"
     || view === "insights"
     || view === "memory"
@@ -610,15 +611,17 @@ export function MobileNavBar({
               <FileText />
               <span>Documents</span>
             </button>
-            <button
-              type="button"
-              className="mobile-more-item"
-              data-testid="mobile-more-item-evals"
-              onClick={() => handleMoreAction(() => onChangeView("evals"))}
-            >
-              <Target />
-              <span>Evals</span>
-            </button>
+            {experimentalFeatures?.evalsView && (
+              <button
+                type="button"
+                className="mobile-more-item"
+                data-testid="mobile-more-item-evals"
+                onClick={() => handleMoreAction(() => onChangeView("evals"))}
+              >
+                <Target />
+                <span>Evals</span>
+              </button>
+            )}
 
             {showSkillsInMore && (
               <button

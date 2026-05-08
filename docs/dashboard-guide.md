@@ -256,6 +256,8 @@ For mission planning context and handoff structure, see [Missions guide](./missi
 
 Evals view is a dedicated dashboard surface for reviewing scheduled task-evaluation output.
 
+> Available when `experimentalFeatures.evalsView` is enabled.
+
 Navigation:
 - Desktop: **Header → More views → Evals**
 - Mobile: **More** sheet → **Evals**

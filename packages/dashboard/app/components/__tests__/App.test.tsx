@@ -16,7 +16,7 @@ const defaultSettings: Settings = {
   worktreeInitCommand: "",
   testCommand: "",
   buildCommand: "",
-  experimentalFeatures: { insights: true, roadmap: true, skillsView: true, agentsView: true, memoryView: true },
+  experimentalFeatures: { insights: true, roadmap: true, skillsView: true, agentsView: true, memoryView: true, evalsView: true },
 };
 
  
@@ -1695,6 +1695,29 @@ describe("App view switching", () => {
     localStorage.removeItem("kb-dashboard-view-mode");
     localStorage.removeItem(taskViewStorageKey());
   });
+
+  it("falls back to board when evals view is feature-disabled", async () => {
+    localStorage.setItem("kb-dashboard-view-mode", "project");
+    localStorage.setItem(taskViewStorageKey(), "evals");
+    (fetchSettings as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...defaultSettings,
+      experimentalFeatures: {
+        ...defaultSettings.experimentalFeatures,
+        evalsView: false,
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".board")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("evals-view")).not.toBeInTheDocument();
+
+    localStorage.removeItem("kb-dashboard-view-mode");
+    localStorage.removeItem(taskViewStorageKey());
+  });
+
   it("renders Board view by default", async () => {
     // Set project mode so board view is available
     localStorage.setItem("kb-dashboard-view-mode", "project");
@@ -3702,6 +3725,7 @@ describe("App shell connection status plumbing", () => {
 
     await waitFor(() => {
       expect(mockGetShellConnectionNativeResult).toHaveBeenCalledWith(mockShellHostContextValue.host);
+      expect(screen.getByTestId("mobile-nav-tab-more")).toBeInTheDocument();
     });
 
     expect(screen.queryByTestId("shell-connection-status-button")).toBeNull();

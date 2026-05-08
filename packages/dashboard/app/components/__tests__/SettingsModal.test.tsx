@@ -1887,6 +1887,14 @@ describe("SettingsModal", () => {
       expect(screen.getByLabelText("Research View")).toBeInTheDocument();
     });
 
+    it("shows evalsView in the Experimental Features list", async () => {
+      renderModal();
+
+      await openExperimentalFeaturesSection();
+
+      expect(screen.getByLabelText("Evals View")).toBeInTheDocument();
+    });
+
     it("shows agentOnboarding in the Experimental Features list", async () => {
       renderModal();
 
@@ -2005,6 +2013,43 @@ describe("SettingsModal", () => {
         await waitForSettingsModalReady();
 
         expect(screen.queryByRole("button", { name: /Research Defaults/i })).not.toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Authentication" })).toBeInTheDocument();
+      });
+
+      it("hides scheduled evals nav item when experimentalFeatures.evalsView is disabled", async () => {
+        mockFetchSettings.mockResolvedValue({
+          ...defaultSettings,
+          experimentalFeatures: {},
+        });
+
+        renderModal();
+        await waitForSettingsModalReady();
+
+        expect(screen.queryByRole("button", { name: /Scheduled Evals/i })).not.toBeInTheDocument();
+      });
+
+      it("shows scheduled evals nav item when experimentalFeatures.evalsView is enabled", async () => {
+        mockFetchSettings.mockResolvedValue({
+          ...defaultSettings,
+          experimentalFeatures: { evalsView: true },
+        });
+
+        renderModal();
+        await waitForSettingsModalReady();
+
+        expect(screen.getByRole("button", { name: /Scheduled Evals/i })).toBeInTheDocument();
+      });
+
+      it("falls back to the first selectable section when opening scheduled evals while evalsView is disabled", async () => {
+        mockFetchSettings.mockResolvedValue({
+          ...defaultSettings,
+          experimentalFeatures: {},
+        });
+
+        renderModal({ initialSection: "scheduled-evals" });
+        await waitForSettingsModalReady();
+
+        expect(screen.queryByRole("button", { name: /Scheduled Evals/i })).not.toBeInTheDocument();
         expect(screen.getByRole("heading", { name: "Authentication" })).toBeInTheDocument();
       });
     });
@@ -2774,6 +2819,7 @@ describe("SettingsModal", () => {
     it("renders controls and disables interval controls when evals are disabled", async () => {
       mockFetchSettings.mockResolvedValueOnce({
         ...defaultSettings,
+        experimentalFeatures: { evalsView: true },
         evalSettings: {
           enabled: false,
           intervalMs: 86_400_000,
@@ -2797,6 +2843,7 @@ describe("SettingsModal", () => {
     it("saves edited project eval settings payload", async () => {
       mockFetchSettings.mockResolvedValueOnce({
         ...defaultSettings,
+        experimentalFeatures: { evalsView: true },
         evalSettings: {
           enabled: true,
           intervalMs: 86_400_000,
@@ -2836,6 +2883,7 @@ describe("SettingsModal", () => {
     it("clears evaluator provider and model as unset when left blank", async () => {
       mockFetchSettings.mockResolvedValueOnce({
         ...defaultSettings,
+        experimentalFeatures: { evalsView: true },
         evalSettings: {
           enabled: true,
           intervalMs: 86_400_000,

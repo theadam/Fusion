@@ -546,6 +546,7 @@ function AppInner() {
   const skillsEnabled = experimentalFeatures.skillsView === true;
   const nodesEnabled = experimentalFeatures.nodesView === true;
   const researchEnabled = experimentalFeatures.researchView === true;
+  const evalsEnabled = experimentalFeatures.evalsView === true;
   const agentOnboardingEnabled = experimentalFeatures.agentOnboarding === true;
   const agentsEnabled = true;
 
@@ -588,7 +589,10 @@ function AppInner() {
     if (taskView === "research" && !researchEnabled) {
       handleChangeTaskView("board");
     }
-  }, [taskView, settingsLoaded, skillsEnabled, insightsEnabled, roadmapEnabled, handleChangeTaskView, agentsEnabled, memoryEnabled, devServerEnabled, researchEnabled, graphPluginTaskView]);
+    if (taskView === "evals" && !evalsEnabled) {
+      handleChangeTaskView("board");
+    }
+  }, [taskView, settingsLoaded, skillsEnabled, insightsEnabled, roadmapEnabled, handleChangeTaskView, agentsEnabled, memoryEnabled, devServerEnabled, researchEnabled, evalsEnabled, graphPluginTaskView]);
 
   // Auto-close nodes overlay if feature flag is toggled off while overlay is open
   useEffect(() => {
@@ -1195,6 +1199,9 @@ function AppInner() {
     }
 
     if (taskView === "evals") {
+      if (!settingsLoaded || !evalsEnabled) {
+        return null;
+      }
       return (
         <PageErrorBoundary>
           <Suspense fallback={null}>
@@ -1395,6 +1402,7 @@ function AppInner() {
           devServer: devServerEnabled,
           devServerView: devServerEnabled,
           researchView: researchEnabled,
+          evalsView: evalsEnabled,
         }}
         pluginDashboardViews={pluginDashboardViews}
         shellConnectionControl={
@@ -1501,6 +1509,7 @@ function AppInner() {
           devServerView: devServerEnabled,
           todoView: todosEnabled,
           researchView: researchEnabled,
+          evalsView: evalsEnabled,
           nodesView: nodesEnabled,
         }}
         pluginDashboardViews={pluginDashboardViews}

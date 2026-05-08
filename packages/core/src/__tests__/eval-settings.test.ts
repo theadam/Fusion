@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { resolveEvalSettings } from "../eval-settings.js";
+import { isEvalsExperimentalEnabled, resolveEvalSettings } from "../eval-settings.js";
+
+describe("isEvalsExperimentalEnabled", () => {
+  it("returns false when settings are undefined", () => {
+    expect(isEvalsExperimentalEnabled(undefined)).toBe(false);
+  });
+
+  it("returns false when experimentalFeatures are missing", () => {
+    expect(isEvalsExperimentalEnabled({})).toBe(false);
+  });
+
+  it("returns false when evalsView is false", () => {
+    expect(
+      isEvalsExperimentalEnabled({
+        experimentalFeatures: { evalsView: false },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when evalsView is true", () => {
+    expect(
+      isEvalsExperimentalEnabled({
+        experimentalFeatures: { evalsView: true },
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("resolveEvalSettings", () => {
   it("returns deterministic defaults when eval settings are unset", () => {

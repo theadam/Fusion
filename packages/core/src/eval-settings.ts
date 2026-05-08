@@ -1,3 +1,4 @@
+import { isExperimentalFeatureEnabled } from "./experimental-features.js";
 import { resolveValidatorSettingsModel } from "./model-resolution.js";
 import type { ResolvedEvalSettings, Settings } from "./types.js";
 
@@ -7,6 +8,10 @@ const DEFAULT_EVAL_SETTINGS: Omit<ResolvedEvalSettings, "evaluatorProvider" | "e
   followUpPolicy: "suggest-only",
   retentionDays: 30,
 };
+
+export function isEvalsExperimentalEnabled(settings: Partial<Settings> | undefined): boolean {
+  return isExperimentalFeatureEnabled(settings, "evalsView");
+}
 
 export function resolveEvalSettings(settings: Partial<Settings> | undefined): ResolvedEvalSettings {
   const scopedSettings = settings?.evalSettings;

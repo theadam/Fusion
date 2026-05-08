@@ -4,6 +4,8 @@
 
 ## Overview
 
+> **Feature flag:** Evals surfaces are gated by `experimentalFeatures.evalsView`. When disabled, the dashboard Evals view, Settings → Scheduled Evals section, and scheduled-eval cron execution are all dormant.
+
 Fusion task evaluations use one canonical 0–100 integer scoring system for three categories: `agentPerformance`, `taskOutcomeQuality`, and `processCompliance`.
 
 Authoritative score math lives in `packages/core/src/eval-scoring.ts`. AI output is advisory input only.

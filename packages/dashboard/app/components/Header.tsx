@@ -237,7 +237,7 @@ export interface HeaderProps {
   /** Whether the current view is a remote node */
   isRemote?: boolean;
   /** Experimental feature flags controlling visibility of nav items. */
-  experimentalFeatures?: { insights?: boolean; roadmap?: boolean; memoryView?: boolean; devServer?: boolean; devServerView?: boolean; researchView?: boolean };
+  experimentalFeatures?: { insights?: boolean; roadmap?: boolean; memoryView?: boolean; devServer?: boolean; devServerView?: boolean; researchView?: boolean; evalsView?: boolean };
   pluginDashboardViews?: PluginDashboardViewEntry[];
   shellConnectionControl?: ReactNode;
 }
@@ -1178,7 +1178,7 @@ export function Header({
               <>
                 <button
                   ref={viewOverflowTriggerRef}
-                  className={`view-toggle-btn${["research", "skills", "roadmaps", "insights", "memory", "dev-server", "devserver", "graph"].includes(view) || (todosEnabled && todosOpen) || isPluginViewId(view) ? " active" : ""}`}
+                  className={`view-toggle-btn${["research", "skills", "roadmaps", "insights", "memory", "dev-server", "devserver", "graph"].includes(view) || (experimentalFeatures?.evalsView && view === "evals") || (todosEnabled && todosOpen) || isPluginViewId(view) ? " active" : ""}`}
                   onClick={() => setIsViewOverflowOpen((prev) => !prev)}
                   title="More views"
                   aria-label="More views"
@@ -1195,18 +1195,20 @@ export function Header({
                     role="menu"
                     aria-label="More views"
                   >
-                    <button
-                      className={`view-toggle-overflow-item${view === "evals" ? " active" : ""}`}
-                      onClick={() => {
-                        onChangeView("evals");
-                        setIsViewOverflowOpen(false);
-                      }}
-                      role="menuitem"
-                      data-testid="view-overflow-evals"
-                    >
-                      <Target size={14} />
-                      <span>Evals</span>
-                    </button>
+                    {experimentalFeatures?.evalsView && (
+                      <button
+                        className={`view-toggle-overflow-item${view === "evals" ? " active" : ""}`}
+                        onClick={() => {
+                          onChangeView("evals");
+                          setIsViewOverflowOpen(false);
+                        }}
+                        role="menuitem"
+                        data-testid="view-overflow-evals"
+                      >
+                        <Target size={14} />
+                        <span>Evals</span>
+                      </button>
+                    )}
                     {experimentalFeatures?.researchView && (
                       <button
                         className={`view-toggle-overflow-item${view === "research" ? " active" : ""}`}

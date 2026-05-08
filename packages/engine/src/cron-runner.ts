@@ -4,6 +4,7 @@ import {
   resolveProjectDefaultModel,
   runScheduledEvalBatch,
   resolveTaskEvaluationSettings,
+  isEvalsExperimentalEnabled,
   type TaskStore,
   type AutomationStore,
   type ScheduledTask,
@@ -487,6 +488,15 @@ export class CronRunner {
     startedAt: string,
   ): Promise<AutomationRunResult> {
     const settings = await this.store.getSettings();
+    if (!isEvalsExperimentalEnabled(settings)) {
+      return {
+        success: false,
+        output: "evals-experimental-disabled",
+        error: "Evals experimental feature is disabled",
+        startedAt,
+        completedAt: new Date().toISOString(),
+      };
+    }
     const evalSettings = resolveTaskEvaluationSettings(settings);
     const evaluator = new HybridEvaluatorService({ cwd: this.options.workingDirectory ?? process.cwd(), store: this.store });
 

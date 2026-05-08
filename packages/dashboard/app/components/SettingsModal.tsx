@@ -275,6 +275,7 @@ const KNOWN_EXPERIMENTAL_FEATURES: Record<string, string> = {
   devServerView: "Dev Server",
   todoView: "Todo List",
   researchView: "Research View",
+  evalsView: "Evals View",
   agentOnboarding: "Planning-style Agent Onboarding",
 };
 
@@ -444,6 +445,7 @@ export function SettingsModal({
   const experimentalFeatures = form.experimentalFeatures ?? {};
   const remoteAccessEnabled = isExperimentalFeatureEnabled(experimentalFeatures, "remoteAccess");
   const researchViewEnabled = isExperimentalFeatureEnabled(experimentalFeatures, "researchView");
+  const evalsViewEnabled = isExperimentalFeatureEnabled(experimentalFeatures, "evalsView");
   const visibleSections = SETTINGS_SECTIONS.filter((section) => {
     if (section.id === "remote") {
       return remoteAccessEnabled;
@@ -451,6 +453,10 @@ export function SettingsModal({
 
     if (section.id === "research-global" || section.id === "research-project") {
       return researchViewEnabled;
+    }
+
+    if (section.id === "scheduled-evals") {
+      return evalsViewEnabled;
     }
 
     return true;
@@ -471,10 +477,15 @@ export function SettingsModal({
       return;
     }
 
+    if (activeSection === "scheduled-evals" && !evalsViewEnabled) {
+      setActiveSection(firstVisibleSectionId);
+      return;
+    }
+
     if (!visibleSections.some((section) => section.id === activeSection)) {
       setActiveSection(firstVisibleSectionId);
     }
-  }, [activeSection, remoteAccessEnabled, researchViewEnabled, firstVisibleSectionId, visibleSections]);
+  }, [activeSection, remoteAccessEnabled, researchViewEnabled, evalsViewEnabled, firstVisibleSectionId, visibleSections]);
 
   // Auth state (independent of the settings save flow)
   const [authProviders, setAuthProviders] = useState<AuthProvider[]>([]);

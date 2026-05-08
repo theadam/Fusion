@@ -710,7 +710,7 @@ export type {
 export { isExperimentalFeatureEnabled } from "./experimental-features.js";
 export { isResearchExperimentalEnabled, resolveResearchSettings } from "./research-settings.js";
 export type { ResolvedResearchSettings } from "./research-settings.js";
-export { resolveEvalSettings } from "./eval-settings.js";
+export { isEvalsExperimentalEnabled, resolveEvalSettings } from "./eval-settings.js";
 
 export { TodoStore } from "./todo-store.js";
 export type { TodoStoreEvents } from "./todo-store.js";

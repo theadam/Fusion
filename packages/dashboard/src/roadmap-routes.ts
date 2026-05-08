@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { Router, type Request, type Response } from "express";
 import { createRequire } from "node:module";
 import { getCreateAiSessionFactory, type PluginContext, type PluginRouteDefinition, type TaskStore } from "@fusion/core";

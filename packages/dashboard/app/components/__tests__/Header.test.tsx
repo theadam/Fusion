@@ -274,9 +274,16 @@ describe("Header", () => {
       expect(screen.queryByTestId("view-overflow-research")).toBeNull();
     });
 
-    it("routes to evals from the desktop view overflow", () => {
+    it("hides evals in the desktop view overflow when evalsView is disabled", () => {
+      renderHeader({ onChangeView: noop, experimentalFeatures: { evalsView: false } });
+
+      fireEvent.click(screen.getByTestId("view-toggle-overflow-trigger"));
+      expect(screen.queryByTestId("view-overflow-evals")).toBeNull();
+    });
+
+    it("routes to evals from the desktop view overflow when evalsView is enabled", () => {
       const onChangeView = vi.fn();
-      renderHeader({ onChangeView });
+      renderHeader({ onChangeView, experimentalFeatures: { evalsView: true } });
 
       fireEvent.click(screen.getByTestId("view-toggle-overflow-trigger"));
       fireEvent.click(screen.getByTestId("view-overflow-evals"));

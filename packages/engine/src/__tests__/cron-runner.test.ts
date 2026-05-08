@@ -1855,4 +1855,45 @@ describe("CronRunner", () => {
       expect(isInProcessScheduledEvalCommand("echo fn eval --scheduled-batch")).toBe(false);
     });
   });
+
+  describe("scheduled eval command feature gating", () => {
+    it("returns a disabled result when evalsView experimental feature is off", async () => {
+      const store = createMockStore({ experimentalFeatures: { evalsView: false } as Settings["experimentalFeatures"] });
+      const schedule = createMockSchedule({ id: "eval-off", command: "fn eval --scheduled-batch" });
+      runner = new CronRunner(store, createMockAutomationStore());
+
+      const runResult = await (runner as unknown as { executeLegacyCommand: (s: ScheduledTask, startedAt: string) => Promise<AutomationRunResult> })
+        .executeLegacyCommand(schedule, new Date().toISOString());
+      expect(runResult.success).toBe(false);
+      expect(runResult.output).toBe("evals-experimental-disabled");
+      expect(runResult.error).toBe("Evals experimental feature is disabled");
+    });
+
+    it("does not return the disabled sentinel when evalsView experimental feature is on", async () => {
+      const store = createMockStore({ experimentalFeatures: { evalsView: true } as Settings["experimentalFeatures"] }) as unknown as {
+        getEvalStore: () => {
+          listRuns: () => Array<{ id: string; status: string; metadata?: Record<string, unknown>; window: { until?: string } }>;
+          createRun: (input: { projectId: string; trigger: string; scope: string; window: { since?: string; until: string }; metadata: Record<string, unknown> }) => { id: string; startedAt?: string; window: { until: string } };
+          appendRunEvent: (runId: string, event: Record<string, unknown>) => void;
+          updateRun: (runId: string, patch: Record<string, unknown>) => void;
+        };
+        listTasks: (opts: { column: string }) => Promise<Array<{ id: string; column: string; createdAt: string; updatedAt: string; executionCompletedAt?: string; title: string; summary?: string }>>;
+      };
+
+      store.getEvalStore = () => ({
+        listRuns: () => [],
+        createRun: () => ({ id: "run-1", window: { until: new Date().toISOString() } }),
+        appendRunEvent: () => {},
+        updateRun: () => {},
+      });
+      store.listTasks = async () => [];
+
+      const schedule = createMockSchedule({ id: "eval-on", command: "fn eval --scheduled-batch" });
+      runner = new CronRunner(store as unknown as TaskStore, createMockAutomationStore());
+
+      const runResult = await (runner as unknown as { executeLegacyCommand: (s: ScheduledTask, startedAt: string) => Promise<AutomationRunResult> })
+        .executeLegacyCommand(schedule, new Date().toISOString());
+      expect(runResult.output).not.toBe("evals-experimental-disabled");
+    });
+  });
 });

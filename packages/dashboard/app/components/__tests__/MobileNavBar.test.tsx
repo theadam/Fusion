@@ -488,9 +488,16 @@ describe("MobileNavBar", () => {
     expect(props.onChangeView).toHaveBeenCalledWith("research");
   });
 
-  it("evals item in more sheet calls onChangeView with 'evals'", () => {
+  it("hides evals item in more sheet when evalsView is not enabled", () => {
+    render(<MobileNavBar {...createDefaultProps()} experimentalFeatures={{}} />);
+
+    fireEvent.click(screen.getByTestId("mobile-nav-tab-more"));
+    expect(screen.queryByTestId("mobile-more-item-evals")).toBeNull();
+  });
+
+  it("evals item in more sheet calls onChangeView with 'evals' when evalsView is enabled", () => {
     const props = createDefaultProps();
-    const { container } = render(<MobileNavBar {...props} />);
+    const { container } = render(<MobileNavBar {...props} experimentalFeatures={{ evalsView: true }} />);
 
     fireEvent.click(screen.getByTestId("mobile-nav-tab-more"));
     fireEvent.click(screen.getByTestId("mobile-more-item-evals"));
