@@ -141,6 +141,27 @@ describe("TaskDetailModal", () => {
 
       expect(screen.queryByText(/Created via/)).not.toBeInTheDocument();
     });
+
+    it("FN-3755 renders provenance before created-updated timestamps", () => {
+      const { container } = render(
+        <TaskDetailModal
+          task={makeTask({ sourceType: "dashboard_ui" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      const provenance = screen.getByText("Created via Dashboard").closest(".detail-provenance");
+      const timestamps = container.querySelector(".detail-timestamps");
+
+      expect(provenance).toBeTruthy();
+      expect(timestamps).toBeTruthy();
+      expect(provenance?.compareDocumentPosition(timestamps as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
   });
 
   it("renders modal wrapper structure and default close control", () => {

@@ -156,6 +156,11 @@
   border-radius: var(--radius-sm);
 }
 
+.detail-timestamps {
+  color: var(--text-dim);
+  margin-top: var(--space-xs);
+}
+
 @media (max-width: 768px) {
   .detail-provenance {
     align-items: flex-start;

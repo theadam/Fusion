@@ -1860,8 +1860,6 @@ export function TaskDetailContent({
                 );
               })()}
               <div className="detail-meta">
-                Created {new Date(task.createdAt).toLocaleDateString()} · Updated{" "}
-                {new Date(task.updatedAt).toLocaleDateString()} ·
                 <label
                   className={`card-priority-badge card-priority-badge--${inlinePriority} detail-priority-chip ${isSavingInlinePriority ? "detail-priority-chip--saving" : ""}`}
                 >
@@ -1953,6 +1951,10 @@ export function TaskDetailContent({
                     </span>
                   </div>
                 )}
+                <div className="detail-timestamps">
+                  Created {new Date(task.createdAt).toLocaleDateString()} · Updated{" "}
+                  {new Date(task.updatedAt).toLocaleDateString()}
+                </div>
               </div>
             </>
           )}
