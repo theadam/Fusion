@@ -104,6 +104,62 @@ describe("Evals routes", () => {
     expect((filtered.body as { results: Array<{ taskSnapshot: { title: string } }> }).results[0].taskSnapshot.title).toBe("Fix auth");
   });
 
+  it("GET /api/evals uses default limit of 100 and offset of 0", async () => {
+    const evalStore = storeA.getEvalStore();
+    const run = evalStore.createRun({ projectId: "", scope: "scheduled", trigger: "manual" });
+
+    for (let index = 0; index < 101; index += 1) {
+      evalStore.createTaskResult(run.id, {
+        taskId: `FN-${index + 1}`,
+        taskSnapshot: { taskId: `FN-${index + 1}`, title: `Task ${index + 1}`, column: "done" },
+        status: "scored",
+        overallScore: 80,
+        maxScore: 100,
+        categoryScores: [],
+        evidence: [],
+        followUps: [],
+      });
+    }
+
+    const response = await request(app, "GET", "/api/evals");
+
+    expect(response.status).toBe(200);
+    expect((response.body as { results: unknown[] }).results).toHaveLength(100);
+    expect((response.body as { count: number }).count).toBe(101);
+  });
+
+  it("GET /api/evals list endpoint honors project scoping", async () => {
+    const runA = storeA.getEvalStore().createRun({ projectId: "", scope: "scheduled", trigger: "manual" });
+    const runB = storeB.getEvalStore().createRun({ projectId: "", scope: "scheduled", trigger: "manual" });
+
+    storeA.getEvalStore().createTaskResult(runA.id, {
+      taskId: "FN-1",
+      taskSnapshot: { taskId: "FN-1", title: "Project A task", column: "done" },
+      status: "scored",
+      overallScore: 80,
+      maxScore: 100,
+      categoryScores: [],
+      evidence: [],
+      followUps: [],
+    });
+    storeB.getEvalStore().createTaskResult(runB.id, {
+      taskId: "FN-2",
+      taskSnapshot: { taskId: "FN-2", title: "Project B task", column: "done" },
+      status: "scored",
+      overallScore: 70,
+      maxScore: 100,
+      categoryScores: [],
+      evidence: [],
+      followUps: [],
+    });
+
+    const scoped = await request(app, "GET", "/api/evals?projectId=project-b");
+
+    expect(scoped.status).toBe(200);
+    expect((scoped.body as { count: number }).count).toBe(1);
+    expect((scoped.body as { results: Array<{ taskSnapshot: { title: string } }> }).results.map((result) => result.taskSnapshot.title)).toEqual(["Project B task"]);
+  });
+
   it("GET /api/evals/:id returns detail and unknown ids return 404", async () => {
     const result = seedEvalResult(storeA);
 

@@ -45,6 +45,25 @@ describe("EvalsView", () => {
     expect(openSettings).toHaveBeenCalledWith("scheduled-evals");
   });
 
+  it("renders loading skeleton when loading is true", () => {
+    mockUseEvals.mockReturnValueOnce({
+      loading: true,
+      error: null,
+      results: [],
+      runs: [],
+      filters: { q: "", runId: "", scoreMin: "", scoreMax: "" },
+      setFilters: vi.fn(),
+      selectedEvalId: null,
+      setSelectedEvalId: vi.fn(),
+      selectedEval: null,
+      refresh: vi.fn(),
+    });
+
+    render(<EvalsView projectId="p1" />);
+
+    expect(screen.getByTestId("evals-loading")).toBeInTheDocument();
+  });
+
   it("renders empty and error states", () => {
     mockUseEvals.mockReturnValueOnce({
       loading: false,

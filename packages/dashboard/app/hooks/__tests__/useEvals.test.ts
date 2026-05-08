@@ -105,4 +105,15 @@ describe("useEvals", () => {
     setIntervalSpy.mockRestore();
     clearIntervalSpy.mockRestore();
   });
+
+  it("surfaces API errors in error state", async () => {
+    mockListEvals.mockRejectedValueOnce(new Error("Network error"));
+
+    const { result } = renderHook(() => useEvals({ projectId: "p1" }));
+
+    await waitFor(() => {
+      expect(result.current.error).toBe("Network error");
+      expect(result.current.loading).toBe(false);
+    });
+  });
 });

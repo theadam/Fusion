@@ -72,6 +72,7 @@ export function EvalsView({ projectId, onOpenSettings, onOpenTaskDetail }: Evals
           <button className="btn btn-icon" type="button" onClick={() => void refresh()} aria-label="Refresh evals"><RefreshCw size={16} /></button>
         </div>
 
+        {loading && <p className="evals-state" data-testid="evals-loading">Loading evals…</p>}
         {error && <p className="evals-state evals-state--error">{error}</p>}
         {!loading && !error && !hasResults && (
           <p className="evals-state">No evals yet. Scheduled evals review tasks completed since the last run.</p>
