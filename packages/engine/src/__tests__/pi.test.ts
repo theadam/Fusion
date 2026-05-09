@@ -662,7 +662,7 @@ describe("session failure diagnostics", () => {
     await expect((session as any).promptWithFallback("Run task")).resolves.toBeUndefined();
 
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to dispose session during swap: dispose failed"),
+      expect.stringContaining("Session dispose failed after session_shutdown emit: dispose failed"),
     );
 
     warnSpy.mockRestore();

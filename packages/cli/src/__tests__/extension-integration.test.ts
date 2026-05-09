@@ -158,6 +158,12 @@ describe.skipIf(!SHOULD_RUN_EXTENSION_INTEGRATION)("built fn pi extension integr
     }
   });
 
+  it("exposes a callable session_shutdown handler", async () => {
+    const shutdown = api.events.get("session_shutdown");
+    expect(typeof shutdown).toBe("function");
+    await expect(shutdown?.()).resolves.toBeUndefined();
+  });
+
   it("creates and lists tasks through the built extension", async () => {
     const createTool = api.tools.get("fn_task_create")!;
     const created = await createTool.execute(

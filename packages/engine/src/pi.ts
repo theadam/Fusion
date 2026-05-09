@@ -115,6 +115,79 @@ type AgentToolHookSession = AgentSession & {
   __fusionMessageContentGuardInstalled?: boolean;
 };
 const FN_MEMORY_APPEND_TOOL_NAME = "fn_memory_append";
+const FUSION_SHUTDOWN_WRAP_FLAG = "__fusionSessionShutdownDisposeWrapped";
+
+type SessionShutdownEventShape = { type: "session_shutdown"; reason: "quit" | "reload" };
+type ExtensionRunnerShutdownEmitter = {
+  hasHandlers: (event: "session_shutdown") => boolean;
+  emit: (event: SessionShutdownEventShape) => Promise<unknown>;
+};
+
+async function emitSessionShutdownEvent(
+  extensionRunner: ExtensionRunnerShutdownEmitter,
+  event: SessionShutdownEventShape,
+): Promise<boolean> {
+  if (!extensionRunner.hasHandlers("session_shutdown")) {
+    return false;
+  }
+  await extensionRunner.emit(event);
+  return true;
+}
+
+/**
+ * Fusion creates raw pi `AgentSession` objects and many engine call sites
+ * invoke `session.dispose()` directly. Wrap dispose so we mirror
+ * `AgentSessionRuntime.dispose()` behavior and emit `session_shutdown` first.
+ */
+function wrapSessionDisposeWithShutdown(session: AgentSession): void {
+  const mutableSession = session as AgentSession & Record<string, unknown>;
+  if (mutableSession[FUSION_SHUTDOWN_WRAP_FLAG]) {
+    return;
+  }
+  mutableSession[FUSION_SHUTDOWN_WRAP_FLAG] = true;
+
+  const originalDispose =
+    typeof session.dispose === "function"
+      ? session.dispose.bind(session)
+      : () => undefined;
+  let disposeStarted = false;
+  const wrappedDispose = async (): Promise<void> => {
+    if (disposeStarted) {
+      return;
+    }
+    disposeStarted = true;
+
+    const extensionRunner = (session as { extensionRunner?: unknown }).extensionRunner;
+    if (
+      extensionRunner &&
+      typeof (extensionRunner as ExtensionRunnerShutdownEmitter).hasHandlers === "function" &&
+      typeof (extensionRunner as ExtensionRunnerShutdownEmitter).emit === "function"
+    ) {
+      try {
+        await emitSessionShutdownEvent(extensionRunner as ExtensionRunnerShutdownEmitter, {
+          type: "session_shutdown",
+          reason: "quit",
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        piLog.warn(`Failed to emit session_shutdown during dispose: ${message}`);
+      }
+    }
+
+    try {
+      await Promise.resolve(originalDispose());
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      piLog.warn(`Session dispose failed after session_shutdown emit: ${message}`);
+    }
+  };
+
+  (mutableSession as unknown as { dispose: () => void }).dispose = wrappedDispose as unknown as () => void;
+}
+
+export function _wrapSessionDisposeForTest(session: AgentSession): void {
+  wrapSessionDisposeWithShutdown(session);
+}
 
 function getSessionStateError(session: AgentSession): string {
   const state = (session as any).state;
@@ -1469,6 +1542,9 @@ export function wrapToolsWithActionGate(
 /**
  * Create a pi agent session configured for fn.
  * Reuses the user's existing pi auth and model configuration.
+ *
+ * Returned sessions are wrapped so `session.dispose()` emits pi's
+ * `session_shutdown` extension event before teardown.
  */
 export async function createFnAgent(options: AgentOptions): Promise<AgentResult> {
   piLog.log(`createFnAgent called (tools=${options.tools}, provider=${options.defaultProvider}, model=${options.defaultModelId})`);
@@ -1716,6 +1792,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
   }
 
   let activeSession = sessionResult.session;
+  wrapSessionDisposeWithShutdown(activeSession);
   installToolResultContentGuard(activeSession as AgentToolHookSession);
   installMessageContentGuard(activeSession as AgentToolHookSession, sessionManager as unknown as SessionManagerLike);
   (activeSession as any).__fusionMemoryAppendAvailable = options.customTools?.some((tool) => tool.name === FN_MEMORY_APPEND_TOOL_NAME) === true;
@@ -1767,6 +1844,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
     if (!modelToUse) {
       throw new Error("Cannot swap session without a resolved model");
     }
+    wrapSessionDisposeWithShutdown(activeSession);
     try {
       activeSession.dispose();
     } catch (err: unknown) {
@@ -1775,6 +1853,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
     }
     const next = (await createSessionWithModel(modelToUse)).session as PromptableSession;
     wireFallbackHooks(next);
+    wrapSessionDisposeWithShutdown(next);
     applyThinkingLevelIfSupported(next, `${modelToUse.provider}/${modelToUse.id}`);
     Object.setPrototypeOf(promptableSession, Object.getPrototypeOf(next));
     Object.assign(promptableSession, next);
