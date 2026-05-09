@@ -137,6 +137,8 @@ export interface PluginContext {
   emitEvent: (event: string, data: unknown) => void;
   /** Engine-injected AI session factory (undefined when engine is not loaded) */
   createAiSession?: CreateAiSessionFactory;
+  /** Optional host capability to resolve a project-scoped TaskStore by projectId. */
+  resolveProjectTaskStore?: (projectId: string) => Promise<TaskStore>;
 }
 
 /**
@@ -152,7 +154,7 @@ export interface PluginLogger {
 /** Lifecycle hook: called when plugin is loaded */
 export type PluginOnLoad = (ctx: PluginContext) => Promise<void> | void;
 /** Lifecycle hook: called when plugin is unloaded */
-export type PluginOnUnload = () => Promise<void> | void;
+export type PluginOnUnload = (ctx: PluginContext) => Promise<void> | void;
 /** Lifecycle hook: called during database schema initialization */
 export type PluginOnSchemaInit = (db: Database) => Promise<void> | void;
 /** Lifecycle hook: called when a task is created */
@@ -191,7 +193,7 @@ export interface PluginToolResult {
 
 // ── Plugin Routes ────────────────────────────────────────────────────
 
-export type PluginRouteMethod = "GET" | "POST" | "PUT" | "DELETE";
+export type PluginRouteMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /**
  * Custom dashboard API route definition.
@@ -866,6 +868,47 @@ export function validatePluginManifest(manifest: unknown): { valid: boolean; err
       for (const [index, surface] of m.promptSurfaces.entries()) {
         if (typeof surface !== "string" || !PROMPT_CONTRIBUTION_SURFACES.includes(surface as PluginPromptSurface)) {
           errors.push(`promptSurfaces[${index}] must be one of: ${PROMPT_CONTRIBUTION_SURFACES.join(", ")}`);
+        }
+      }
+    }
+  }
+
+  // Optional: top-level dashboard view metadata
+  if (m.dashboardViews !== undefined) {
+    if (!Array.isArray(m.dashboardViews)) {
+      errors.push("dashboardViews must be an array");
+    } else {
+      for (const [index, view] of m.dashboardViews.entries()) {
+        if (!view || typeof view !== "object") {
+          errors.push(`dashboardViews[${index}] must be an object`);
+          continue;
+        }
+
+        const dashboardView = view as Record<string, unknown>;
+
+        if (!dashboardView.viewId || typeof dashboardView.viewId !== "string" || dashboardView.viewId.trim() === "") {
+          errors.push(`dashboardViews[${index}].viewId is required and must be a non-empty string`);
+        } else if (!SLUG_PATTERN.test(dashboardView.viewId)) {
+          errors.push(`dashboardViews[${index}].viewId must be a valid slug (lowercase, alphanumeric, hyphens only, cannot start or end with hyphen)`);
+        }
+
+        if (!dashboardView.label || typeof dashboardView.label !== "string" || dashboardView.label.trim() === "") {
+          errors.push(`dashboardViews[${index}].label is required and must be a non-empty string`);
+        }
+
+        if (
+          !dashboardView.componentPath
+          || typeof dashboardView.componentPath !== "string"
+          || dashboardView.componentPath.trim() === ""
+        ) {
+          errors.push(`dashboardViews[${index}].componentPath is required and must be a non-empty string`);
+        }
+
+        if (
+          dashboardView.placement !== undefined
+          && (typeof dashboardView.placement !== "string" || !["primary", "overflow", "more"].includes(dashboardView.placement))
+        ) {
+          errors.push(`dashboardViews[${index}].placement must be one of: primary, overflow, more`);
         }
       }
     }

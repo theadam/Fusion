@@ -3,7 +3,7 @@
  * search/filter, and pagination.
  */
 
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, fireEvent, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useChat } from "../useChat";
 import * as apiModule from "../../api";
@@ -79,6 +79,14 @@ function makeMessage(overrides: Partial<ChatMessage> & Pick<ChatMessage, "id" | 
   };
 }
 
+const setDocumentVisibilityState = (state: DocumentVisibilityState) => {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => state,
+  });
+  fireEvent(document, new Event("visibilitychange"));
+};
+
 describe("useChat", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -97,6 +105,7 @@ describe("useChat", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it("loads sessions on mount", async () => {
@@ -456,6 +465,46 @@ describe("useChat", () => {
     });
   });
 
+  it("sets isStreaming true during first send and clears on delayed done", async () => {
+    const session = makeSession({
+      id: "session-001",
+      agentId: "agent-001",
+      title: "Test Session",
+    });
+
+    mockFetchChatSessions.mockResolvedValue({ sessions: [session] });
+    mockFetchChatMessages.mockResolvedValue({ messages: [] });
+
+    const { result } = renderHook(() => useChat(undefined, "project-123"));
+
+    await waitFor(() => {
+      expect(result.current.sessions).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.selectSession("session-001");
+    });
+
+    mockStreamChatResponse.mockImplementation((_sessionId, _content, handlers) => {
+      setTimeout(() => {
+        handlers.onDone?.({ messageId: "msg-001" });
+      }, 200);
+      return { close: vi.fn(), isConnected: () => true };
+    });
+
+    act(() => {
+      void result.current.sendMessage("Hello");
+    });
+
+    await waitFor(() => {
+      expect(result.current.isStreaming).toBe(true);
+    });
+
+    await waitFor(() => {
+      expect(result.current.isStreaming).toBe(false);
+    });
+  });
+
   it("uses done payload assistant snapshot when no text chunks were streamed", async () => {
     const session = makeSession({ id: "session-001", agentId: "agent-001" });
     mockFetchChatSessions.mockResolvedValueOnce({ sessions: [session] });
@@ -593,6 +642,157 @@ describe("useChat", () => {
       expect(result.current.isStreaming).toBe(false);
       expect(result.current.messages).toHaveLength(0);
       expect(addToast).toHaveBeenCalledWith("Stream connection failed", "error");
+    });
+  });
+
+  it("suppresses Load failed toast when tab is hidden and reconciles messages", async () => {
+    const session = makeSession({ id: "session-001", agentId: "agent-001" });
+    mockFetchChatSessions.mockResolvedValueOnce({ sessions: [session] });
+    mockFetchChatMessages.mockResolvedValue({ messages: [] });
+    const addToast = vi.fn();
+
+    let errorHandler: ((data: string) => void) | undefined;
+    mockStreamChatResponse.mockImplementation((_sessionId, _content, handlers) => {
+      errorHandler = handlers.onError;
+      return { close: vi.fn(), isConnected: () => true };
+    });
+
+    setDocumentVisibilityState("hidden");
+    const { result } = renderHook(() => useChat(undefined, addToast));
+
+    await waitFor(() => {
+      expect(result.current.sessions).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.selectSession("session-001");
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeSession?.id).toBe("session-001");
+    });
+
+    act(() => {
+      result.current.sendMessage("Hello!");
+      errorHandler?.("Load failed");
+    });
+
+    await waitFor(() => {
+      expect(result.current.isStreaming).toBe(false);
+      expect(addToast).not.toHaveBeenCalledWith("Load failed", "error");
+      expect(mockFetchChatMessages).toHaveBeenCalledWith("session-001", { limit: 50 }, undefined);
+    });
+  });
+
+  it("shows Load failed toast when tab stays visible", async () => {
+    const session = makeSession({ id: "session-001", agentId: "agent-001" });
+    mockFetchChatSessions.mockResolvedValueOnce({ sessions: [session] });
+    mockFetchChatMessages.mockResolvedValue({ messages: [] });
+    const addToast = vi.fn();
+
+    let errorHandler: ((data: string) => void) | undefined;
+    mockStreamChatResponse.mockImplementation((_sessionId, _content, handlers) => {
+      errorHandler = handlers.onError;
+      return { close: vi.fn(), isConnected: () => true };
+    });
+
+    setDocumentVisibilityState("visible");
+    const { result } = renderHook(() => useChat(undefined, addToast));
+
+    await waitFor(() => {
+      expect(result.current.sessions).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.selectSession("session-001");
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeSession?.id).toBe("session-001");
+    });
+
+    act(() => {
+      result.current.sendMessage("Hello!");
+      errorHandler?.("Load failed");
+    });
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith("Load failed", "error");
+    });
+  });
+
+  it("suppresses Failed to fetch shortly after hidden to visible transition", async () => {
+    const session = makeSession({ id: "session-001", agentId: "agent-001" });
+    mockFetchChatSessions.mockResolvedValueOnce({ sessions: [session] });
+    mockFetchChatMessages.mockResolvedValue({ messages: [] });
+    const addToast = vi.fn();
+
+    let errorHandler: ((data: string) => void) | undefined;
+    mockStreamChatResponse.mockImplementation((_sessionId, _content, handlers) => {
+      errorHandler = handlers.onError;
+      return { close: vi.fn(), isConnected: () => true };
+    });
+
+    setDocumentVisibilityState("hidden");
+    const { result } = renderHook(() => useChat(undefined, addToast));
+
+    await waitFor(() => {
+      expect(result.current.sessions).toHaveLength(1);
+    });
+
+    act(() => {
+      setDocumentVisibilityState("visible");
+      result.current.selectSession("session-001");
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeSession?.id).toBe("session-001");
+    });
+
+    act(() => {
+      result.current.sendMessage("Hello!");
+      errorHandler?.("Failed to fetch");
+    });
+
+    await waitFor(() => {
+      expect(addToast).not.toHaveBeenCalledWith("Failed to fetch", "error");
+    });
+  });
+
+  it("still shows toast for non-suspension errors regardless of visibility", async () => {
+    const session = makeSession({ id: "session-001", agentId: "agent-001" });
+    mockFetchChatSessions.mockResolvedValueOnce({ sessions: [session] });
+    mockFetchChatMessages.mockResolvedValue({ messages: [] });
+    const addToast = vi.fn();
+
+    let errorHandler: ((data: string) => void) | undefined;
+    mockStreamChatResponse.mockImplementation((_sessionId, _content, handlers) => {
+      errorHandler = handlers.onError;
+      return { close: vi.fn(), isConnected: () => true };
+    });
+
+    setDocumentVisibilityState("hidden");
+    const { result } = renderHook(() => useChat(undefined, addToast));
+
+    await waitFor(() => {
+      expect(result.current.sessions).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.selectSession("session-001");
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeSession?.id).toBe("session-001");
+    });
+
+    act(() => {
+      result.current.sendMessage("Hello!");
+      errorHandler?.("Request failed: 500");
+    });
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith("Request failed: 500", "error");
     });
   });
 
@@ -743,55 +943,162 @@ describe("useChat", () => {
     expect(mockStreamChatResponse).toHaveBeenCalledTimes(1);
   });
 
-  it("queued message auto-sends after onDone", async () => {
-    const session = makeSession({ id: "session-001", agentId: "agent-001" });
-    mockFetchChatSessions.mockResolvedValueOnce({ sessions: [session] });
-    mockFetchChatMessages.mockResolvedValueOnce({ messages: [] });
+  describe("queued message closure behavior", () => {
+    it("queued message auto-sends after onDone with the active session and completes second stream", async () => {
+      const session = makeSession({ id: "session-001", agentId: "agent-001" });
+      mockFetchChatSessions.mockResolvedValueOnce({ sessions: [session] });
+      mockFetchChatMessages.mockResolvedValueOnce({ messages: [] });
 
-    const handlers: Array<Parameters<typeof mockStreamChatResponse>[2]> = [];
-    mockStreamChatResponse.mockImplementation((_sessionId, _content, nextHandlers) => {
-      handlers.push(nextHandlers);
-      return { close: vi.fn(), isConnected: () => true };
+      const handlers: Array<Parameters<typeof mockStreamChatResponse>[2]> = [];
+      mockStreamChatResponse.mockImplementation((_sessionId, _content, nextHandlers) => {
+        handlers.push(nextHandlers);
+        return { close: vi.fn(), isConnected: () => true };
+      });
+
+      const { result } = renderHook(() => useChat("proj-123"));
+
+      await waitFor(() => {
+        expect(result.current.sessions).toHaveLength(1);
+      });
+
+      act(() => {
+        result.current.selectSession("session-001");
+      });
+
+      await waitFor(() => {
+        expect(result.current.activeSession?.id).toBe("session-001");
+      });
+
+      act(() => {
+        result.current.sendMessage("First");
+      });
+
+      await waitFor(() => {
+        expect(result.current.isStreaming).toBe(true);
+      });
+
+      act(() => {
+        result.current.sendMessage("Queued follow-up");
+      });
+
+      await waitFor(() => {
+        expect(result.current.pendingMessage).toBe("Queued follow-up");
+      });
+
+      act(() => {
+        handlers[0]?.onDone?.({ messageId: "msg-001" });
+      });
+
+      await waitFor(() => {
+        expect(mockStreamChatResponse).toHaveBeenCalledTimes(2);
+        expect(mockStreamChatResponse.mock.calls[1]?.[0]).toBe("session-001");
+        expect(mockStreamChatResponse.mock.calls[1]?.[1]).toBe("Queued follow-up");
+        expect(result.current.pendingMessage).toBe("");
+        expect(result.current.isStreaming).toBe(true);
+      });
+
+      act(() => {
+        handlers[1]?.onDone?.({ messageId: "msg-002" });
+      });
+
+      await waitFor(() => {
+        expect(result.current.isStreaming).toBe(false);
+        expect(result.current.streamingText).toBe("");
+      });
     });
 
-    const { result } = renderHook(() => useChat("proj-123"));
+    it("keeps only the latest queued message while streaming", async () => {
+      const session = makeSession({ id: "session-001", agentId: "agent-001" });
+      mockFetchChatSessions.mockResolvedValueOnce({ sessions: [session] });
+      mockFetchChatMessages.mockResolvedValueOnce({ messages: [] });
 
-    await waitFor(() => {
-      expect(result.current.sessions).toHaveLength(1);
+      const handlers: Array<Parameters<typeof mockStreamChatResponse>[2]> = [];
+      mockStreamChatResponse.mockImplementation((_sessionId, _content, nextHandlers) => {
+        handlers.push(nextHandlers);
+        return { close: vi.fn(), isConnected: () => true };
+      });
+
+      const { result } = renderHook(() => useChat("proj-123"));
+
+      await waitFor(() => {
+        expect(result.current.sessions).toHaveLength(1);
+      });
+
+      act(() => {
+        result.current.selectSession("session-001");
+      });
+
+      await waitFor(() => {
+        expect(result.current.activeSession?.id).toBe("session-001");
+      });
+
+      act(() => {
+        result.current.sendMessage("First");
+      });
+
+      await waitFor(() => {
+        expect(result.current.isStreaming).toBe(true);
+      });
+
+      act(() => {
+        result.current.sendMessage("Queued B");
+        result.current.sendMessage("Queued C");
+      });
+
+      expect(result.current.pendingMessage).toBe("Queued C");
+
+      act(() => {
+        handlers[0]?.onDone?.({ messageId: "msg-001" });
+      });
+
+      await waitFor(() => {
+        expect(mockStreamChatResponse).toHaveBeenCalledTimes(2);
+        expect(mockStreamChatResponse.mock.calls[1]?.[1]).toBe("Queued C");
+      });
     });
 
-    act(() => {
-      result.current.selectSession("session-001");
-    });
+    it("flushes queued message after stream error when not cancelled", async () => {
+      const session = makeSession({ id: "session-001", agentId: "agent-001" });
+      mockFetchChatSessions.mockResolvedValueOnce({ sessions: [session] });
+      mockFetchChatMessages.mockResolvedValueOnce({ messages: [] });
 
-    await waitFor(() => {
-      expect(result.current.activeSession?.id).toBe("session-001");
-    });
+      const handlers: Array<Parameters<typeof mockStreamChatResponse>[2]> = [];
+      mockStreamChatResponse.mockImplementation((_sessionId, _content, nextHandlers) => {
+        handlers.push(nextHandlers);
+        return { close: vi.fn(), isConnected: () => true };
+      });
 
-    act(() => {
-      result.current.sendMessage("First");
-    });
+      const { result } = renderHook(() => useChat("proj-123"));
 
-    await waitFor(() => {
-      expect(result.current.isStreaming).toBe(true);
-    });
+      await waitFor(() => {
+        expect(result.current.sessions).toHaveLength(1);
+      });
 
-    act(() => {
-      result.current.sendMessage("Queued follow-up");
-    });
+      act(() => {
+        result.current.selectSession("session-001");
+      });
 
-    await waitFor(() => {
-      expect(result.current.pendingMessage).toBe("Queued follow-up");
-    });
+      await waitFor(() => {
+        expect(result.current.activeSession?.id).toBe("session-001");
+      });
 
-    act(() => {
-      handlers[0]?.onDone?.({ messageId: "msg-001" });
-    });
+      act(() => {
+        result.current.sendMessage("First");
+      });
 
-    await waitFor(() => {
-      expect(mockStreamChatResponse).toHaveBeenCalledTimes(2);
-      expect(mockStreamChatResponse.mock.calls[1]?.[1]).toBe("Queued follow-up");
-      expect(result.current.pendingMessage).toBe("");
+      await waitFor(() => {
+        expect(result.current.isStreaming).toBe(true);
+      });
+
+      act(() => {
+        result.current.sendMessage("Queued follow-up");
+        handlers[0]?.onError?.("network");
+      });
+
+      await waitFor(() => {
+        expect(mockStreamChatResponse).toHaveBeenCalledTimes(2);
+        expect(mockStreamChatResponse.mock.calls[1]?.[1]).toBe("Queued follow-up");
+      });
     });
   });
 

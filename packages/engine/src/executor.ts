@@ -5,12 +5,14 @@ const execAsync = promisify(exec);
 import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import type { TaskStore, Task, TaskDetail, TaskTokenUsage, StepStatus, Settings, WorkflowStep, MissionStore, Slice, AgentState, AgentCapability, RunMutationContext, AgentHeartbeatConfig } from "@fusion/core";
+import type { TaskStore, Task, TaskDetail, TaskTokenUsage, StepStatus, Settings, WorkflowStep, MissionStore, Slice, AgentState, AgentCapability, RunMutationContext, AgentHeartbeatConfig, Agent } from "@fusion/core";
 import {
+  ApprovalRequestStore,
   buildExecutionMemoryInstructions,
   getTaskMergeBlocker,
   isEphemeralAgent,
   resolveAgentPrompt,
+  resolveEffectiveAgentPermissionPolicy,
   resolveProjectDefaultModel,
   type RunCommandResult,
 } from "@fusion/core";
@@ -55,10 +57,13 @@ import type { AgentReflectionService } from "./agent-reflection.js";
 import { createRunAuditor, generateSyntheticRunId, type EngineRunContext } from "./run-audit.js";
 import { evaluateSpecStaleness, getPromptPath } from "./spec-staleness.js";
 import {
+  createAgentCreateTool,
+  createAgentDeleteTool,
   createDelegateTaskTool,
   createGetAgentConfigTool,
   createListAgentsTool,
   createMemoryTools,
+  createWebFetchTool,
   createReadMessagesTool,
   createReflectOnPerformanceTool,
   createUpdateAgentConfigTool,
@@ -70,13 +75,21 @@ import {
   createTaskLogTool as sharedCreateTaskLogTool,
 } from "./agent-tools.js";
 import { getTaskCompletionBlockerForStore } from "./task-completion.js";
+import {
+  getEnabledPluginTools,
+  getResearchGuidanceForSurface,
+  isResearchToolSurfaceEnabled,
+} from "./tool-availability.js";
 import { createFusionAuthStorage, getModelRegistryModelsPath } from "./auth-storage.js";
 import { createRunVerificationTool } from "./run-verification-tool.js";
 import { createFallbackModelObserver } from "./fallback-model-observer.js";
+import type { AgentActionGateContext } from "./agent-action-gate.js";
 
 // Re-export for backward compatibility (tests import from executor.ts)
 export { summarizeToolArgs } from "./agent-logger.js";
 export {
+  createAgentCreateTool,
+  createAgentDeleteTool,
   createDelegateTaskTool,
   createGetAgentConfigTool,
   createListAgentsTool,
@@ -202,7 +215,7 @@ async function runConfiguredCommand(
 // ── Tool parameter schemas (module-level for reuse in ToolDefinition generics) ──
 
 const taskUpdateParams = Type.Object({
-  step: Type.Number({ description: "Step number (0-indexed)" }),
+  step: Type.Number({ description: "Step number (1-indexed)" }),
   status: Type.Union(
     STEP_STATUSES.map((s) => Type.Literal(s)),
     { description: "New status: pending, in-progress, done, or skipped" },
@@ -377,12 +390,6 @@ You can save and retrieve named documents for this task. Use these to store plan
 
 Documents are versioned — each write creates a new revision. Use meaningful keys like "plan", "notes", "research", "architecture".
 
-## Research tools
-When implementation needs external context, you may use research tools (
-\`fn_research_run\`, \`fn_research_list\`, \`fn_research_get\`, \`fn_research_cancel\`) to run bounded research.
-Keep runs focused and short, and persist durable conclusions into task documents (for example key="research").
-If research is disabled or providers are not configured, use the actionable tool response and continue with available local context.
-
 **IMPORTANT — Save your deliverables as documents:** When your task produces written output (documentation, specifications, reports, API references, README updates, guides, or any other content), you MUST save that content as a task document using \`fn_task_document_write\`. Use a key that describes the deliverable (e.g., key="readme", key="api-docs", key="changelog"). Do this in addition to writing the file to disk — the document persists in the task for review even after the worktree is cleaned up.
 
 If the task's PROMPT.md includes a "Documentation Requirements" section listing files to update, save each updated file's final content as a task document with a matching key.
@@ -499,7 +506,12 @@ The tool prevents your session from being killed by the inactivity watchdog duri
 /** Resolve the executor system prompt from settings, falling back to the hardcoded constant. */
 function getExecutorSystemPrompt(settings: Settings): string {
   const customPrompt = resolveAgentPrompt("executor", settings.agentPrompts);
-  return customPrompt || EXECUTOR_SYSTEM_PROMPT;
+  const basePrompt = customPrompt || EXECUTOR_SYSTEM_PROMPT;
+  const sections = [
+    basePrompt,
+    isResearchToolSurfaceEnabled(settings) ? getResearchGuidanceForSurface("executor") : "",
+  ].filter((section) => section.trim());
+  return sections.join("\n\n");
 }
 
 
@@ -689,6 +701,7 @@ export class TaskExecutor {
   /** Token cap detector for proactive context compaction. */
   private tokenCapDetector = new TokenCapDetector();
   private _modelRegistry?: ModelRegistry;
+  private _approvalRequestStore?: ApprovalRequestStore;
   /** Current run context for mutation correlation. Set at execute() start, cleared in finally. */
   private currentRunContext: RunMutationContext | undefined;
 
@@ -699,6 +712,121 @@ export class TaskExecutor {
       this._modelRegistry.refresh();
     }
     return this._modelRegistry;
+  }
+
+  private get approvalRequestStore(): ApprovalRequestStore {
+    if (!this._approvalRequestStore) {
+      this._approvalRequestStore = new ApprovalRequestStore(this.store.getDatabase());
+    }
+    return this._approvalRequestStore;
+  }
+
+  private buildActionGateContext(taskId: string | undefined, agent: Agent | null | undefined): AgentActionGateContext | undefined {
+    if (!agent || isEphemeralAgent(agent)) {
+      return undefined;
+    }
+    const policy = resolveEffectiveAgentPermissionPolicy(agent.permissionPolicy);
+    return {
+      agentId: agent.id,
+      agentName: agent.name,
+      isEphemeral: false,
+      taskId,
+      runId: this.currentRunContext?.runId,
+      permissionPolicy: policy,
+      createApprovalRequest: async (decision, args) => this.approvalRequestStore.create({
+        requester: {
+          actorId: agent.id,
+          actorType: "agent",
+          actorName: agent.name,
+        },
+        taskId,
+        runId: this.currentRunContext?.runId,
+        targetAction: {
+          category: decision.category === "exempt" ? "command_execution" : decision.category,
+          action: decision.operation,
+          summary: decision.summary,
+          resourceType: decision.resourceType,
+          resourceId: decision.resourceId ?? "",
+          context: {
+            ...decision.metadata,
+            approvalDedupeKey: decision.approvalDedupeKey,
+            toolName: decision.toolName,
+            toolArgs: args,
+          },
+        },
+      }),
+      findApprovalByDedupeKey: async (dedupeKey) => {
+        const latest = this.approvalRequestStore.findLatestByDedupeKey({ requesterActorId: agent.id, taskId, dedupeKey });
+        return latest ? { id: latest.id, status: latest.status } : null;
+      },
+      findPendingApprovalByDedupeKey: async (dedupeKey) => {
+        const latest = this.approvalRequestStore.findLatestByDedupeKey({ requesterActorId: agent.id, taskId, dedupeKey });
+        return latest?.status === "pending" ? { id: latest.id } : null;
+      },
+      pauseForApproval: async ({ approvalRequestId, decision }) => {
+        if (taskId) {
+          await this.store.pauseTask(taskId, true, this.currentRunContext, { pausedByAgentId: agent.id });
+          await this.store.logEntry(
+            taskId,
+            `Approval required for ${decision.toolName}. Request ${approvalRequestId} created; task and agent paused awaiting decision.`,
+            undefined,
+            this.currentRunContext,
+          );
+        }
+        if (this.options.agentStore) {
+          await this.options.agentStore.updateAgentState(agent.id, "paused");
+          await this.options.agentStore.updateAgent(agent.id, { pauseReason: "awaiting-approval" });
+        }
+      },
+      markApprovalCompleted: async (approvalRequestId) => {
+        await this.approvalRequestStore.markCompleted(approvalRequestId, {
+          actor: { actorId: agent.id, actorType: "agent", actorName: agent.name },
+          note: "Tool executed after approval",
+        });
+      },
+    };
+  }
+
+  private buildPermanentAgentGatingContext(taskId: string | undefined, agent: Agent | null | undefined): import("@fusion/core").PermanentAgentGatingContext | undefined {
+    if (!agent || isEphemeralAgent(agent)) {
+      return undefined;
+    }
+
+    return {
+      permissionPolicy: resolveEffectiveAgentPermissionPolicy(agent.permissionPolicy),
+      requester: {
+        actorId: agent.id,
+        actorType: "agent",
+        actorName: agent.name,
+      },
+      taskId,
+      runId: this.currentRunContext?.runId,
+      createApprovalRequest: async ({ category, toolName, args }) => this.approvalRequestStore.create({
+        requester: {
+          actorId: agent.id,
+          actorType: "agent",
+          actorName: agent.name,
+        },
+        taskId,
+        runId: this.currentRunContext?.runId,
+        targetAction: {
+          category,
+          action: toolName,
+          summary: `Permanent-agent gated action for ${toolName}`,
+          resourceType: "tool",
+          resourceId: toolName,
+          context: {
+            toolName,
+            toolArgs: args,
+            source: "permanent-agent-gating",
+          },
+        },
+      }),
+      findPendingApprovalRequest: async (dedupeKey) => {
+        const pending = this.approvalRequestStore.list({ status: "pending", requesterActorId: agent.id, taskId, limit: 100 });
+        return pending.find((request) => request.targetAction.context?.approvalDedupeKey === dedupeKey) ?? null;
+      },
+    };
   }
 
   /** Returns the set of task IDs currently being executed. */
@@ -2138,8 +2266,11 @@ export class TaskExecutor {
     // true = requeue to todo, false = budget exhausted (already marked failed).
     let stuckRequeue: boolean | null = null;
     let taskDone = false;
+    let reviewAddressingActivated = false;
 
     try {
+      await this.transitionReviewAddressing(task.id, ["queued"], "in-progress");
+      reviewAddressingActivated = true;
       // Check dependencies
       const allTasks = await this.store.listTasks({ slim: true, includeArchived: false });
       const unmetDeps = task.dependencies.filter((depId) => {
@@ -2392,6 +2523,8 @@ export class TaskExecutor {
           pluginRunner: this.options.pluginRunner,
           runtimeHint: stepSessionRuntimeHint,
           assignedAgentRuntimeConfig: (stepSessionAgent?.runtimeConfig ?? undefined) as Record<string, unknown> | undefined,
+          actionGateContext: this.buildActionGateContext(task.id, stepSessionAgent),
+          permanentAgentGating: this.buildPermanentAgentGatingContext(task.id, stepSessionAgent),
           // Pass skill selection context from the main executor session
           skillSelection: skillContext.skillSelectionContext,
           // Pass agentStore and messageStore for delegation and messaging tools
@@ -2780,11 +2913,14 @@ export class TaskExecutor {
       // Build custom tools for the worker
       // Track the last code review verdict per step so we can enforce REVISE
       // (block fn_task_update status="done" until the agent re-reviews and gets APPROVE).
+      // Keyed by 0-indexed step (stepIndex). fn_task_update translates from
+      // its 1-indexed `step` parameter via `stepIndex = step - 1` (FN-3757).
       const codeReviewVerdicts = new Map<number, ReviewVerdict>();
 
       let wasPaused = false;
       // Mutable ref — populated after createFnAgent, tools access lazily via closure
       const sessionRef: { current: AgentSession | null } = { current: null };
+      // Keyed by 0-indexed step (stepIndex) to match fn_review_step.
       const stepCheckpoints = new Map<number, string>();
 
       const stuckDetector = this.options.stuckTaskDetector;
@@ -2826,11 +2962,14 @@ export class TaskExecutor {
         this.createSpawnAgentTool(task.id, worktreePath, settings),
         this.createTaskDocumentWriteTool(task.id),
         this.createTaskDocumentReadTool(task.id),
-        ...createResearchTools({
-          store: this.store,
-          rootDir: this.rootDir,
-          getSettings: async () => this.store.getSettings(),
-        }),
+        ...(isResearchToolSurfaceEnabled(settings)
+          ? createResearchTools({
+            store: this.store,
+            rootDir: this.rootDir,
+            getSettings: async () => this.store.getSettings(),
+          })
+          : []),
+        createWebFetchTool(),
         ...createMemoryTools(this.rootDir, settings, assignedAgent ? {
           agentMemory: {
             agentId: assignedAgent.id,
@@ -2847,6 +2986,8 @@ export class TaskExecutor {
           ...(assignedAgentId ? [
             createGetAgentConfigTool(this.options.agentStore, assignedAgentId),
             createUpdateAgentConfigTool(this.options.agentStore, assignedAgentId),
+            createAgentCreateTool(this.options.agentStore, assignedAgentId),
+            createAgentDeleteTool(this.options.agentStore, assignedAgentId),
           ] : []),
         ] : []),
         // Messaging tools — allows executor agents to send and receive messages.
@@ -2855,7 +2996,7 @@ export class TaskExecutor {
           createReadMessagesTool(this.options.messageStore, assignedAgentId),
         ] : []),
         // Add plugin tools from PluginRunner
-        ...(this.options.pluginRunner?.getPluginTools() ?? []),
+        ...getEnabledPluginTools(this.options.pluginRunner),
       ];
 
       // Accumulates the full assistant text output for the most recent session.
@@ -2946,6 +3087,8 @@ export class TaskExecutor {
           sessionManager,
           // Skill selection: use assigned agent skills if available, otherwise role fallback
           ...(skillContext.skillSelectionContext ? { skillSelection: skillContext.skillSelectionContext } : {}),
+          actionGateContext: this.buildActionGateContext(task.id, assignedAgent),
+          permanentAgentGating: this.buildPermanentAgentGatingContext(task.id, assignedAgent),
           taskId: task.id,
           taskTitle: detail.title,
           onFallbackModelUsed: createFallbackModelObserver({
@@ -3262,6 +3405,8 @@ export class TaskExecutor {
                 sessionManager: SessionManager.create(worktreePath),
                 // Skill selection: use assigned agent skills if available, otherwise role fallback
                 ...(skillContext.skillSelectionContext ? { skillSelection: skillContext.skillSelectionContext } : {}),
+                actionGateContext: this.buildActionGateContext(task.id, assignedAgent),
+                permanentAgentGating: this.buildPermanentAgentGatingContext(task.id, assignedAgent),
               });
               if (retrySessionFile) {
                 this.store.updateTask(task.id, { sessionFile: retrySessionFile }).catch((err: unknown) => {
@@ -3681,6 +3826,15 @@ export class TaskExecutor {
         this.options.onError?.(task, err instanceof Error ? err : new Error(errorMessage));
       }
     } finally {
+      if (reviewAddressingActivated) {
+        const latestTask = await this.store.getTask(task.id);
+        if (taskDone) {
+          await this.transitionReviewAddressing(task.id, ["in-progress", "queued"], "addressed");
+        } else if (latestTask.status === "failed") {
+          await this.transitionReviewAddressing(task.id, ["in-progress", "queued"], "failed");
+        }
+      }
+
       this.executing.delete(task.id);
       // Clear run context at end of execute() lifecycle
       this.currentRunContext = undefined;
@@ -3794,10 +3948,23 @@ export class TaskExecutor {
           stuckDetector?.recordProgress(taskId);
         }
 
+        if (!Number.isInteger(step) || step < 1) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Invalid step number: ${step}. Steps are 1-indexed.`,
+            }],
+            details: {},
+          };
+        }
+
+        const stepIndex = step - 1;
+
         // Enforce code review REVISE: block advancing to "done" when the last
         // code review for this step returned REVISE. The agent must fix the
         // issues and call fn_review_step(type="code") again before proceeding.
-        if (status === "done" && codeReviewVerdicts.get(step) === "REVISE") {
+        // FN-3757: verdict/checkpoint maps are keyed by 0-indexed stepIndex.
+        if (status === "done" && codeReviewVerdicts.get(stepIndex) === "REVISE") {
           return {
             content: [{
               type: "text" as const,
@@ -3810,19 +3977,17 @@ export class TaskExecutor {
           };
         }
 
-        const stepIndex = step - 1;
-        if (!Number.isInteger(stepIndex) || stepIndex < 0) {
+        const task = await store.updateStep(taskId, stepIndex, status as StepStatus);
+        const stepInfo = task.steps[stepIndex];
+        if (!stepInfo) {
           return {
             content: [{
               type: "text" as const,
-              text: `Invalid step number: ${step}. Steps are 1-indexed.`,
+              text: `Invalid step number: ${step}. This task has ${task.steps.length} step(s) (1-indexed).`,
             }],
             details: {},
           };
         }
-
-        const task = await store.updateStep(taskId, stepIndex, status as StepStatus);
-        const stepInfo = task.steps[stepIndex];
         const persistedStatus = stepInfo.status;
         const progress = task.steps.filter((s) => s.status === "done").length;
 
@@ -3838,7 +4003,8 @@ export class TaskExecutor {
         ) {
           const leafId = sessionRef.current.sessionManager.getLeafId();
           if (leafId) {
-            stepCheckpoints.set(step, leafId);
+            // FN-3757: verdict/checkpoint maps are keyed by 0-indexed stepIndex.
+            stepCheckpoints.set(stepIndex, leafId);
           }
         }
 
@@ -3976,6 +4142,41 @@ export class TaskExecutor {
     };
   }
 
+  private async transitionReviewAddressing(taskId: string, from: Array<"queued" | "in-progress" | "addressed" | "failed">, to: "queued" | "in-progress" | "addressed" | "failed"): Promise<void> {
+    const task = await this.store.getTask(taskId);
+    const reviewState = task.reviewState;
+    if (!reviewState || reviewState.addressing.length === 0) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    let changed = false;
+    const addressing = reviewState.addressing.map((record) => {
+      if (!from.includes(record.status)) {
+        return record;
+      }
+      changed = true;
+      return {
+        ...record,
+        status: to,
+        startedAt: to === "in-progress" ? now : record.startedAt,
+        completedAt: to === "addressed" || to === "failed" ? now : record.completedAt,
+        error: to === "addressed" ? undefined : record.error,
+      };
+    });
+
+    if (!changed) {
+      return;
+    }
+
+    await this.store.updateTask(taskId, {
+      reviewState: {
+        ...reviewState,
+        addressing,
+      },
+    });
+  }
+
   private createTaskDoneTool(taskId: string, onDone: () => void): ToolDefinition {
     const store = this.store;
     return {
@@ -4092,6 +4293,29 @@ export class TaskExecutor {
         reviewerLog.log(`${taskId}: ${reviewType} review for Step ${step} (${step_name})`);
         await store.logEntry(taskId, `${reviewType} review requested for Step ${step} (${step_name})`);
 
+        // Auto-advance the step to "in-progress" if the agent is requesting a
+        // review without having flipped it themselves. Some runtimes (notably
+        // permanent-agent CEO sessions on the openai-codex transport) skip the
+        // bookkeeping fn_task_update call entirely. Tying step state to the
+        // review tool keeps the dashboard accurate without a second tool call.
+        // Skip the auto-update if the step is already done/skipped (don't
+        // regress completed work) — updateStep guards against that anyway.
+        try {
+          const currentTask = await store.getTask(taskId);
+          if (
+            Number.isInteger(step) &&
+            step >= 0 &&
+            step < currentTask.steps.length &&
+            currentTask.steps[step].status === "pending"
+          ) {
+            await store.updateStep(taskId, step, "in-progress");
+          }
+        } catch (autoUpdateErr) {
+          reviewerLog.warn(
+            `${taskId}: failed to auto-advance Step ${step} to in-progress on review entry: ${autoUpdateErr instanceof Error ? autoUpdateErr.message : String(autoUpdateErr)}`,
+          );
+        }
+
         try {
           const settings = await store.getSettings();
           // Run the reviewer via semaphore.runNested so its slot accounting
@@ -4162,6 +4386,31 @@ export class TaskExecutor {
               codeReviewVerdicts.set(step, "REVISE");
             } else if (result.verdict === "APPROVE") {
               codeReviewVerdicts.delete(step);
+              // Auto-mark the step as done once its code review passes. The
+              // recoverApprovedStepsOnResume path (executor.ts) already does
+              // this on engine restart from log scan; doing it inline avoids
+              // depending on the agent's follow-up fn_task_update call, which
+              // permanent-agent runtimes routinely skip.
+              try {
+                const currentTask = await store.getTask(taskId);
+                if (
+                  Number.isInteger(step) &&
+                  step >= 0 &&
+                  step < currentTask.steps.length &&
+                  currentTask.steps[step].status !== "done" &&
+                  currentTask.steps[step].status !== "skipped"
+                ) {
+                  await store.updateStep(taskId, step, "done");
+                  await store.logEntry(
+                    taskId,
+                    `Step ${step} (${step_name}) auto-marked done by code review APPROVE`,
+                  );
+                }
+              } catch (autoDoneErr) {
+                reviewerLog.warn(
+                  `${taskId}: failed to auto-mark Step ${step} done after APPROVE: ${autoDoneErr instanceof Error ? autoDoneErr.message : String(autoDoneErr)}`,
+                );
+              }
             }
           }
 

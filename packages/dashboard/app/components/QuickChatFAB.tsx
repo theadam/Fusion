@@ -19,6 +19,7 @@ import type { DiscoveredSkill } from "@fusion/dashboard";
 import { CustomModelDropdown } from "./CustomModelDropdown";
 import { ProviderIcon } from "./ProviderIcon";
 import { AgentMentionPopup } from "./AgentMentionPopup";
+import { matchesAgentMentionFilter } from "./mentionMatching";
 import { FN_AGENT_ID, useQuickChat, type ChatMessageInfo, type ToolCallInfo } from "../hooks/useQuickChat";
 import { useAgents } from "../hooks/useAgents";
 import { FileMentionPopup } from "./FileMentionPopup";
@@ -980,6 +981,7 @@ export function QuickChatFAB({
   // slides down on top of it.
   const suppressVvShrinkRef = useRef(false);
   const isUserScrollingRef = useRef(false);
+  const lastScrolledOpenSessionKeyRef = useRef<string | null>(null);
 
   // Pin the document at the top while the panel is open on mobile.
   // Otherwise iOS can leave window.scrollY > 0 (e.g. after the keyboard
@@ -1343,14 +1345,10 @@ export function QuickChatFAB({
     return matchingSkills.slice(0, 10);
   }, [discoveredSkills, skillFilter]);
 
-  const filteredMentionAgents = useMemo(() => {
-    const normalizedFilter = mentionFilter.trim().toLowerCase();
-    if (!normalizedFilter) {
-      return agents;
-    }
-
-    return agents.filter((agent) => agent.name.toLowerCase().includes(normalizedFilter));
-  }, [agents, mentionFilter]);
+  const filteredMentionAgents = useMemo(
+    () => agents.filter((agent) => matchesAgentMentionFilter(agent.name, mentionFilter)),
+    [agents, mentionFilter],
+  );
 
   const mentionAgentsByName = useMemo(() => {
     const byName = new Map<string, Agent>();
@@ -1426,6 +1424,26 @@ export function QuickChatFAB({
     setIsUserScrolling(false);
     isUserScrollingRef.current = false;
   }, []);
+
+  useLayoutEffect(() => {
+    const sessionId = activeSession?.id ?? null;
+    if (!isOpen || !sessionId) {
+      lastScrolledOpenSessionKeyRef.current = null;
+      return;
+    }
+    if (messages.length === 0) return;
+
+    const openSessionKey = `${isOpen}:${sessionId}`;
+    if (lastScrolledOpenSessionKeyRef.current === openSessionKey) return;
+
+    const messagesEl = messagesRef.current;
+    if (!messagesEl) return;
+
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    setIsUserScrolling(false);
+    isUserScrollingRef.current = false;
+    lastScrolledOpenSessionKeyRef.current = openSessionKey;
+  }, [isOpen, activeSession?.id, messages.length]);
 
   // Auto-scroll messages when user is near the live tail.
   useEffect(() => {

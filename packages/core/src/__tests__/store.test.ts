@@ -25,6 +25,7 @@ const mockedRunCommandAsync = vi.mocked(runCommandAsync);
 
 import { TaskStore, TaskHasDependentsError } from "../store.js";
 import { AgentStore } from "../agent-store.js";
+import { CentralDatabase } from "../central-db.js";
 import { appendFile, readFile, writeFile, mkdir, rm, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { mkdtempSync, existsSync } from "node:fs";
@@ -133,6 +134,37 @@ describe("TaskStore", () => {
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(taskId, timestamp, text, type, detail ?? null, agent ?? null);
   }
+
+  describe("plugin store routing", () => {
+    it("routes plugin writes to the configured central global dir", async () => {
+      const pluginStore = store.getPluginStore();
+      await pluginStore.init();
+
+      await pluginStore.registerPlugin({
+        manifest: {
+          id: "taskstore-plugin",
+          name: "TaskStore Plugin",
+          version: "1.0.0",
+        },
+        path: "/tmp/taskstore-plugin",
+      });
+
+      const centralDb = new CentralDatabase(globalDir);
+      centralDb.init();
+      const installCount = centralDb
+        .prepare("SELECT COUNT(*) as count FROM plugin_installs WHERE id = ?")
+        .get("taskstore-plugin") as { count: number };
+      expect(installCount.count).toBe(1);
+
+      const localCount = store
+        .getDatabase()
+        .prepare("SELECT COUNT(*) as count FROM plugins WHERE id = ?")
+        .get("taskstore-plugin") as { count: number };
+      expect(localCount.count).toBe(0);
+
+      centralDb.close();
+    });
+  });
 
   // ── Prompt generation (no duplicate description) ───────────────
 
@@ -546,26 +578,35 @@ describe("TaskStore", () => {
       expect(detail.branch).toBe("fusion/fn-001-custom");
     });
 
-    it("updates and clears branch fields via null patch semantics", async () => {
+    it("preserves branch/baseBranch independently and clears with null without disturbing unrelated fields", async () => {
       const task = await store.createTask({
         description: "Branch field update",
+        title: "Keep this title",
         baseBranch: "main",
         branch: "fusion/fn-001-initial",
       });
 
-      const updated = await store.updateTask(task.id, {
-        baseBranch: "release/2026.05",
+      const updatedBranchOnly = await store.updateTask(task.id, {
         branch: "fusion/fn-001-updated",
       });
-      expect(updated.baseBranch).toBe("release/2026.05");
-      expect(updated.branch).toBe("fusion/fn-001-updated");
+      expect(updatedBranchOnly.branch).toBe("fusion/fn-001-updated");
+      expect(updatedBranchOnly.baseBranch).toBe("main");
 
-      const cleared = await store.updateTask(task.id, {
-        baseBranch: null,
-        branch: null,
+      const updatedBaseOnly = await store.updateTask(task.id, {
+        baseBranch: "release/2026.05",
       });
-      expect(cleared.baseBranch).toBeUndefined();
-      expect(cleared.branch).toBeUndefined();
+      expect(updatedBaseOnly.baseBranch).toBe("release/2026.05");
+      expect(updatedBaseOnly.branch).toBe("fusion/fn-001-updated");
+
+      const clearedBranch = await store.updateTask(task.id, { branch: null });
+      expect(clearedBranch.branch).toBeUndefined();
+      expect(clearedBranch.baseBranch).toBe("release/2026.05");
+      expect(clearedBranch.title).toBe("Keep this title");
+
+      const clearedBaseBranch = await store.updateTask(task.id, { baseBranch: null });
+      expect(clearedBaseBranch.baseBranch).toBeUndefined();
+      expect(clearedBaseBranch.branch).toBeUndefined();
+      expect(clearedBaseBranch.title).toBe("Keep this title");
     });
 
     it("round-trips branch fields through listTasks and reload", async () => {
@@ -861,6 +902,34 @@ describe("TaskStore", () => {
       });
 
       await expect(store.selectNextTaskForAgent("agent-without-tasks")).resolves.toBeNull();
+    });
+
+    it("skips implementation todos for non-executor role agents", async () => {
+      await store.createTask({
+        description: "Assigned todo",
+        column: "todo",
+        assignedAgentId: "agent-1",
+      });
+
+      await expect(
+        store.selectNextTaskForAgent("agent-1", { id: "agent-1", role: "reviewer" }),
+      ).resolves.toBeNull();
+    });
+
+    it("returns implementation todos for executor role agents", async () => {
+      const todo = await store.createTask({
+        description: "Assigned todo",
+        column: "todo",
+        assignedAgentId: "agent-1",
+      });
+
+      const selected = await store.selectNextTaskForAgent("agent-1", {
+        id: "agent-1",
+        role: "executor",
+      });
+
+      expect(selected?.task.id).toBe(todo.id);
+      expect(selected?.priority).toBe("todo");
     });
   });
 
@@ -4096,6 +4165,136 @@ describe("TaskStore", () => {
       const restored = await store.unarchiveTask(task.id);
       expect(restored.column).toBe("done");
       expect(restored.sourceIssue).toEqual(sourceIssue);
+    });
+
+    it("persists review metadata on create, update, and reload", async () => {
+      const review: NonNullable<Task["review"]> = {
+        mode: "direct",
+        source: "reviewer-agent",
+        decision: "changes-requested",
+        summary: "Address reviewer findings",
+        latestRefreshAt: new Date().toISOString(),
+        selectedItemIds: ["rvw-1"],
+        items: [
+          {
+            id: "rvw-1",
+            source: "reviewer-agent",
+            status: "queued",
+            summary: "Fix failing assertion",
+            body: "Assertion in task detail modal test is stale.",
+            reviewer: "reviewer",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      };
+
+      const created = await store.createTask({ description: "Task with review metadata" });
+      const updated = await store.updateTask(created.id, { review });
+      expect(updated.review).toEqual(review);
+
+      const reloaded = await store.getTask(created.id);
+      expect(reloaded.review).toEqual(review);
+
+      const cleared = await store.updateTask(created.id, { review: null });
+      expect(cleared.review).toBeUndefined();
+    });
+
+    it("persists reviewState independently from legacy review", async () => {
+      const created = await store.createTask({ description: "Task with review state" });
+      const selectedAt = new Date().toISOString();
+      const reviewState: NonNullable<Task["reviewState"]> = {
+        source: "pull-request",
+        summary: { reviewDecision: "CHANGES_REQUESTED", reviewers: [], blockingReasons: [], checks: [] },
+        items: [{ id: "ri-1", body: "Fix this", author: { login: "octocat" }, createdAt: selectedAt }],
+        addressing: [{
+          itemId: "ri-1",
+          status: "queued",
+          selectedAt,
+          snapshot: {
+            itemId: "ri-1",
+            sourceMode: "pull-request",
+            source: "pr-review",
+            summary: "Fix this",
+            body: "Fix this",
+            authorLogin: "octocat",
+          },
+        }],
+      };
+
+      await store.updateTask(created.id, { reviewState });
+      const reloaded = await store.getTask(created.id);
+      expect(reloaded.reviewState).toEqual(reviewState);
+      expect(reloaded.review).toBeUndefined();
+    });
+
+    it("hydrates legacy addressing records with snapshots", async () => {
+      const created = await store.createTask({ description: "Legacy review state" });
+      const selectedAt = new Date().toISOString();
+      await store.updateTask(created.id, {
+        reviewState: {
+          source: "reviewer-agent",
+          items: [{
+            id: "review-1",
+            body: "Update tests for regression",
+            summary: "Update tests",
+            author: { login: "reviewer" },
+            createdAt: selectedAt,
+            source: "reviewer-agent",
+          }],
+          addressing: [{ itemId: "review-1", status: "queued", selectedAt }],
+        },
+      });
+
+      const reloaded = await store.getTask(created.id);
+      expect(reloaded.reviewState?.addressing[0].snapshot).toEqual({
+        itemId: "review-1",
+        sourceMode: "reviewer-agent",
+        source: "reviewer-agent",
+        summary: "Update tests",
+        body: "Update tests for regression",
+        authorLogin: "reviewer",
+        filePath: undefined,
+        threadId: undefined,
+        url: undefined,
+      });
+    });
+
+    it("preserves review metadata through archive and unarchive", async () => {
+      const review: NonNullable<Task["review"]> = {
+        mode: "pull-request",
+        source: "github-pr",
+        decision: "pending",
+        summary: "PR review feedback",
+        latestRefreshAt: new Date().toISOString(),
+        selectedItemIds: ["gh-1"],
+        items: [
+          {
+            id: "gh-1",
+            source: "github-pr",
+            status: "in-progress",
+            summary: "Address thread in src/file.ts",
+            filePath: "src/file.ts",
+            line: 42,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      };
+      const task = await store.createTask({ description: "Archive review persistence" });
+      await store.updateTask(task.id, { review });
+
+      await store.moveTask(task.id, "todo");
+      await store.moveTask(task.id, "in-progress");
+      await store.moveTask(task.id, "in-review");
+      await store.moveTask(task.id, "done");
+      await store.archiveTask(task.id, false);
+
+      const archived = await store.getTask(task.id);
+      expect(archived.review).toEqual(review);
+
+      const restored = await store.unarchiveTask(task.id);
+      expect(restored.review).toEqual(review);
     });
 
     it("sets and clears mission linkage fields via updateTask", async () => {

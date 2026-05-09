@@ -35,7 +35,7 @@ Research is **not** a replacement for reading source code or local docs — use 
 
 ## Prerequisites
 
-Research requires provider configuration before runs can execute. If setup is incomplete, the dashboard shows a setup prompt and CLI/agent tools return actionable error codes.
+Research requires both the experimental flag and provider configuration before runs can execute. If setup is incomplete, the dashboard shows a setup prompt and CLI/agent tools return actionable error codes.
 
 ### 1. Enable the feature flag
 
@@ -49,7 +49,7 @@ The Research view is gated behind an experimental feature flag. Set in global se
 }
 ```
 
-This also reveals the **Research Defaults** and **Research** settings sections in the dashboard Settings modal.
+This also reveals the **Research Defaults** and **Research** settings sections in the dashboard Settings modal, and enables agent/CLI research tools (`fn_research_*`).
 
 ### 2. Configure a web search provider
 
@@ -273,6 +273,8 @@ When `available` is `false`, the response includes `reason` and `setupInstructio
 ## Agent Integration
 
 AI agents (triage, executor, and custom roles) can use research tools during planning and execution sessions. These tools are registered in the pi extension (`packages/cli/src/extension.ts`).
+
+Additionally, planning-mode sessions and the LLM synthesis agent can opt into runtime builtin `WebSearch`/`WebFetch` tools (when the selected runtime supports them), complementing configured research providers.
 
 ### Available tools
 

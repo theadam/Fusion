@@ -35,6 +35,9 @@ vi.mock("../../api", async (importOriginal) => {
     pauseTask: vi.fn().mockResolvedValue({}),
     unpauseTask: vi.fn().mockResolvedValue({}),
     fetchWorkflowResults: vi.fn().mockResolvedValue([]),
+    fetchTaskReview: vi.fn().mockResolvedValue({ reviewState: { source: "reviewer-agent", items: [], addressing: [] }, automationStatus: null, emptyMessage: "No reviewer feedback yet — this task has not produced reviewer-agent feedback in direct mode." }),
+    refreshTaskReview: vi.fn().mockResolvedValue({ reviewState: undefined, automationStatus: null }),
+    reviseTaskReviewItems: vi.fn().mockResolvedValue({ task: makeTask(), reviewState: undefined }),
   });
 });
 
@@ -52,6 +55,7 @@ vi.mock("lucide-react", () => ({
   ChevronDown: () => null,
   ChevronRight: (props: any) => React.createElement("svg", { "data-testid": "chevron-right-icon", ...props }),
   ArrowLeft: () => null,
+  Zap: () => null,
   X: () => null,
   Maximize2: () => null,
   Minimize2: () => null,

@@ -185,7 +185,7 @@ describe("commitOrAmendMergeWithFixes — staging allowlist", () => {
       new Set<string>(), // empty fixModifiedFiles
     );
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ ok: true, reason: expect.any(String) });
 
     // The unrelated file must NOT appear in the commit
     const committedFiles = execSync("git diff --name-only HEAD~1 HEAD", {
@@ -228,7 +228,7 @@ describe("commitOrAmendMergeWithFixes — staging allowlist", () => {
       new Set(["README.md"]), // fix agent touched this
     );
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ ok: true, reason: expect.any(String) });
 
     const committedFiles = execSync("git diff --name-only HEAD~1 HEAD", {
       cwd: dir,
@@ -266,7 +266,7 @@ describe("commitOrAmendMergeWithFixes — staging allowlist", () => {
       new Set(["feature-c.ts"]), // fix agent touched the same file the squash staged
     );
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ ok: true, reason: expect.any(String) });
 
     // The committed file must contain the fix agent's content, not the squash's
     const committedContent = execSync("git show HEAD:feature-c.ts", {
@@ -305,7 +305,7 @@ describe("commitOrAmendMergeWithFixes — staging allowlist", () => {
       new Set(["new-fixture.ts"]), // fix agent created this file
     );
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ ok: true, reason: expect.any(String) });
 
     const committedFiles = execSync("git diff --name-only HEAD~1 HEAD", {
       cwd: dir,
@@ -340,7 +340,7 @@ describe("commitOrAmendMergeWithFixes — staging allowlist", () => {
       new Set<string>(), // empty — the WIP file is not fix-agent-produced
     );
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ ok: true, reason: expect.any(String) });
 
     const committedFiles = execSync("git diff --name-only HEAD~1 HEAD", {
       cwd: dir,
@@ -392,7 +392,7 @@ describe("commitOrAmendMergeWithFixes — staging allowlist", () => {
       new Set(["README.md"]), // only the agent's file is in the allowlist
     );
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ ok: true, reason: expect.any(String) });
 
     const committedFiles = execSync("git diff --name-only HEAD~1 HEAD", {
       cwd: dir,
@@ -408,6 +408,56 @@ describe("commitOrAmendMergeWithFixes — staging allowlist", () => {
 
     const warnMessages = warnSpy.mock.calls.map((c) => String(c[0]));
     expect(warnMessages.some((m) => m.includes("unrelated.ts") && m.includes("refusing to stage"))).toBe(true);
+  });
+
+  // ── Regression: phantom-merge guard false-negative ────────────────────
+  //
+  // Previously a stale `preAttemptHeadSha` (e.g. captured by a redundant
+  // attempt 2 after attempt 1's AI commit) combined with a fix that touched
+  // no tracked files would trip the phantom-merge guard and strand the task
+  // in In Review even though the merge commit already landed on HEAD. The
+  // guard now defers to the `Fusion-Task-Id` trailer: if HEAD already records
+  // this task, treat the no-op finalize as success.
+  it("returns success when HEAD already carries the Fusion-Task-Id trailer (phantom-merge false-negative defense)", async () => {
+    const taskId = "FN-3727";
+    const git = (cmd: string) => execSync(cmd, { cwd: dir, stdio: "pipe" }).toString();
+
+    // Simulate the state after attempt 1 successfully committed: HEAD carries
+    // the Fusion-Task-Id trailer for this task; the working tree is clean.
+    git("git checkout -b feat/Z");
+    writeFileSync(join(dir, "feature-z.ts"), "export const z = 1;\n");
+    git("git add feature-z.ts");
+    git('git commit -m "feat: add feature-z" -m "Fusion-Task-Id: ' + taskId + '"');
+    git("git checkout main");
+    git("git merge --squash feat/Z");
+    git('git commit -m "feat(' + taskId + '): add feature-z" -m "Fusion-Task-Id: ' + taskId + '"');
+
+    // Now invoke the finalizer with a STALE baseline — preAttemptHeadSha
+    // points at HEAD itself (mimicking attempt 2 capturing HEAD after
+    // attempt 1's commit) and no fix-modified files.
+    const headSha = git("git rev-parse HEAD").trim();
+    const result = await commitOrAmendMergeWithFixes(
+      dir,
+      taskId,
+      "feat/Z",
+      "- feat: add feature-z",
+      false,
+      headSha, // stale baseline — equals current HEAD
+      "",
+      undefined,
+      STUB_SETTINGS,
+      undefined,
+      null,
+      null,
+      new Set<string>(), // fix touched no tracked files
+    );
+
+    // Must NOT trip the phantom-merge guard: the trailer says we're done.
+    expect(result).toEqual({ ok: true, reason: expect.any(String) });
+
+    // No new commit should have been fabricated.
+    const newHead = git("git rev-parse HEAD").trim();
+    expect(newHead).toBe(headSha);
   });
 });
 
@@ -521,7 +571,7 @@ describe("commitOrAmendMergeWithFixes — embedded-space paths round-trip", () =
       new Set([spacedPath]), // fix agent touched this tracked file
     );
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ ok: true, reason: expect.any(String) });
 
     // Verify both the squash file and the spaced file were committed.
     const committedFiles = execSync("git diff --name-only HEAD~1 HEAD", {
@@ -565,7 +615,7 @@ describe("commitOrAmendMergeWithFixes — embedded-space paths round-trip", () =
       new Set<string>(), // empty allowlist
     );
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ ok: true, reason: expect.any(String) });
 
     const committedFiles = execSync("git diff --name-only HEAD~1 HEAD", {
       cwd: dir,

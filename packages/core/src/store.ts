@@ -3,17 +3,17 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync, watch, type FSWatcher } from "node:fs";
-import type { Task, TaskDetail, TaskCreateInput, TaskAttachment, AgentLogEntry, BoardConfig, Column, MergeResult, Settings, GlobalSettings, ProjectSettings, ActivityLogEntry, ActivityEventType, TaskDocument, TaskDocumentRevision, TaskDocumentCreateInput, TaskDocumentWithTask, InboxTask, TaskLogEntry, RunMutationContext, RunAuditEvent, RunAuditEventInput, RunAuditEventFilter, ArchivedTaskEntry, ArchiveAgentLogMode, TaskPriority, SourceType, WorkflowStepTemplate } from "./types.js";
+import type { Task, TaskDetail, TaskCreateInput, TaskAttachment, AgentLogEntry, BoardConfig, Column, MergeResult, Settings, GlobalSettings, ProjectSettings, ActivityLogEntry, ActivityEventType, TaskDocument, TaskDocumentRevision, TaskDocumentCreateInput, TaskDocumentWithTask, InboxTask, TaskLogEntry, RunMutationContext, RunAuditEvent, RunAuditEventInput, RunAuditEventFilter, ArchivedTaskEntry, ArchiveAgentLogMode, TaskPriority, SourceType, WorkflowStepTemplate, Agent } from "./types.js";
 import { createActivityLogSnapshot, createRunAuditSnapshot, createTaskMetadataSnapshot, toTaskMetadataRecord, validateSnapshotEnvelope, type ActivityLogSnapshot, type RunAuditSnapshot, type TaskMetadataSnapshot } from "./shared-mesh-state.js";
 import { VALID_TRANSITIONS, DEFAULT_SETTINGS, isGlobalSettingsKey, WORKFLOW_STEP_TEMPLATES, validateDocumentKey } from "./types.js";
 import { normalizeTaskPriority } from "./task-priority.js";
+import { canAgentTakeImplementationTask } from "./agent-role-policy.js";
 import { GlobalSettingsStore } from "./global-settings.js";
 import { Database, toJson, toJsonNullable, fromJson } from "./db.js";
 import { ArchiveDatabase } from "./archive-db.js";
 import { detectLegacyData, migrateFromLegacy } from "./db-migrate.js";
 import { MissionStore } from "./mission-store.js";
 import { PluginStore } from "./plugin-store.js";
-import { RoadmapStore } from "./roadmap-store.js";
 import { InsightStore } from "./insight-store.js";
 import { ResearchStore } from "./research-store.js";
 import { TodoStore } from "./todo-store.js";
@@ -90,6 +90,8 @@ interface TaskRow {
   attachments: string | null;
   steeringComments: string | null;
   comments: string | null;
+  review: string | null;
+  reviewState: string | null;
   workflowStepResults: string | null;
   prInfo: string | null;
   issueInfo: string | null;
@@ -175,6 +177,40 @@ interface ActivityLogRow {
   taskTitle: string | null;
   details: string;
   metadata: string | null;
+}
+
+function normalizeTaskReviewState(reviewState: Task["reviewState"] | undefined): Task["reviewState"] | undefined {
+  if (!reviewState) {
+    return undefined;
+  }
+
+  const itemsById = new Map(reviewState.items.map((item) => [item.id, item]));
+  const sourceMode = reviewState.source;
+  const normalizedAddressing = reviewState.addressing.map((record) => {
+    const item = itemsById.get(record.itemId);
+    const source = item?.source === "reviewer-agent" ? "reviewer-agent" : "pr-review";
+    const summary = item?.summary?.trim() || item?.body?.trim().slice(0, 160) || `Review item ${record.itemId}`;
+    const body = item?.body ?? summary;
+    return {
+      ...record,
+      snapshot: record.snapshot ?? {
+        itemId: record.itemId,
+        sourceMode,
+        source,
+        summary,
+        body,
+        authorLogin: item?.author?.login,
+        filePath: item?.path,
+        threadId: item?.threadId,
+        url: item?.htmlUrl,
+      },
+    };
+  });
+
+  return {
+    ...reviewState,
+    addressing: normalizedAddressing,
+  };
 }
 
 const TASK_ACTIVITY_LOG_ENTRY_LIMIT = 1_000;
@@ -511,8 +547,6 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   private missionStore: MissionStore | null = null;
   /** Cached PluginStore instance */
   private pluginStore: PluginStore | null = null;
-  /** Cached RoadmapStore instance */
-  private roadmapStore: RoadmapStore | null = null;
   /** Cached InsightStore instance */
   private insightStore: InsightStore | null = null;
   /** Cached ResearchStore instance */
@@ -548,6 +582,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   // Tests that need cross-instance persistence (open store A, close,
   // open store B on the same dir, expect data) must leave this false.
   private readonly inMemoryDb: boolean;
+  private readonly globalSettingsDir?: string;
 
   constructor(
     private rootDir: string,
@@ -563,6 +598,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
     this.inMemoryDb = options?.inMemoryDb === true;
     const resolvedGlobalSettingsDir = globalSettingsDir
       ?? (process.env.VITEST === "true" ? join(rootDir, ".fusion-global-settings") : undefined);
+    this.globalSettingsDir = resolvedGlobalSettingsDir;
     this.globalSettingsStore = new GlobalSettingsStore(resolvedGlobalSettingsDir);
   }
 
@@ -751,6 +787,8 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         });
         return deduped.length > 0 ? deduped : undefined;
       })(),
+      review: fromJson<import("./types.js").TaskReview>(row.review) ?? undefined,
+      reviewState: normalizeTaskReviewState(fromJson<import("./types.js").TaskReviewState>(row.reviewState) ?? undefined),
       workflowStepResults: (() => { const w = fromJson<import("./types.js").WorkflowStepResult[]>(row.workflowStepResults); return w && w.length > 0 ? w : undefined; })(),
       prInfo: fromJson<import("./types.js").PrInfo>(row.prInfo),
       issueInfo: fromJson<import("./types.js").IssueInfo>(row.issueInfo),
@@ -813,6 +851,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
       sourceIssue: slim ? undefined : entry.sourceIssue,
       attachments: slim ? undefined : entry.attachments,
       comments: entry.comments,
+      review: slim ? undefined : entry.review,
       log: slim ? [] : entry.log ?? [],
       timedExecutionMs: slim ? this.computeTimedExecutionMs(entry.log) : undefined,
       createdAt: entry.createdAt,
@@ -936,6 +975,8 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
       sourceIssue: task.sourceIssue,
       attachments: task.attachments,
       comments: task.comments,
+      review: task.review,
+      reviewState: task.reviewState,
       prompt,
       ...agentLogFields,
       log: [{ timestamp: archivedAt, action: "Task archived" }],
@@ -1014,7 +1055,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
       "error", "summary", "thinkingLevel", "executionMode",
       "tokenUsageInputTokens", "tokenUsageOutputTokens", "tokenUsageCachedTokens", "tokenUsageTotalTokens", "tokenUsageFirstUsedAt", "tokenUsageLastUsedAt",
       "createdAt", "updatedAt", "columnMovedAt", "executionStartedAt", "executionCompletedAt",
-      "dependencies", "steps", "comments", "workflowStepResults", "steeringComments",
+      "dependencies", "steps", "comments", "review", "reviewState", "workflowStepResults", "steeringComments",
       "attachments", "prInfo", "issueInfo", "sourceIssueProvider", "sourceIssueRepository", "sourceIssueExternalIssueId", "sourceIssueNumber", "sourceIssueUrl", "mergeDetails",
       "breakIntoSubtasks", "enabledWorkflowSteps", "modifiedFiles",
       "missionId", "sliceId", "assignedAgentId", "pausedByAgentId", "assigneeUserId", "nodeId", "effectiveNodeId", "effectiveNodeSource",
@@ -1064,7 +1105,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
       "tokenUsageInputTokens", "tokenUsageOutputTokens", "tokenUsageCachedTokens", "tokenUsageTotalTokens", "tokenUsageFirstUsedAt", "tokenUsageLastUsedAt",
       "createdAt", "updatedAt", "columnMovedAt", "executionStartedAt", "executionCompletedAt",
       "dependencies", "steps", "attachments", "steeringComments",
-      "comments", "workflowStepResults", "prInfo", "issueInfo", "sourceIssueProvider", "sourceIssueRepository", "sourceIssueExternalIssueId", "sourceIssueNumber", "sourceIssueUrl", "mergeDetails",
+      "comments", "review", "reviewState", "workflowStepResults", "prInfo", "issueInfo", "sourceIssueProvider", "sourceIssueRepository", "sourceIssueExternalIssueId", "sourceIssueNumber", "sourceIssueUrl", "mergeDetails",
       "breakIntoSubtasks", "enabledWorkflowSteps", "modifiedFiles",
       "missionId", "sliceId", "assignedAgentId", "pausedByAgentId", "assigneeUserId", "nodeId", "effectiveNodeId", "effectiveNodeSource",
       "sourceType", "sourceAgentId", "sourceRunId", "sourceSessionId", "sourceMessageId", "sourceParentTaskId", "sourceMetadata",
@@ -1107,11 +1148,11 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         tokenUsageTotalTokens, tokenUsageFirstUsedAt, tokenUsageLastUsedAt, createdAt, updatedAt, columnMovedAt,
         executionStartedAt, executionCompletedAt,
         dependencies, steps, log, attachments, steeringComments,
-        comments, workflowStepResults, prInfo, issueInfo,
+        comments, review, reviewState, workflowStepResults, prInfo, issueInfo,
         sourceIssueProvider, sourceIssueRepository, sourceIssueExternalIssueId, sourceIssueNumber, sourceIssueUrl,
         mergeDetails, breakIntoSubtasks, enabledWorkflowSteps, modifiedFiles, missionId, sliceId, assignedAgentId, pausedByAgentId, assigneeUserId, nodeId, effectiveNodeId, effectiveNodeSource, sourceType, sourceAgentId, sourceRunId, sourceSessionId, sourceMessageId, sourceParentTaskId, sourceMetadata, checkedOutBy, checkedOutAt
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
@@ -1166,6 +1207,8 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         attachments = excluded.attachments,
         steeringComments = excluded.steeringComments,
         comments = excluded.comments,
+        review = excluded.review,
+        reviewState = excluded.reviewState,
         workflowStepResults = excluded.workflowStepResults,
         prInfo = excluded.prInfo,
         issueInfo = excluded.issueInfo,
@@ -1249,6 +1292,8 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
       toJson(task.attachments || []),
       toJson(task.steeringComments || []),
       toJson(task.comments || []),
+      toJsonNullable(task.review),
+      toJsonNullable(task.reviewState),
       toJson(task.workflowStepResults || []),
       toJsonNullable(task.prInfo),
       toJsonNullable(task.issueInfo),
@@ -2715,6 +2760,51 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   }
 
   /**
+   * List slim task rows with `updatedAt` strictly greater than the cursor.
+   *
+   * Uses strict `>` cursor semantics (rows where `updatedAt === since` are excluded),
+   * returns rows ordered by `updatedAt ASC`, defaults limit to 50, and caps at 200.
+   * Archived tasks are excluded by default unless `opts.includeArchived` is true.
+   *
+   * Callers should re-invoke this method with the last returned task's `updatedAt`
+   * as the next `since` cursor.
+   */
+  async listTasksModifiedSince(
+    since: string,
+    limit?: number,
+    opts?: { includeArchived?: boolean },
+  ): Promise<{ tasks: Task[]; hasMore: boolean }> {
+    if (Number.isNaN(Date.parse(since))) {
+      throw new TypeError("listTasksModifiedSince: invalid since cursor");
+    }
+
+    const defaultLimit = 50;
+    const resolvedLimit = typeof limit !== "number" || !Number.isFinite(limit)
+      ? defaultLimit
+      : Math.max(1, Math.min(200, Math.floor(limit)));
+    const includeArchived = opts?.includeArchived ?? false;
+    const selectClause = this.getTaskSelectClause(true);
+
+    const rows = includeArchived
+      ? (this.db.prepare(
+        `SELECT ${selectClause} FROM tasks WHERE updatedAt > ? ORDER BY updatedAt ASC LIMIT ?`,
+      ).all(since, resolvedLimit + 1) as TaskRow[])
+      : (this.db.prepare(
+        `SELECT ${selectClause} FROM tasks WHERE updatedAt > ? AND "column" != 'archived' ORDER BY updatedAt ASC LIMIT ?`,
+      ).all(since, resolvedLimit + 1) as TaskRow[]);
+
+    const hasMore = rows.length > resolvedLimit;
+    const tasks = rows.slice(0, resolvedLimit).map((row) => {
+      const task = this.rowToTask(row);
+      task.timedExecutionMs = this.computeTimedExecutionMs(task.log);
+      task.log = [];
+      return task;
+    });
+
+    return { tasks, hasMore };
+  }
+
+  /**
    * Returns the ID of a task currently in an active merge status ("merging" or
    * "merging-pr"), optionally excluding a specific task ID.
    *
@@ -2861,7 +2951,10 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
     return rows.map((row) => this.rowToTask(row));
   }
 
-  async selectNextTaskForAgent(agentId: string): Promise<InboxTask | null> {
+  async selectNextTaskForAgent(
+    agentId: string,
+    agent?: Pick<Agent, "id" | "role">,
+  ): Promise<InboxTask | null> {
     const tasks = await this.listTasks({ slim: true });
     if (tasks.length === 0) {
       return null;
@@ -2887,7 +2980,16 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
       };
     }
 
-    const todoCandidates = assignedTasks.filter((task) => task.column === "todo" && task.paused !== true);
+    const roleCompatibleAssignedTasks = agent
+      ? assignedTasks.filter((task) => {
+          if (task.column === "in-progress") {
+            return true;
+          }
+          return canAgentTakeImplementationTask(agent, task);
+        })
+      : assignedTasks;
+
+    const todoCandidates = roleCompatibleAssignedTasks.filter((task) => task.column === "todo" && task.paused !== true);
 
     const readyTodo = todoCandidates
       .filter((task) => {
@@ -3185,7 +3287,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
 
   async updateTask(
     id: string,
-    updates: { title?: string; description?: string; priority?: TaskPriority | null; prompt?: string; worktree?: string | null; status?: string | null; dependencies?: string[]; steps?: import("./types.js").TaskStep[]; currentStep?: number; blockedBy?: string | null; assignedAgentId?: string | null; pausedByAgentId?: string | null; assigneeUserId?: string | null; nodeId?: string | null; effectiveNodeId?: string | null; effectiveNodeSource?: string | null; checkedOutBy?: string | null; checkedOutAt?: string | null; paused?: boolean; baseBranch?: string | null; branch?: string | null; executionStartBranch?: string | null; baseCommitSha?: string | null; size?: "S" | "M" | "L"; reviewLevel?: number; executionMode?: import("./types.js").ExecutionMode | null; mergeRetries?: number; workflowStepRetries?: number; stuckKillCount?: number | null; postReviewFixCount?: number | null; recoveryRetryCount?: number | null; taskDoneRetryCount?: number | null; verificationFailureCount?: number | null; mergeConflictBounceCount?: number | null; nextRecoveryAt?: string | null; enabledWorkflowSteps?: string[]; modelProvider?: string | null; modelId?: string | null; validatorModelProvider?: string | null; validatorModelId?: string | null; planningModelProvider?: string | null; planningModelId?: string | null; thinkingLevel?: string | null; error?: string | null; summary?: string | null; sessionFile?: string | null; executionStartedAt?: string | null; executionCompletedAt?: string | null; workflowStepResults?: import("./types.js").WorkflowStepResult[] | null; mergeDetails?: import("./types.js").MergeDetails | null; sourceIssue?: import("./types.js").TaskSourceIssue | null; tokenUsage?: import("./types.js").TaskTokenUsage | null; modifiedFiles?: string[] | null; missionId?: string | null; sliceId?: string | null },
+    updates: { title?: string; description?: string; priority?: TaskPriority | null; prompt?: string; worktree?: string | null; status?: string | null; dependencies?: string[]; steps?: import("./types.js").TaskStep[]; currentStep?: number; blockedBy?: string | null; assignedAgentId?: string | null; pausedByAgentId?: string | null; assigneeUserId?: string | null; nodeId?: string | null; effectiveNodeId?: string | null; effectiveNodeSource?: string | null; checkedOutBy?: string | null; checkedOutAt?: string | null; paused?: boolean; baseBranch?: string | null; branch?: string | null; executionStartBranch?: string | null; baseCommitSha?: string | null; size?: "S" | "M" | "L"; reviewLevel?: number; executionMode?: import("./types.js").ExecutionMode | null; mergeRetries?: number; workflowStepRetries?: number; stuckKillCount?: number | null; postReviewFixCount?: number | null; recoveryRetryCount?: number | null; taskDoneRetryCount?: number | null; verificationFailureCount?: number | null; mergeConflictBounceCount?: number | null; nextRecoveryAt?: string | null; enabledWorkflowSteps?: string[]; modelProvider?: string | null; modelId?: string | null; validatorModelProvider?: string | null; validatorModelId?: string | null; planningModelProvider?: string | null; planningModelId?: string | null; thinkingLevel?: string | null; error?: string | null; summary?: string | null; sessionFile?: string | null; executionStartedAt?: string | null; executionCompletedAt?: string | null; review?: import("./types.js").TaskReview | null; reviewState?: import("./types.js").TaskReviewState | null; workflowStepResults?: import("./types.js").WorkflowStepResult[] | null; mergeDetails?: import("./types.js").MergeDetails | null; sourceIssue?: import("./types.js").TaskSourceIssue | null; tokenUsage?: import("./types.js").TaskTokenUsage | null; modifiedFiles?: string[] | null; missionId?: string | null; sliceId?: string | null },
     runContext?: RunMutationContext,
   ): Promise<Task> {
     return this.withTaskLock(id, async () => {
@@ -3454,6 +3556,16 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         task.executionCompletedAt = undefined;
       } else if (updates.executionCompletedAt !== undefined) {
         task.executionCompletedAt = updates.executionCompletedAt;
+      }
+      if (updates.review === null) {
+        task.review = undefined;
+      } else if (updates.review !== undefined) {
+        task.review = updates.review;
+      }
+      if (updates.reviewState === null) {
+        task.reviewState = undefined;
+      } else if (updates.reviewState !== undefined) {
+        task.reviewState = normalizeTaskReviewState(updates.reviewState);
       }
       if (updates.workflowStepResults === null) {
         task.workflowStepResults = undefined;
@@ -6103,6 +6215,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
       size: entry.size,
       reviewLevel: entry.reviewLevel,
       prInfo: entry.prInfo,
+      review: entry.review,
       issueInfo: entry.issueInfo,
       sourceIssue: entry.sourceIssue,
       attachments: entry.attachments,
@@ -6794,20 +6907,11 @@ ${notificationsSection}`;
    */
   getPluginStore(): PluginStore {
     if (!this.pluginStore) {
-      this.pluginStore = new PluginStore(this.rootDir);
+      // PluginStore persists install/state rows in central DB, so it must use
+      // the same resolved global settings directory as TaskStore.
+      this.pluginStore = new PluginStore(this.rootDir, { centralGlobalDir: this.globalSettingsDir });
     }
     return this.pluginStore;
-  }
-
-  /**
-   * Get the RoadmapStore instance for standalone roadmap operations.
-   * Lazily initializes the RoadmapStore on first access.
-   */
-  getRoadmapStore(): RoadmapStore {
-    if (!this.roadmapStore) {
-      this.roadmapStore = new RoadmapStore(this.db);
-    }
-    return this.roadmapStore;
   }
 
   /**

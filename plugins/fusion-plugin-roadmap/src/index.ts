@@ -1,16 +1,29 @@
 import { definePlugin } from "@fusion/plugin-sdk";
 import { createRoadmapPluginRoutes } from "./roadmap-routes.js";
+import { ensureRoadmapSchema } from "./roadmap-schema.js";
 
 const plugin = definePlugin({
   manifest: {
-    id: "fusion-plugin-roadmap",
-    name: "Roadmap",
+    id: "roadmap-planner",
+    name: "Roadmaps",
     version: "0.1.0",
-    description: "Roadmap domain package for plugin-owned roadmap migration",
+    description: "Standalone roadmap planning plugin",
   },
   state: "installed",
-  hooks: {},
+  hooks: {
+    onSchemaInit: ensureRoadmapSchema,
+  },
   routes: createRoadmapPluginRoutes(),
+  dashboardViews: [
+    {
+      viewId: "roadmaps",
+      label: "Roadmaps",
+      componentPath: "./dashboard-view",
+      icon: "Map",
+      placement: "primary",
+      order: 30,
+    },
+  ],
 });
 
 export default plugin;
@@ -36,8 +49,7 @@ export type {
   RoadmapFeatureTaskPlanningHandoff,
   RoadmapMissionPlanningMilestoneHandoff,
   RoadmapMissionPlanningHandoff,
-  RoadmapStoreEvents,
-} from "@fusion/core";
+} from "./roadmap-types.js";
 
 export {
   normalizeRoadmapMilestoneOrder,
@@ -45,9 +57,18 @@ export {
   normalizeRoadmapFeatureOrder,
   applyRoadmapFeatureReorder,
   moveRoadmapFeature,
+} from "./store/roadmap-ordering.js";
+
+export {
   mapFeatureToTaskHandoff,
   mapRoadmapToMissionHandoff,
   mapRoadmapWithHierarchyToMissionHandoff,
   mapAllFeaturesToTaskHandoffs,
-  RoadmapStore,
-} from "@fusion/core";
+} from "./store/roadmap-handoff.js";
+
+export { RoadmapStore } from "./store/roadmap-store.js";
+export type { RoadmapStoreEvents } from "./store/roadmap-store.js";
+
+export { ensureRoadmapSchema } from "./roadmap-schema.js";
+export { RoadmapDashboardView } from "./dashboard-view.js";
+export * from "./server/index.js";

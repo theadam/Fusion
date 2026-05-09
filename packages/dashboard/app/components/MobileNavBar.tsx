@@ -1,5 +1,5 @@
 import "./MobileNavBar.css";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   Bot,
@@ -27,7 +27,6 @@ import {
   Target,
   Terminal,
   Workflow,
-  Map,
   Zap,
 } from "lucide-react";
 import { fetchScripts } from "../api";
@@ -54,6 +53,7 @@ export interface MobileNavBarProps {
   onOpenSystemStats?: () => void;
   onOpenMailbox?: () => void;
   mailboxUnreadCount?: number;
+  mailboxPendingApprovalCount?: number;
   chatHasUnreadResponse?: boolean;
   onOpenGitManager?: () => void;
   onOpenWorkflowSteps?: () => void;
@@ -76,16 +76,17 @@ export interface MobileNavBarProps {
   /** Experimental feature flags controlling visibility of nav items. */
   experimentalFeatures?: {
     insights?: boolean;
-    roadmap?: boolean;
     memoryView?: boolean;
     devServer?: boolean;
     devServerView?: boolean;
     todoView?: boolean;
     researchView?: boolean;
+    evalsView?: boolean;
     nodesView?: boolean;
   };
   onOpenNodes?: () => void;
   pluginDashboardViews?: PluginDashboardViewEntry[];
+  shellConnectionControl?: ReactNode;
 }
 
 function GitHubLogo({ size = 20 }: { size?: number }) {
@@ -117,6 +118,7 @@ export function MobileNavBar({
   onOpenSystemStats,
   onOpenMailbox,
   mailboxUnreadCount = 0,
+  mailboxPendingApprovalCount = 0,
   chatHasUnreadResponse = false,
   onOpenGitManager,
   onOpenWorkflowSteps,
@@ -138,6 +140,7 @@ export function MobileNavBar({
   experimentalFeatures,
   onOpenNodes,
   pluginDashboardViews = [],
+  shellConnectionControl,
 }: MobileNavBarProps) {
   const mode = useViewportMode();
   const [isMoreOpen, setIsMoreOpen] = useState(false);
@@ -202,15 +205,12 @@ export function MobileNavBar({
 
   const planningHandler = activePlanningSessionCount > 0 && onResumePlanning ? onResumePlanning : onOpenPlanning;
 
-  const hasRoadmapsPluginView = pluginDashboardViews.some((entry) => entry.pluginId === "fusion-plugin-roadmap");
-  const roadmapEnabled = Boolean(experimentalFeatures?.roadmap) && !hasRoadmapsPluginView;
   const skillsEnabled = Boolean(showSkillsTab);
   const todoViewEnabled = Boolean(experimentalFeatures?.todoView);
 
   // Keep a maximum of one optional primary tab visible at once to preserve touch-target width.
   // Overflowed destinations remain available in the More sheet.
-  const showRoadmapsTopLevel = roadmapEnabled && (!skillsEnabled || view === "roadmaps");
-  const showSkillsTopLevel = skillsEnabled && (!roadmapEnabled || view !== "roadmaps");
+  const showSkillsTopLevel = skillsEnabled;
   const showSkillsInMore = skillsEnabled && !showSkillsTopLevel;
   const sortedPrimaryPluginViews = pluginDashboardViews
     .filter((entry) => entry.view.placement === "primary")
@@ -226,13 +226,13 @@ export function MobileNavBar({
 
   const isMoreActive =
     view === "documents"
+    || (Boolean(experimentalFeatures?.evalsView) && view === "evals")
     || view === "research"
     || view === "insights"
     || view === "memory"
     || view === "devserver"
     || view === "dev-server"
     || (todosOpen && todoViewEnabled)
-    || (view === "roadmaps" && !showRoadmapsTopLevel)
     || (view === "skills" && !showSkillsTopLevel)
     || view === "graph"
     || (isPluginViewId(view) && !topLevelPrimaryPluginViews.some((entry) => buildPluginTaskViewId(entry.pluginId, entry.view.viewId) === view));
@@ -313,7 +313,12 @@ export function MobileNavBar({
           aria-selected={view === "mailbox"}
           onClick={() => onChangeView("mailbox")}
         >
-          <Mail />
+          <span className="mobile-nav-tab-icon-wrapper">
+            <Mail />
+            {mailboxPendingApprovalCount > 0 && view !== "mailbox" && (
+              <span className="status-dot status-dot--pending mobile-nav-chat-unread-dot" aria-label="Pending approvals" />
+            )}
+          </span>
           <span className="mobile-nav-tab-label">Mailbox</span>
           {mailboxUnreadCount > 0 && (
             <span className="mobile-nav-tab-badge">{formatCount(mailboxUnreadCount)}</span>
@@ -334,19 +339,6 @@ export function MobileNavBar({
           </button>
         )}
 
-        {showRoadmapsTopLevel && (
-          <button
-            type="button"
-            className={`mobile-nav-tab${view === "roadmaps" ? " mobile-nav-tab--active" : ""}`}
-            data-testid="mobile-nav-tab-roadmaps"
-            role="tab"
-            aria-selected={view === "roadmaps"}
-            onClick={() => onChangeView("roadmaps")}
-          >
-            <Map />
-            <span className="mobile-nav-tab-label">Roadmaps</span>
-          </button>
-        )}
 
         {topLevelPrimaryPluginViews.map((entry) => {
           const pluginTaskView = buildPluginTaskViewId(entry.pluginId, entry.view.viewId);
@@ -390,6 +382,12 @@ export function MobileNavBar({
             <div className="mobile-more-sheet-handle" />
             <div className="mobile-more-sheet-title">Navigate</div>
 
+            {shellConnectionControl ? (
+              <div className="mobile-more-shell-connection" data-testid="mobile-more-shell-connection">
+                {shellConnectionControl}
+              </div>
+            ) : null}
+
             <button
               type="button"
               className="mobile-more-item"
@@ -400,6 +398,9 @@ export function MobileNavBar({
               <span>Mailbox</span>
               {mailboxUnreadCount > 0 && (
                 <span className="mobile-more-item-badge mobile-more-item-badge--unread">{formatCount(mailboxUnreadCount)}</span>
+              )}
+              {mailboxPendingApprovalCount > 0 && (
+                <span className="mobile-more-item-badge">{formatCount(mailboxPendingApprovalCount)}</span>
               )}
             </button>
 
@@ -601,6 +602,17 @@ export function MobileNavBar({
               <FileText />
               <span>Documents</span>
             </button>
+            {experimentalFeatures?.evalsView && (
+              <button
+                type="button"
+                className="mobile-more-item"
+                data-testid="mobile-more-item-evals"
+                onClick={() => handleMoreAction(() => onChangeView("evals"))}
+              >
+                <Target />
+                <span>Evals</span>
+              </button>
+            )}
 
             {showSkillsInMore && (
               <button
@@ -614,17 +626,7 @@ export function MobileNavBar({
               </button>
             )}
 
-            {roadmapEnabled && (
-              <button
-                type="button"
-                className="mobile-more-item"
-                data-testid="mobile-more-item-roadmaps"
-                onClick={() => handleMoreAction(() => onChangeView("roadmaps"))}
-              >
-                <Map />
-                <span>Roadmaps</span>
-              </button>
-            )}
+
 
             {experimentalFeatures?.researchView && (
               <button

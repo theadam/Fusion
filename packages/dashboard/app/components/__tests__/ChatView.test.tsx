@@ -24,6 +24,7 @@ const mockUseChat = vi.mocked(useChatModule.useChat);
 const mockFetchDiscoveredSkills = vi.mocked(apiModule.fetchDiscoveredSkills);
 const mockCreateObjectURL = vi.fn();
 const mockRevokeObjectURL = vi.fn();
+const mockClipboardWriteText = vi.fn();
 
 // Mock lucide-react icons - spread actual module and override specific icons
 vi.mock("lucide-react", async (importOriginal) => {
@@ -45,6 +46,8 @@ vi.mock("lucide-react", async (importOriginal) => {
     EyeOff: ({ "data-testid": testId, ...props }: any) => <svg data-testid={testId || "icon-eye-off"} {...props} />,
     Paperclip: ({ "data-testid": testId, ...props }: any) => <svg data-testid={testId || "icon-paperclip"} {...props} />,
     File: ({ "data-testid": testId, ...props }: any) => <svg data-testid={testId || "icon-file"} {...props} />,
+    Copy: ({ "data-testid": testId, ...props }: any) => <svg data-testid={testId || "icon-copy"} {...props} />,
+    Check: ({ "data-testid": testId, ...props }: any) => <svg data-testid={testId || "icon-check"} {...props} />,
   };
 });
 
@@ -178,6 +181,11 @@ beforeEach(() => {
   mockCreateObjectURL.mockImplementation((file: File) => `blob:${file.name}`);
   Object.defineProperty(URL, "createObjectURL", { value: mockCreateObjectURL, writable: true });
   Object.defineProperty(URL, "revokeObjectURL", { value: mockRevokeObjectURL, writable: true });
+  mockClipboardWriteText.mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    value: { writeText: mockClipboardWriteText },
+    configurable: true,
+  });
 });
 
 afterEach(() => {
@@ -918,6 +926,99 @@ describe("ChatView", () => {
     await waitFor(() => {
       expect(screen.getByText("Claude Sonnet 4.5")).toBeInTheDocument();
     });
+  });
+
+  it("shows copy actions only for assistant responses in provider/model chats", () => {
+    setupMockChat({
+      activeSession: {
+        id: "session-001",
+        agentId: "__fn_agent__",
+        status: "active",
+        title: "Fusion Chat",
+        modelProvider: "anthropic",
+        modelId: "claude-sonnet-4-5",
+        createdAt: "2026-04-08T00:00:00.000Z",
+        updatedAt: "2026-04-08T00:00:00.000Z",
+      },
+      messages: [
+        { id: "msg-user", sessionId: "session-001", role: "user", content: "Question", createdAt: "2026-04-08T00:00:00.000Z" },
+        { id: "msg-assistant", sessionId: "session-001", role: "assistant", content: "Answer", createdAt: "2026-04-08T00:00:01.000Z" },
+      ],
+    });
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    expect(screen.getByTestId("chat-copy-response-msg-assistant")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-copy-response-msg-user")).not.toBeInTheDocument();
+  });
+
+  it("copies raw provider response content and shows feedback for success/failure", async () => {
+    setupMockChat({
+      activeSession: {
+        id: "session-001",
+        agentId: "__fn_agent__",
+        status: "active",
+        title: "Fusion Chat",
+        modelProvider: "anthropic",
+        modelId: "claude-sonnet-4-5",
+        createdAt: "2026-04-08T00:00:00.000Z",
+        updatedAt: "2026-04-08T00:00:00.000Z",
+      },
+      messages: [
+        { id: "msg-assistant", sessionId: "session-001", role: "assistant", content: "**Raw** output", createdAt: "2026-04-08T00:00:01.000Z" },
+      ],
+    });
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    const copyButton = screen.getByTestId("chat-copy-response-msg-assistant");
+    expect(copyButton).not.toHaveTextContent("Copy");
+    await userEvent.click(copyButton);
+
+    expect(mockClipboardWriteText).toHaveBeenCalledWith("**Raw** output");
+    expect(screen.getByLabelText("Response copied")).toBeInTheDocument();
+
+    mockClipboardWriteText.mockRejectedValueOnce(new Error("denied"));
+    await userEvent.click(screen.getByTestId("chat-copy-response-msg-assistant"));
+    expect(screen.getByLabelText("Copy failed")).toBeInTheDocument();
+  });
+
+  it("shows streaming copy action for provider chats", () => {
+    setupMockChat({
+      activeSession: {
+        id: "session-001",
+        agentId: "__fn_agent__",
+        status: "active",
+        title: "Fusion Chat",
+        modelProvider: "anthropic",
+        modelId: "claude-sonnet-4-5",
+        createdAt: "2026-04-08T00:00:00.000Z",
+        updatedAt: "2026-04-08T00:00:00.000Z",
+      },
+      messages: [],
+      isStreaming: true,
+      streamingText: "Live answer",
+    });
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    expect(screen.getByTestId("chat-copy-response-streaming")).toBeInTheDocument();
+  });
+
+  it("does not show copy actions for non-provider sessions", () => {
+    setupMockChat({
+      activeSession: activeSessionFixture,
+      messages: [
+        { id: "msg-assistant", sessionId: "session-001", role: "assistant", content: "Answer", createdAt: "2026-04-08T00:00:01.000Z" },
+      ],
+      isStreaming: true,
+      streamingText: "Live answer",
+    });
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    expect(screen.queryByTestId("chat-copy-response-msg-assistant")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-copy-response-streaming")).not.toBeInTheDocument();
   });
 
   it("shows resolved agent name in streaming assistant avatar", async () => {
@@ -2330,6 +2431,75 @@ describe("ChatView sidebar structure", () => {
   });
 });
 
+describe("Direct/Rooms scope toggle", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("defaults to Direct with sidebar list visible", () => {
+    setupMockChat({
+      sessions: [{ id: "session-001", agentId: "agent-001", status: "active", title: "Test Chat", createdAt: "2026-04-08T00:00:00.000Z", updatedAt: "2026-04-08T00:00:00.000Z" }],
+      filteredSessions: [{ id: "session-001", agentId: "agent-001", status: "active", title: "Test Chat", createdAt: "2026-04-08T00:00:00.000Z", updatedAt: "2026-04-08T00:00:00.000Z" }],
+    });
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    expect(screen.getByTestId("chat-sidebar-scope-direct")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("chat-sidebar-scope-rooms")).toHaveAttribute("aria-selected", "false");
+    expect(document.querySelector(".chat-session-list")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-sidebar-rooms-empty")).toBeNull();
+  });
+
+  it("shows rooms placeholder and hides direct search/list in Rooms scope", async () => {
+    setupMockChat({
+      sessions: [{ id: "session-001", agentId: "agent-001", status: "active", title: "Test Chat", createdAt: "2026-04-08T00:00:00.000Z", updatedAt: "2026-04-08T00:00:00.000Z" }],
+      filteredSessions: [{ id: "session-001", agentId: "agent-001", status: "active", title: "Test Chat", createdAt: "2026-04-08T00:00:00.000Z", updatedAt: "2026-04-08T00:00:00.000Z" }],
+    });
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    await userEvent.click(screen.getByTestId("chat-sidebar-scope-rooms"));
+
+    expect(screen.getByTestId("chat-sidebar-scope-rooms")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("chat-sidebar-rooms-empty")).toBeInTheDocument();
+    expect(document.querySelector(".chat-session-list")).toBeNull();
+    expect(screen.queryByTestId("chat-search-input")).toBeNull();
+  });
+
+  it("switching back to Direct restores search/list and keeps active session highlight", async () => {
+    setupMockChat({
+      activeSession: { id: "session-001", agentId: "agent-001", status: "active", title: "Test Chat", createdAt: "2026-04-08T00:00:00.000Z", updatedAt: "2026-04-08T00:00:00.000Z" },
+      sessions: [{ id: "session-001", agentId: "agent-001", status: "active", title: "Test Chat", createdAt: "2026-04-08T00:00:00.000Z", updatedAt: "2026-04-08T00:00:00.000Z" }],
+      filteredSessions: [{ id: "session-001", agentId: "agent-001", status: "active", title: "Test Chat", createdAt: "2026-04-08T00:00:00.000Z", updatedAt: "2026-04-08T00:00:00.000Z" }],
+    });
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    await userEvent.click(screen.getByTestId("chat-sidebar-scope-rooms"));
+    await userEvent.click(screen.getByTestId("chat-sidebar-scope-direct"));
+
+    expect(screen.getByTestId("chat-search-input")).toBeInTheDocument();
+    expect(document.querySelector(".chat-session-list")).toBeInTheDocument();
+    expect(screen.getByTestId("chat-session-session-001")).toHaveClass("chat-session-item--active");
+  });
+
+  it("persists scope in localStorage and restores Rooms on next mount", async () => {
+    setupMockChat({ sessions: [], filteredSessions: [] });
+
+    const { unmount } = render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    await userEvent.click(screen.getByTestId("chat-sidebar-scope-rooms"));
+    expect(localStorage.getItem("fusion:chat-scope")).toBe("rooms");
+
+    unmount();
+
+    render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+    expect(screen.getByTestId("chat-sidebar-scope-rooms")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("chat-sidebar-rooms-empty")).toBeInTheDocument();
+  });
+});
+
 describe("resizable sidebar", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -3041,6 +3211,113 @@ describe("ChatView mobile behavior", () => {
       restoreMatchMedia.mockRestore();
     }
   });
+
+  it("snaps to bottom when opening a session with loaded messages", async () => {
+    const restoreMatchMedia = mockDesktopViewport();
+    try {
+      setupMockChat({ activeSession: activeSessionFixture, messages: [] });
+      const { rerender } = render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+      const messagesContainer = document.querySelector(".chat-messages") as HTMLDivElement;
+      let scrollTopValue = 0;
+      Object.defineProperty(messagesContainer, "scrollHeight", { configurable: true, get: () => 950 });
+      Object.defineProperty(messagesContainer, "scrollTop", {
+        configurable: true,
+        get: () => scrollTopValue,
+        set: (value: number) => {
+          scrollTopValue = value;
+        },
+      });
+
+      setupMockChat({
+        activeSession: activeSessionFixture,
+        messages: [{ id: "msg-001", sessionId: "session-001", role: "assistant", content: "One", createdAt: "2026-04-08T00:00:00.000Z" }],
+      });
+      rerender(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(scrollTopValue).toBe(950);
+      });
+    } finally {
+      restoreMatchMedia.mockRestore();
+    }
+  });
+
+  it("snaps to bottom when switching active session id", async () => {
+    const restoreMatchMedia = mockDesktopViewport();
+    try {
+      setupMockChat({
+        activeSession: activeSessionFixture,
+        messages: [{ id: "msg-001", sessionId: "session-001", role: "assistant", content: "One", createdAt: "2026-04-08T00:00:00.000Z" }],
+      });
+      const { rerender } = render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+      const messagesContainer = document.querySelector(".chat-messages") as HTMLDivElement;
+      let scrollTopValue = 0;
+      let scrollHeightValue = 900;
+      Object.defineProperty(messagesContainer, "scrollHeight", { configurable: true, get: () => scrollHeightValue });
+      Object.defineProperty(messagesContainer, "scrollTop", {
+        configurable: true,
+        get: () => scrollTopValue,
+        set: (value: number) => {
+          scrollTopValue = value;
+        },
+      });
+
+      setupMockChat({
+        activeSession: { ...activeSessionFixture, id: "session-002" },
+        messages: [{ id: "msg-101", sessionId: "session-002", role: "assistant", content: "Two", createdAt: "2026-04-08T00:01:00.000Z" }],
+      });
+      scrollHeightValue = 1300;
+      rerender(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(scrollTopValue).toBe(1300);
+      });
+    } finally {
+      restoreMatchMedia.mockRestore();
+    }
+  });
+
+  it("does not clobber scroll position on same-session history pagination", async () => {
+    const restoreMatchMedia = mockDesktopViewport();
+    try {
+      setupMockChat({
+        activeSession: activeSessionFixture,
+        messages: [{ id: "msg-001", sessionId: "session-001", role: "assistant", content: "One", createdAt: "2026-04-08T00:00:00.000Z" }],
+      });
+
+      const { rerender } = render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+      const messagesContainer = document.querySelector(".chat-messages") as HTMLDivElement;
+      let scrollTopValue = 700;
+      Object.defineProperty(messagesContainer, "scrollHeight", { configurable: true, get: () => 1200 });
+      Object.defineProperty(messagesContainer, "clientHeight", { configurable: true, get: () => 200 });
+      Object.defineProperty(messagesContainer, "scrollTop", {
+        configurable: true,
+        get: () => scrollTopValue,
+        set: (value: number) => {
+          scrollTopValue = value;
+        },
+      });
+
+      fireEvent.scroll(messagesContainer);
+
+      setupMockChat({
+        activeSession: activeSessionFixture,
+        messages: [
+          { id: "msg-000", sessionId: "session-001", role: "assistant", content: "Older", createdAt: "2026-04-07T23:59:00.000Z" },
+          { id: "msg-001", sessionId: "session-001", role: "assistant", content: "One", createdAt: "2026-04-08T00:00:00.000Z" },
+        ],
+      });
+      rerender(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(scrollTopValue).toBe(700);
+      });
+    } finally {
+      restoreMatchMedia.mockRestore();
+    }
+  });
 });
 
 describe("ChatView mobile CSS contract", () => {
@@ -3147,5 +3424,11 @@ describe("ChatView mobile CSS contract", () => {
     expect(css).toMatch(/@media\s*\(max-width:\s*768px\)[\s\S]*?\.chat-thread-header\s*\{[^}]*flex-wrap:\s*nowrap/);
     expect(css).toMatch(/@media\s*\(max-width:\s*768px\)[\s\S]*?\.chat-thread-header-identity\s*\{[^}]*flex:\s*1\s+1\s+auto[^}]*white-space:\s*nowrap/);
     expect(css).toMatch(/@media\s*\(max-width:\s*768px\)[\s\S]*?\.chat-thread-header-render-toggle\s*\{[^}]*flex-shrink:\s*0/);
+  });
+
+  it("mobile keeps response copy action visible and touch-friendly", () => {
+    expect(css).toMatch(/@media\s*\(max-width:\s*768px\)[\s\S]*?\.chat-message-copy-action\s*\{[^}]*opacity:\s*1/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*768px\)[\s\S]*?\.chat-message-copy-action\s*\{[^}]*min-width:\s*calc\(var\(--space-lg\)\s*\*\s*2\.25\)/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*768px\)[\s\S]*?\.chat-message-copy-action\s*\{[^}]*min-height:\s*calc\(var\(--space-lg\)\s*\*\s*2\.25\)/);
   });
 });

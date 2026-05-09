@@ -19,7 +19,7 @@ import type {
   TaskStore,
   NtfyNotificationEvent,
 } from "@fusion/core";
-import { resolvePrompt, summarizeTitle, type PromptOverrideMap } from "@fusion/core";
+import { DEFAULT_TASK_PRIORITY, resolvePrompt, summarizeTitle, type PromptOverrideMap } from "@fusion/core";
 import type { SubtaskItem } from "./subtask-breakdown.js";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -35,6 +35,8 @@ import * as engineModule from "@fusion/engine";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AgentResult = any;
+
+const PLANNING_BUILTIN_WEB_TOOLS = ["WebSearch", "WebFetch"] as const;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let createFnAgent: any = engineCreateFnAgent;
 
@@ -785,6 +787,7 @@ export async function createSession(
     cwd: rootDir,
     systemPrompt,
     tools: "readonly",
+    builtinToolsAllowlist: [...PLANNING_BUILTIN_WEB_TOOLS],
     onThinking: () => {
       // Non-streaming path ignores thinking output
     },
@@ -1296,6 +1299,7 @@ async function createPlanningAgent(
     cwd: rootDir,
     systemPrompt,
     tools: "readonly",
+    builtinToolsAllowlist: [...PLANNING_BUILTIN_WEB_TOOLS],
     ...(modelProvider && modelId
       ? {
           defaultProvider: modelProvider,
@@ -2252,6 +2256,7 @@ export function generateSubtasksFromPlanning(sessionId: string): SubtaskItem[] {
           qaSection,
         }),
         suggestedSize: index === 0 ? "S" as const : index === summary.keyDeliverables.length - 1 ? "S" as const : "M" as const,
+        priority: summary.priority ?? DEFAULT_TASK_PRIORITY,
         dependsOn,
       };
     });
@@ -2268,6 +2273,7 @@ export function generateSubtasksFromPlanning(sessionId: string): SubtaskItem[] {
         qaSection,
       }),
       suggestedSize: "S" as const,
+      priority: summary.priority ?? DEFAULT_TASK_PRIORITY,
       dependsOn: [],
     },
     {
@@ -2279,6 +2285,7 @@ export function generateSubtasksFromPlanning(sessionId: string): SubtaskItem[] {
         qaSection,
       }),
       suggestedSize: "M" as const,
+      priority: summary.priority ?? DEFAULT_TASK_PRIORITY,
       dependsOn: ["subtask-1"],
     },
     {
@@ -2290,6 +2297,7 @@ export function generateSubtasksFromPlanning(sessionId: string): SubtaskItem[] {
         qaSection,
       }),
       suggestedSize: "S" as const,
+      priority: summary.priority ?? DEFAULT_TASK_PRIORITY,
       dependsOn: ["subtask-2"],
     },
   ];

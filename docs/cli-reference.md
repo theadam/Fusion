@@ -187,6 +187,10 @@ QR hand-off behavior in TUI:
 On startup, the TUI opens on the **System** section by default so you can
 immediately see host/port and access-token details.
 
+Mouse reporting auto-toggles with focus on the main screen: selecting
+**Logs** enables wheel scrolling, while selecting **System** turns mouse
+reporting back off so native click-drag text selection works.
+
 **Keyboard Navigation:**
 
 | Key | Action |
@@ -395,6 +399,8 @@ For AI-guided task specification, see [Planning mode](#planning-mode).
 ### Planning mode
 
 Use planning mode to turn a rough idea into a triage task through an interactive AI-guided Q&A flow.
+
+When supported by your configured runtime/model provider, planning sessions can also use builtin `WebSearch` and `WebFetch` tools for live context gathering.
 
 ```bash
 fn task plan [description]
@@ -821,6 +827,11 @@ fn plugin create <name>
 ```
 
 Subcommands: `list|ls`, `install`, `rescan`, `uninstall`, `enable`, `disable`, `create`.
+
+Scope semantics:
+- `fn plugin install` / `fn plugin uninstall` are **global** operations
+- `fn plugin enable` / `fn plugin disable` are **project-scoped** operations (`--project` selects the project context)
+- `fn plugin list` shows globally installed plugins plus enabled/disabled state for the current project context
 
 `fn plugin install --ai-scan` enables AI security scanning on plugin load. `fn plugin rescan <id>` runs a fresh scan/reload cycle and prints plugin name, verdict, summary, and finding count. It exits non-zero for `blocked`, `error`, or `unavailable` verdicts.
 

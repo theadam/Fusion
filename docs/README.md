@@ -33,6 +33,7 @@ For a full walkthrough (installation, onboarding, first task, and daily workflow
 | [Missions](./missions.md) | Mission hierarchy, planning flow, activation, progress tracking, and autopilot behavior |
 | [Research](./research.md) | Research runs, provider setup, dashboard/CLI usage, findings, exports, and task integration |
 | [Workflow Steps](./workflow-steps.md) | Reusable quality gates, templates, pre/post-merge phases, and workflow execution results |
+| [Task Evaluations](./evals.md) | Eval scoring contract, evidence persistence, score categories, and evaluation pipeline |
 | [Multi-Project](./multi-project.md) | Central registry architecture, project management, isolation modes, and migration paths |
 
 ### Configuration & Agents
@@ -61,6 +62,7 @@ For a full walkthrough (installation, onboarding, first task, and daily workflow
 |---|---|
 | [Plugin Management](./plugin-management.md) | End-user guide for discovering, installing, enabling, configuring, updating, uninstalling, and troubleshooting Fusion plugins |
 | [Plugin Authoring](./PLUGIN_AUTHORING.md) | Developer guide for building Fusion plugins (manifest, SDK hooks, routes, UI/runtime contributions) |
+| [Even Realities Glasses Plugin](../plugins/fusion-plugin-even-realities-glasses/README.md) | Task-focused Even Realities glasses bridge with quick capture, polling notifications, and agent actions |
 | [Memory Plugin Contract](./memory-plugin-contract.md) | Pluggable memory backend architecture, interface contract, and migration strategy |
 
 ### Audit Reports
@@ -70,6 +72,7 @@ For a full walkthrough (installation, onboarding, first task, and daily workflow
 | [Codebase Improvement Audit](./codebase-improvement-audit.md) | Evidence-based technical debt and reliability gap audit with prioritized recommendations |
 | [Gap Analysis](./gap-analysis.md) | System completeness analysis comparing Fusion to Paperclip feature set |
 | [Agent Sandbox Research](./agent-sandboxing-research.md) | Research on agent isolation, capability enforcement, and sandboxing approaches |
+| [Even Realities Integration Research (FN-3737)](./even-realities-integration-research.md) | Research summary and recommended integration topology for Even Realities glasses + Fusion |
 | [Agent Gap Analysis](./agent-paperclip-gap-analysis.md) | Gap analysis for agent Paperclip integration |
 | [pi-autoresearch Analysis for Fusion Port](./research/pi-autoresearch-analysis.md) | Upstream architecture/license analysis and Fusion integration mapping for autoresearch capabilities |
 | [Research Hardening Preflight Baseline](./research/research-hardening-preflight.md) | Verified research subsystem baseline, lifecycle contracts, and hardening pressure points |

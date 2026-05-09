@@ -10,10 +10,10 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { dirname, extname, join, resolve } from "node:path";
+import { readFile, stat } from "node:fs/promises";
 import * as readline from "node:readline";
-import { PluginStore, PluginLoader, validatePluginManifest } from "@fusion/core";
+import { PluginStore, PluginLoader, validatePluginManifest, resolveGlobalDir } from "@fusion/core";
 import { resolveProject } from "../project-context.js";
 
 export interface BuiltinPluginCatalogEntry {
@@ -92,11 +92,23 @@ async function getProjectPath(projectName?: string): Promise<string> {
 /**
  * Create a PluginStore for the given project.
  */
-async function createPluginStore(projectName?: string): Promise<PluginStore> {
-  const projectPath = await getProjectPath(projectName);
-  const pluginStore = new PluginStore(projectPath);
-  await pluginStore.init();
-  return pluginStore;
+async function createPluginStore(
+  projectName?: string,
+  options?: { centralGlobalDir?: string },
+): Promise<PluginStore> {
+  try {
+    const context = await resolveProject(projectName, process.cwd(), options?.centralGlobalDir);
+    const pluginStore = context.store.getPluginStore();
+    await pluginStore.init();
+    return pluginStore;
+  } catch {
+    const projectPath = await getProjectPath(projectName);
+    const pluginStore = new PluginStore(projectPath, {
+      centralGlobalDir: options?.centralGlobalDir ?? resolveGlobalDir(),
+    });
+    await pluginStore.init();
+    return pluginStore;
+  }
 }
 
 /**
@@ -123,13 +135,111 @@ async function createPluginLoader(
   return { store: pluginStore, loader };
 }
 
+const JS_ENTRY_EXTENSIONS = new Set([".js", ".mjs", ".cjs"]);
+const TS_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+
+function isJsEntryFile(path: string): boolean {
+  return JS_ENTRY_EXTENSIONS.has(extname(path).toLowerCase());
+}
+
+function isTypeScriptSource(path: string): boolean {
+  return TS_SOURCE_EXTENSIONS.has(extname(path).toLowerCase());
+}
+
+async function statPath(path: string): Promise<import("node:fs").Stats | undefined> {
+  try {
+    return await stat(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+/**
+ * Resolve plugin installation source to a compiled JavaScript entry file.
+ */
+export async function resolvePluginEntryFile(pluginDir: string): Promise<string> {
+  const absoluteInputPath = resolve(pluginDir);
+  const inputStats = await statPath(absoluteInputPath);
+
+  if (inputStats?.isFile()) {
+    if (isTypeScriptSource(absoluteInputPath)) {
+      throw new Error(
+        `Plugin entry must be compiled JavaScript, but got TypeScript source: ${absoluteInputPath}. Build the plugin first (for example: pnpm build in the plugin directory).`,
+      );
+    }
+    if (isJsEntryFile(absoluteInputPath)) {
+      return absoluteInputPath;
+    }
+    throw new Error(`Plugin entry file must end with .js, .mjs, or .cjs: ${absoluteInputPath}`);
+  }
+
+  const packageJsonPath = join(absoluteInputPath, "package.json");
+  let selectedCandidate: string | undefined;
+
+  if (existsSync(packageJsonPath)) {
+    const packageJson = JSON.parse(await readFile(packageJsonPath, "utf-8")) as Record<string, unknown>;
+    const exportsRecord = asRecord(packageJson.exports);
+    const dotExport = exportsRecord?.["."];
+
+    const dotExportRecord = asRecord(dotExport);
+    if (typeof dotExportRecord?.import === "string") {
+      selectedCandidate = dotExportRecord.import;
+    } else if (typeof dotExportRecord?.default === "string") {
+      selectedCandidate = dotExportRecord.default;
+    } else if (typeof dotExport === "string") {
+      selectedCandidate = dotExport;
+    } else if (typeof packageJson.main === "string") {
+      selectedCandidate = packageJson.main;
+    }
+  }
+
+  if (selectedCandidate) {
+    const absoluteCandidate = resolve(absoluteInputPath, selectedCandidate);
+    if (isTypeScriptSource(absoluteCandidate)) {
+      throw new Error(
+        `Plugin entry resolves to TypeScript source (${absoluteCandidate}). Build the plugin first (for example: pnpm build in the plugin directory).`,
+      );
+    }
+    const candidateStats = await statPath(absoluteCandidate);
+    if (!candidateStats?.isFile()) {
+      throw new Error(
+        `Plugin entry file not found: ${absoluteCandidate}. Build the plugin first (for example: pnpm build in the plugin directory).`,
+      );
+    }
+    return absoluteCandidate;
+  }
+
+  const distIndexPath = resolve(absoluteInputPath, "dist/index.js");
+  const distStats = await statPath(distIndexPath);
+  if (distStats?.isFile()) {
+    return distIndexPath;
+  }
+
+  const indexPath = resolve(absoluteInputPath, "index.js");
+  const indexStats = await statPath(indexPath);
+  if (indexStats?.isFile()) {
+    return indexPath;
+  }
+
+  throw new Error(
+    `Could not resolve a plugin JavaScript entry file in ${absoluteInputPath}. Tried package.json exports/main, dist/index.js, and index.js. Build the plugin first (for example: pnpm build in the plugin directory).`,
+  );
+}
+
 /**
  * Load plugin manifest from a local path.
  */
 async function loadManifestFromPath(
   pluginPath: string,
 ): Promise<{ manifest: import("@fusion/core").PluginManifest; path: string }> {
-  const manifestPath = join(pluginPath, "manifest.json");
+  const absoluteInputPath = resolve(pluginPath);
+  const inputStats = await statPath(absoluteInputPath);
+  const manifestDir = inputStats?.isFile() ? dirname(absoluteInputPath) : absoluteInputPath;
+  const manifestPath = join(manifestDir, "manifest.json");
 
   if (!existsSync(manifestPath)) {
     throw new Error(`Plugin manifest not found at: ${manifestPath}`);
@@ -143,7 +253,7 @@ async function loadManifestFromPath(
     throw new Error(`Invalid plugin manifest: ${validation.errors.join(", ")}`);
   }
 
-  return { manifest, path: pluginPath };
+  return { manifest, path: manifestDir };
 }
 
 /**
@@ -178,7 +288,7 @@ export async function runPluginList(projectName?: string): Promise<void> {
   }
 
   console.log();
-  console.log("  ID                  Name                    Version  State     Enabled");
+  console.log("  ID                  Name                    Version  State     Project Enabled");
   console.log("  ─────────────────────────────────────────────────────────────────────");
 
   for (const plugin of plugins) {
@@ -218,15 +328,16 @@ export async function runPluginInstall(
   }
 
   try {
-    const { manifest, path } = await loadManifestFromPath(source);
+    const entryPath = await resolvePluginEntryFile(source);
+    const { manifest } = await loadManifestFromPath(source);
 
     console.log();
-    console.log(`  Installing ${manifest.name} v${manifest.version}...`);
+    console.log(`  Installing ${manifest.name} v${manifest.version} globally...`);
 
     // Register the plugin
     const plugin = await store.registerPlugin({
       manifest,
-      path,
+      path: entryPath,
       aiScanOnLoad: options?.aiScan ?? false,
     });
 
@@ -234,12 +345,12 @@ export async function runPluginInstall(
     if (plugin.enabled) {
       try {
         await loader.loadPlugin(plugin.id);
-        console.log(`  ✓ ${manifest.name} installed and loaded`);
+        console.log(`  ✓ ${manifest.name} installed globally and enabled for this project`);
       } catch (loadErr) {
         console.log(`  ⚠ ${manifest.name} installed but failed to load: ${loadErr instanceof Error ? loadErr.message : String(loadErr)}`);
       }
     } else {
-      console.log(`  ✓ ${manifest.name} installed (disabled)`);
+      console.log(`  ✓ ${manifest.name} installed globally (disabled for this project)`);
     }
     console.log();
   } catch (err) {
@@ -272,8 +383,8 @@ export async function runPluginUninstall(
   // Confirm unless force
   if (!options?.force) {
     console.log();
-    console.log(`  Uninstall "${plugin.name}"?`);
-    console.log(`  This will stop and remove the plugin.`);
+    console.log(`  Uninstall "${plugin.name}" globally?`);
+    console.log("  This removes it for all projects.");
     console.log();
 
     const response = await new Promise<string>((resolve) => {
@@ -304,7 +415,7 @@ export async function runPluginUninstall(
   await store.unregisterPlugin(id);
 
   console.log();
-  console.log(`  ✓ ${plugin.name} uninstalled`);
+  console.log(`  ✓ ${plugin.name} uninstalled globally`);
   console.log();
 }
 
@@ -346,7 +457,7 @@ export async function runPluginEnable(
   }
 
   console.log();
-  console.log(`  ✓ ${plugin.name} enabled and started`);
+  console.log(`  ✓ ${plugin.name} enabled for this project and started`);
   console.log();
 }
 
@@ -381,7 +492,7 @@ export async function runPluginDisable(
   await store.disablePlugin(id);
 
   console.log();
-  console.log(`  ✓ ${plugin.name} disabled and stopped`);
+  console.log(`  ✓ ${plugin.name} disabled for this project and stopped`);
   console.log();
 }
 

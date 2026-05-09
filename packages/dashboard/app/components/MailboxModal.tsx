@@ -1,5 +1,5 @@
 import "./MailboxModal.css";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, type CSSProperties } from "react";
 import {
   X,
   Mail,
@@ -12,6 +12,8 @@ import {
   RefreshCw,
   MessageSquare,
   User,
+  ChevronRight,
+  ChevronDown,
 } from "lucide-react";
 import type { Message, MessageType, ParticipantType } from "@fusion/core";
 import {
@@ -23,13 +25,17 @@ import {
   markAllMessagesRead,
   deleteMessage,
   fetchConversation,
+  fetchMessage,
   type InboxResponse,
   type OutboxResponse,
   type AgentMailboxResponse,
 } from "../api";
 import { MessageComposer } from "./MessageComposer";
+import { MailboxMessageContent } from "./MailboxMessageContent";
 import type { Agent } from "../api";
 import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
+import { useMobileKeyboard } from "../hooks/useMobileKeyboard";
+import { useViewportMode } from "./Header";
 import { subscribeSse } from "../sse-bus";
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -80,6 +86,21 @@ function messageTypeLabel(type: MessageType): string {
 function messagePreview(content: string, max = 80): string {
   if (content.length <= max) return content;
   return `${content.slice(0, max)}…`;
+}
+
+function getDeepLinkedMessageId(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const paramId = params.get("mailbox-message");
+  if (paramId) {
+    return paramId;
+  }
+
+  const hashMatch = /^#message-(.+)$/.exec(window.location.hash);
+  return hashMatch?.[1] ?? null;
 }
 
 function buildReplyThread(messages: Message[], selectedMessage: Message): Message[] {
@@ -135,6 +156,24 @@ export function MailboxModal({
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentSubTab, setAgentSubTab] = useState<"inbox" | "outbox">("inbox");
   const [agentMailbox, setAgentMailbox] = useState<AgentMailboxResponse | null>(null);
+  const [replyContextExpanded, setReplyContextExpanded] = useState<Record<string, boolean>>({});
+  const [replyContextLoading, setReplyContextLoading] = useState<Record<string, boolean>>({});
+  const [replyContextErrors, setReplyContextErrors] = useState<Record<string, string>>({});
+  const [replyContextCache, setReplyContextCache] = useState<Map<string, Message>>(new Map());
+  const viewportMode = useViewportMode();
+  const isMobile = viewportMode === "mobile";
+  const { keyboardOverlap, viewportHeight, viewportOffsetTop, keyboardOpen } = useMobileKeyboard({ enabled: isMobile });
+  const containerKeyboardStyle = useMemo<CSSProperties | undefined>(() => {
+    if (!keyboardOpen) {
+      return undefined;
+    }
+
+    return {
+      "--keyboard-overlap": `${keyboardOverlap}px`,
+      "--vv-offset-top": `${viewportOffsetTop}px`,
+      ...(viewportHeight != null ? { "--vv-height": `${viewportHeight}px` } : {}),
+    } as CSSProperties;
+  }, [keyboardOpen, keyboardOverlap, viewportHeight, viewportOffsetTop]);
 
   // ── Data fetching ─────────────────────────────────────────────────────
 
@@ -237,6 +276,9 @@ export function MailboxModal({
 
   const handleOpenMessage = useCallback(async (message: Message) => {
     setSelectedMessage(message);
+    setReplyContextExpanded({});
+    setReplyContextLoading({});
+    setReplyContextErrors({});
     // Only auto-mark as read when viewing the dashboard user's own inbox.
     // Browsing another agent's mailbox must not consume their unread messages
     // out from under them — the agent's heartbeat is the one that reads + acks.
@@ -267,9 +309,64 @@ export function MailboxModal({
     }
   }, [projectId, activeTab]);
 
+  // Deep-link: open and highlight a specific message from URL params.
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const deepLinkedMessageId = getDeepLinkedMessageId();
+    if (!deepLinkedMessageId) {
+      return;
+    }
+
+    const message = [
+      ...(inbox?.messages ?? []),
+      ...(outbox?.messages ?? []),
+      ...(agentMailbox?.inbox ?? []),
+      ...(agentMailbox?.outbox ?? []),
+      ...conversationMessages,
+    ].find((candidate) => candidate.id === deepLinkedMessageId);
+
+    if (!message) {
+      return;
+    }
+
+    void handleOpenMessage(message);
+  }, [isOpen, inbox, outbox, agentMailbox, conversationMessages, handleOpenMessage]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const deepLinkedMessageId = getDeepLinkedMessageId();
+    if (!deepLinkedMessageId) {
+      return;
+    }
+
+    const element = document.getElementById(`message-${deepLinkedMessageId}`);
+    if (!element) {
+      return;
+    }
+
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    element.classList.add("mailbox-message-highlight");
+    const timer = window.setTimeout(() => {
+      element.classList.remove("mailbox-message-highlight");
+    }, 2000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [isOpen, selectedMessage, conversationMessages]);
+
   const handleCloseMessage = useCallback(() => {
     setSelectedMessage(null);
     setConversationMessages([]);
+    setReplyContextExpanded({});
+    setReplyContextLoading({});
+    setReplyContextErrors({});
   }, []);
 
   const handleMarkAllRead = useCallback(async () => {
@@ -342,9 +439,117 @@ export function MailboxModal({
     setComposeReplyContext(null);
   }, []);
 
+  const threadMessages = selectedMessage ? buildReplyThread(conversationMessages, selectedMessage) : [];
+
+  const setReplyExpanded = (key: string, isExpanded: boolean) => {
+    setReplyContextExpanded((prev) => ({ ...prev, [key]: isExpanded }));
+  };
+
+  const loadReplyMessage = async (messageId: string) => {
+    const cachedMessage = replyContextCache.get(messageId);
+    if (cachedMessage) {
+      return cachedMessage;
+    }
+
+    setReplyContextLoading((prev) => ({ ...prev, [messageId]: true }));
+    setReplyContextErrors((prev) => ({ ...prev, [messageId]: "" }));
+
+    try {
+      const message = await fetchMessage(messageId, projectId);
+      setReplyContextCache((prev) => {
+        const next = new Map(prev);
+        next.set(messageId, message);
+        return next;
+      });
+      return message;
+    } catch {
+      setReplyContextErrors((prev) => ({ ...prev, [messageId]: "Failed to load replied message. Click to retry." }));
+      return null;
+    } finally {
+      setReplyContextLoading((prev) => ({ ...prev, [messageId]: false }));
+    }
+  };
+
   if (!isOpen) return null;
 
-  const threadMessages = selectedMessage ? buildReplyThread(conversationMessages, selectedMessage) : [];
+  const ReplyContextExpandable = ({
+    ownerMessageId,
+    replyToId,
+    initialMessage,
+    ancestorIds,
+    testId,
+  }: {
+    ownerMessageId: string;
+    replyToId: string;
+    initialMessage?: Message;
+    ancestorIds: Set<string>;
+    testId?: string;
+  }) => {
+    const cacheMessage = replyContextCache.get(replyToId) ?? initialMessage;
+    const rowKey = `${ownerMessageId}-${replyToId}`;
+    const isExpanded = Boolean(replyContextExpanded[rowKey]);
+    const isLoadingReply = Boolean(replyContextLoading[replyToId]);
+    const errorMessage = replyContextErrors[replyToId];
+    const hasCycle = ancestorIds.has(replyToId);
+
+    const handleToggle = async () => {
+      if (isExpanded) {
+        setReplyExpanded(rowKey, false);
+        return;
+      }
+      setReplyExpanded(rowKey, true);
+      if (!cacheMessage && !hasCycle) {
+        await loadReplyMessage(replyToId);
+      }
+    };
+
+    const nextAncestorIds = new Set(ancestorIds);
+    nextAncestorIds.add(replyToId);
+
+    return (
+      <div className="mailbox-reply-context-wrapper">
+        <button
+          type="button"
+          className="mailbox-reply-context"
+          onClick={() => {
+            void handleToggle();
+          }}
+          aria-expanded={isExpanded}
+          data-testid={testId}
+        >
+          <span className="mailbox-reply-context__chevron" aria-hidden="true">
+            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </span>
+          <span>
+            ↪ Replying to {cacheMessage ? messagePreview(cacheMessage.content, 60) : `message ${replyToId}`}
+          </span>
+          {isLoadingReply && <Loader2 size={14} className="spin" />}
+        </button>
+
+        {isExpanded && (
+          <div className="mailbox-reply-context__nested" data-testid={`mailbox-reply-expanded-${replyToId}`}>
+            {errorMessage && <div className="mailbox-reply-context__error">{errorMessage}</div>}
+            {cacheMessage && (
+              <>
+                <div className="mailbox-conversation-msg-header">
+                  <span>{participantLabel(cacheMessage.fromId, cacheMessage.fromType)}</span>
+                  <span className="mailbox-message-time">{formatTimestamp(cacheMessage.createdAt)}</span>
+                </div>
+                <div className="mailbox-conversation-msg-body">{cacheMessage.content}</div>
+                {cacheMessage.metadata?.replyTo?.messageId && !nextAncestorIds.has(cacheMessage.metadata.replyTo.messageId) && (
+                  <ReplyContextExpandable
+                    ownerMessageId={cacheMessage.id}
+                    replyToId={cacheMessage.metadata.replyTo.messageId}
+                    ancestorIds={nextAncestorIds}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // ── Render ────────────────────────────────────────────────────────────
 
@@ -358,7 +563,7 @@ export function MailboxModal({
       aria-modal="true"
       data-testid="mailbox-modal-overlay"
     >
-      <div className="modal modal-lg mailbox-modal" data-testid="mailbox-modal">
+      <div className="modal modal-lg mailbox-modal" style={containerKeyboardStyle} data-testid="mailbox-modal">
         {/* Header */}
         <div className="modal-header mailbox-header">
           <div className="mailbox-title">
@@ -449,7 +654,7 @@ export function MailboxModal({
         <div className="mailbox-content" data-testid="mailbox-content">
           {/* Message Detail View */}
           {selectedMessage && !showComposer && (
-            <div className="mailbox-message-detail" data-testid="mailbox-message-detail">
+            <div className="mailbox-message-detail" data-testid="mailbox-message-detail" id={`message-${selectedMessage.id}`}>
               <div className="mailbox-message-detail-header">
                 <button
                   className="btn btn-sm btn-secondary"
@@ -512,6 +717,7 @@ export function MailboxModal({
                     return (
                       <div
                         key={msg.id}
+                        id={`message-${msg.id}`}
                         className={`mailbox-conversation-msg ${msg.id === selectedMessage.id ? "current" : ""}`}
                       >
                         <div className="mailbox-conversation-msg-header">
@@ -519,11 +725,18 @@ export function MailboxModal({
                           <span className="mailbox-message-time">{formatTimestamp(msg.createdAt)}</span>
                         </div>
                         {replyToId && (
-                          <div className="mailbox-reply-context" data-testid={`mailbox-reply-context-${msg.id}`}>
-                            ↪ Replying to {replyToMessage ? messagePreview(replyToMessage.content, 60) : `message ${replyToId}`}
-                          </div>
+                          <ReplyContextExpandable
+                            ownerMessageId={msg.id}
+                            replyToId={replyToId}
+                            initialMessage={replyToMessage}
+                            ancestorIds={new Set([msg.id])}
+                            testId={`mailbox-reply-context-${msg.id}`}
+                          />
                         )}
-                        <div className="mailbox-conversation-msg-body">{msg.content}</div>
+                        <MailboxMessageContent
+                          content={msg.content}
+                          className="mailbox-conversation-msg-body"
+                        />
                       </div>
                     );
                   })}
@@ -533,13 +746,19 @@ export function MailboxModal({
               {(threadMessages.length <= 1) && (
                 <>
                   {selectedMessage.metadata?.replyTo?.messageId && (
-                    <div className="mailbox-reply-context" data-testid="mailbox-selected-reply-context">
-                      ↪ Replying to message {selectedMessage.metadata.replyTo.messageId}
-                    </div>
+                    <ReplyContextExpandable
+                      ownerMessageId={selectedMessage.id}
+                      replyToId={selectedMessage.metadata.replyTo.messageId}
+                      initialMessage={threadMessages.find((candidate) => candidate.id === selectedMessage.metadata?.replyTo?.messageId)}
+                      ancestorIds={new Set([selectedMessage.id])}
+                      testId="mailbox-selected-reply-context"
+                    />
                   )}
-                  <div className="mailbox-message-body" data-testid="mailbox-message-body">
-                    {selectedMessage.content}
-                  </div>
+                  <MailboxMessageContent
+                    content={selectedMessage.content}
+                    className="mailbox-message-body"
+                    testId="mailbox-message-body"
+                  />
                 </>
               )}
             </div>
@@ -574,6 +793,7 @@ export function MailboxModal({
                   {inbox?.messages.map((msg) => (
                     <div
                       key={msg.id}
+                      id={`message-${msg.id}`}
                       className={`mailbox-item ${!msg.read ? "unread" : ""}`}
                       onClick={() => handleOpenMessage(msg)}
                       data-testid={`mailbox-item-${msg.id}`}
@@ -609,6 +829,7 @@ export function MailboxModal({
                   {outbox?.messages.map((msg) => (
                     <div
                       key={msg.id}
+                      id={`message-${msg.id}`}
                       className="mailbox-item"
                       onClick={() => handleOpenMessage(msg)}
                       data-testid={`mailbox-item-${msg.id}`}
@@ -713,6 +934,7 @@ export function MailboxModal({
                         {selectedAgentId && agentMailbox && agentSubTab === "inbox" && agentMailbox.inbox.map((msg) => (
                           <div
                             key={msg.id}
+                            id={`message-${msg.id}`}
                             className={`mailbox-item ${!msg.read ? "unread" : ""}`}
                             onClick={() => handleOpenMessage(msg)}
                             data-testid={`mailbox-item-${msg.id}`}
@@ -736,6 +958,7 @@ export function MailboxModal({
                         {selectedAgentId && agentMailbox && agentSubTab === "outbox" && agentMailbox.outbox.map((msg) => (
                           <div
                             key={msg.id}
+                            id={`message-${msg.id}`}
                             className="mailbox-item"
                             onClick={() => handleOpenMessage(msg)}
                             data-testid={`mailbox-item-${msg.id}`}

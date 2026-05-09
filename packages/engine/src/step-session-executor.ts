@@ -17,7 +17,7 @@ const execAsync = promisify(exec);
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
-import type { AgentStore, MessageStore, TaskDetail, Settings, TaskStore } from "@fusion/core";
+import type { AgentStore, MessageStore, PermanentAgentGatingContext, TaskDetail, Settings, TaskStore } from "@fusion/core";
 
 import {
   createResolvedAgentSession,
@@ -25,6 +25,7 @@ import {
   promptWithAutoRetry,
   resolveExecutorSessionModel,
 } from "./agent-session-helpers.js";
+import type { AgentActionGateContext } from "./agent-action-gate.js";
 import type { SkillSelectionContext } from "./skill-resolver.js";
 import { generateWorktreeName } from "./worktree-names.js";
 import { AgentSemaphore } from "./concurrency.js";
@@ -38,6 +39,7 @@ import {
   createDelegateTaskTool,
   createListAgentsTool,
   createMemoryTools,
+  createWebFetchTool,
   createReadMessagesTool,
   createSendMessageTool,
   createTaskCreateTool,
@@ -109,6 +111,10 @@ export interface StepSessionExecutorOptions {
   agentStore?: AgentStore;
   /** Optional message store for messaging tools. */
   messageStore?: MessageStore;
+  /** Optional action-gate context for permanent assigned agents. */
+  actionGateContext?: AgentActionGateContext;
+  /** Optional permanent-agent action gating context. */
+  permanentAgentGating?: PermanentAgentGatingContext;
 }
 
 // ── File Scope Extraction ─────────────────────────────────────────────
@@ -896,6 +902,7 @@ export class StepSessionExecutor {
                 createTaskDocumentReadTool(this.options.store, taskDetail.id),
               ]
             : [];
+          const webFetchTool = createWebFetchTool();
           const memoryTools = createMemoryTools(this.options.rootDir, settings);
 
           // Task log and create tools — task context for step sessions.
@@ -960,6 +967,7 @@ Follow instructions precisely and avoid unrelated changes.`,
             customTools: [
               ...pluginTools,
               ...documentTools,
+              webFetchTool,
               ...memoryTools,
               ...taskLogTool,
               ...taskCreateTool,
@@ -983,6 +991,8 @@ Follow instructions precisely and avoid unrelated changes.`,
             },
             // Skill selection from step-session executor options
             ...(this.options.skillSelection ? { skillSelection: this.options.skillSelection } : {}),
+            actionGateContext: this.options.actionGateContext,
+            permanentAgentGating: this.options.permanentAgentGating,
             taskId: taskDetail.id,
             taskTitle: taskDetail.title,
             onFallbackModelUsed: createFallbackModelObserver({

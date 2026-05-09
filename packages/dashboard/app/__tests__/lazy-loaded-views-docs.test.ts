@@ -4,7 +4,6 @@ import { resolve } from "node:path";
 
 const EXPECTED_DOCUMENTED_VIEWS = new Set([
   "AgentsView",
-  "RoadmapsView",
   "NodesView",
   "ChatView",
   "MemoryView",
@@ -13,6 +12,7 @@ const EXPECTED_DOCUMENTED_VIEWS = new Set([
   "DocumentsView",
   "SkillsView",
   "ResearchView",
+  "EvalsView",
   "TodoView",
   "SetupWizardModal",
   "PluginManager",
@@ -25,9 +25,9 @@ const EXPECTED_APP_LEVEL_VIEWS = new Set([
   "DocumentsView",
   "InsightsView",
   "ResearchView",
+  "EvalsView",
   "NodesView",
   "ChatView",
-  "RoadmapsView",
   "SkillsView",
   "MemoryView",
   "DevServerView",

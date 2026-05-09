@@ -1,4 +1,4 @@
-import type { IssueInfo, PrInfo } from "@fusion/core";
+import type { IssueInfo, PrInfo, TaskReviewData, TaskReviewItem, TaskReviewSummary } from "@fusion/core";
 import {
   isGhAvailable,
   isGhAuthenticated,
@@ -73,6 +73,51 @@ export interface PrCheckStatus {
   state: PrCheckState;
 }
 
+export interface PrReviewItem {
+  id: string;
+  source: "github-pr";
+  status: "queued" | "in-progress" | "addressed" | "failed";
+  summary: string;
+  body?: string;
+  filePath?: string;
+  line?: number;
+  reviewer?: string;
+  commentUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PrReviewStateItem {
+  id: string;
+  threadId?: string;
+  githubCommentId?: number;
+  path?: string;
+  diffSide?: string;
+  body: string;
+  author: { login: string };
+  createdAt: string;
+  updatedAt?: string;
+  state?: string;
+  htmlUrl?: string;
+  isResolved?: boolean;
+}
+
+export interface PrReviewSummary {
+  reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  reviewers: Array<{ login: string; state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "PENDING"; submittedAt?: string }>;
+  blockingReasons: string[];
+  checks: PrCheckStatus[];
+}
+
+export interface PrReviewSnapshot {
+  decision: ReviewDecision;
+  checks: PrCheckStatus[];
+  items: PrReviewStateItem[];
+  summary?: PrReviewSummary;
+  prInfo: PrInfo;
+  commentCount: number;
+}
+
 export interface PrMergeStatus {
   prInfo: PrInfo;
   reviewDecision: ReviewDecision;
@@ -109,6 +154,15 @@ export type BadgeBatchResponse = Record<
 >;
 
 // gh CLI JSON output types
+interface GhReviewJson {
+  id: string;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "PENDING" | string;
+  body?: string | null;
+  submittedAt?: string | null;
+  author?: { login?: string | null } | null;
+  url?: string | null;
+}
+
 interface GhPrViewJson {
   id?: string;
   number: number;
@@ -126,6 +180,13 @@ interface GhPrViewJson {
     updatedAt: string;
     url: string;
   }>;
+  reviews?: GhReviewJson[];
+}
+
+interface PrReviewDetails {
+  reviewDecision: ReviewDecision;
+  comments: GhPrViewJson["comments"];
+  reviews: GhReviewJson[];
 }
 
 interface GhPrListJson {
@@ -519,6 +580,232 @@ export class GitHubClient {
       baseBranch: pr.base.ref,
       commentCount: pr.comments,
     });
+  }
+
+  async getPrReviewSnapshot(owner: string | undefined, repo: string | undefined, number: number): Promise<PrReviewSnapshot> {
+    const { owner: resolvedOwner, repo: resolvedRepo } = this.resolveRepo(owner, repo);
+    const details = await this.getRawPrReviewDetails(resolvedOwner, resolvedRepo, number);
+    const mergeStatus = await this.getPrMergeStatus(resolvedOwner, resolvedRepo, number);
+    const checks = mergeStatus.checks;
+    const commentItems: PrReviewStateItem[] = (details.comments ?? []).map((comment) => ({
+      id: `gh-comment-${comment.id}`,
+      threadId: `thread-comment-${comment.id}`,
+      githubCommentId: Number.parseInt(comment.id, 10),
+      body: comment.body,
+      author: { login: comment.author?.login ?? "reviewer" },
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      htmlUrl: comment.url,
+      state: "COMMENTED",
+    }));
+
+    const reviewItems: PrReviewStateItem[] = (details.reviews ?? []).map((review) => {
+      const createdAt = review.submittedAt ?? new Date().toISOString();
+      return {
+        id: `gh-review-${review.id}`,
+        threadId: `thread-review-${review.id}`,
+        body: review.body ?? `Review ${review.state}`,
+        author: { login: review.author?.login ?? "reviewer" },
+        createdAt,
+        updatedAt: createdAt,
+        htmlUrl: review.url ?? undefined,
+        state: review.state,
+      };
+    });
+
+    return {
+      decision: details.reviewDecision ?? null,
+      checks,
+      items: [...reviewItems, ...commentItems],
+      prInfo: mergeStatus.prInfo,
+      commentCount: commentItems.length,
+      summary: {
+        reviewDecision: details.reviewDecision ?? null,
+        reviewers: (details.reviews ?? []).map((review) => ({
+          login: review.author?.login ?? "reviewer",
+          state: review.state === "APPROVED" || review.state === "CHANGES_REQUESTED" || review.state === "COMMENTED" || review.state === "PENDING" ? review.state : "COMMENTED",
+          submittedAt: review.submittedAt ?? undefined,
+        })),
+        blockingReasons: mergeStatus.blockingReasons,
+        checks,
+      },
+    };
+  }
+
+  async getPrReviewDetails(owner: string | undefined, repo: string | undefined, number: number): Promise<TaskReviewData> {
+    const { owner: resolvedOwner, repo: resolvedRepo } = this.resolveRepo(owner, repo);
+    const details = await this.getRawPrReviewDetails(resolvedOwner, resolvedRepo, number);
+    const mergeStatus = await this.getPrMergeStatus(resolvedOwner, resolvedRepo, number);
+    const fetchedAt = new Date().toISOString();
+
+    const reviewItems: TaskReviewItem[] = (details.reviews ?? []).map((review) => ({
+      itemId: `gh-review-${review.id}`,
+      sourceMode: "pull-request",
+      title: `Review ${review.state}`,
+      body: review.body ?? `Review ${review.state}`,
+      author: review.author?.login ?? "reviewer",
+      createdAt: review.submittedAt ?? null,
+      updatedAt: review.submittedAt ?? null,
+      url: review.url ?? undefined,
+      threadId: `review-${review.id}`,
+      reviewState: review.state ?? null,
+      progressStatus: null,
+    }));
+
+    const commentItems: TaskReviewItem[] = (details.comments ?? []).map((comment) => ({
+      itemId: `gh-comment-${comment.id}`,
+      sourceMode: "pull-request",
+      title: "PR comment",
+      body: comment.body,
+      author: comment.author?.login ?? "reviewer",
+      createdAt: comment.createdAt ?? null,
+      updatedAt: comment.updatedAt ?? null,
+      url: comment.url,
+      threadId: `comment-${comment.id}`,
+      reviewState: "COMMENTED",
+      progressStatus: null,
+    }));
+
+    const summary: TaskReviewSummary = {
+      reviewDecision: details.reviewDecision ?? null,
+      reviewers: (details.reviews ?? []).map((review) => ({
+        login: review.author?.login ?? "reviewer",
+        state: review.state === "APPROVED" || review.state === "CHANGES_REQUESTED" || review.state === "COMMENTED" || review.state === "PENDING" ? review.state : "COMMENTED",
+        submittedAt: review.submittedAt ?? undefined,
+      })),
+      blockingReasons: mergeStatus.blockingReasons,
+      checks: mergeStatus.checks,
+    };
+
+    return {
+      mode: "pull-request",
+      refreshable: true,
+      fetchedAt,
+      summary,
+      items: [...reviewItems, ...commentItems],
+    };
+  }
+
+  private async getRawPrReviewDetails(owner: string, repo: string, number: number): Promise<PrReviewDetails> {
+    if (this.hasGhAuth()) {
+      try {
+        return await this.getPrReviewDetailsWithGh(owner, repo, number);
+      } catch (err) {
+        if (this.token) {
+          return this.getPrReviewDetailsWithApi(owner, repo, number);
+        }
+        throw new Error(getGhErrorMessage(err));
+      }
+    }
+
+    if (this.token) {
+      return this.getPrReviewDetailsWithApi(owner, repo, number);
+    }
+
+    throw new Error("GitHub CLI (gh) is not available or not authenticated, and no GITHUB_TOKEN provided.");
+  }
+
+  private async getPrReviewDetailsWithGh(owner: string, repo: string, number: number): Promise<PrReviewDetails> {
+    const pr = await runGhJsonAsync<GhPrViewJson>([
+      "pr",
+      "view",
+      String(number),
+      "--repo",
+      `${owner}/${repo}`,
+      "--json",
+      "reviewDecision,reviews,comments",
+    ]);
+    return {
+      reviewDecision: pr.reviewDecision ?? null,
+      comments: pr.comments ?? [],
+      reviews: pr.reviews ?? [],
+    };
+  }
+
+  private async getPrReviewDetailsWithApi(owner: string, repo: string, number: number): Promise<PrReviewDetails> {
+    const response = await fetch(`${this.baseUrl}/graphql`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify({
+        query: `query PullRequestReviewDetails($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              reviewDecision
+              comments(first: 100) {
+                nodes {
+                  id
+                  body
+                  createdAt
+                  updatedAt
+                  url
+                  author { login }
+                }
+              }
+              reviews(first: 100) {
+                nodes {
+                  id
+                  state
+                  body
+                  submittedAt
+                  url
+                  author { login }
+                }
+              }
+            }
+          }
+        }`,
+        variables: { owner, repo, number },
+      }),
+    });
+
+    const payload = await response.json() as {
+      data?: {
+        repository?: {
+          pullRequest?: {
+            reviewDecision?: ReviewDecision;
+            comments?: { nodes?: Array<{ id: string; body: string; createdAt: string; updatedAt: string; url: string; author?: { login?: string | null } | null } | null> };
+            reviews?: { nodes?: Array<{ id: string; state: string; body?: string | null; submittedAt?: string | null; url?: string | null; author?: { login?: string | null } | null } | null> };
+          };
+        };
+      };
+      errors?: Array<{ message: string }>;
+    };
+
+    if (!response.ok || payload.errors?.length) {
+      const message = payload.errors?.[0]?.message || response.statusText;
+      throw new Error(`GitHub API error: ${response.status} ${message}`);
+    }
+
+    const pr = payload.data?.repository?.pullRequest;
+    if (!pr) {
+      throw new Error(`PR #${number} not found in ${owner}/${repo}`);
+    }
+
+    return {
+      reviewDecision: pr.reviewDecision ?? null,
+      comments: (pr.comments?.nodes ?? []).flatMap((comment) => {
+        if (!comment) return [];
+        return [{
+          id: comment.id,
+          body: comment.body,
+          createdAt: comment.createdAt,
+          updatedAt: comment.updatedAt,
+          url: comment.url,
+          author: { login: comment.author?.login ?? "reviewer" },
+        }];
+      }),
+      reviews: (pr.reviews?.nodes ?? []).flatMap((review) => {
+        if (!review) return [];
+        return [{
+          id: review.id,
+          state: review.state,
+          body: review.body,
+          submittedAt: review.submittedAt,
+          url: review.url,
+          author: { login: review.author?.login ?? "reviewer" },
+        }];
+      }),
+    };
   }
 
   async getPrMergeStatus(owner: string | undefined, repo: string | undefined, number: number): Promise<PrMergeStatus> {

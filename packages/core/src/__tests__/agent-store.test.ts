@@ -13,12 +13,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { AgentStore } from "../agent-store.js";
 import { TaskStore } from "../store.js";
+import { validateSnapshotEnvelope } from "../shared-mesh-state.js";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { mkdtempSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import {
+  AGENT_PERMISSION_POLICY_ACTION_CATEGORIES,
   CheckoutConflictError,
   getCanonicalAgentAssetDirectoryName,
   type AgentCapability,
@@ -241,7 +243,7 @@ describe("AgentStore", () => {
       expect(agent.id).toMatch(/^agent-/);
       expect(agent.name).toBe("Test Agent"); // trimmed
       expect(agent.role).toBe("executor");
-      expect(agent.state).toBe("idle");
+      expect(agent.state).toBe("active");
       expect(agent.metadata).toEqual({});
       expect(agent.runtimeConfig).toMatchObject({
         enabled: true,
@@ -249,6 +251,35 @@ describe("AgentStore", () => {
       });
       expect(new Date(agent.createdAt).getTime()).not.toBeNaN();
       expect(new Date(agent.updatedAt).getTime()).not.toBeNaN();
+    });
+
+    it("starts newly created non-ephemeral agents in active state", async () => {
+      const agent = await store.createAgent({
+        name: "DefaultActive",
+        role: "executor",
+      });
+
+      expect(agent.state).toBe("active");
+    });
+
+    it("starts task-worker agents in idle state", async () => {
+      const agent = await store.createAgent({
+        name: "executor-FN-3773",
+        role: "executor",
+        metadata: { agentKind: "task-worker" },
+      });
+
+      expect(agent.state).toBe("idle");
+    });
+
+    it("starts legacy taskWorker-marked agents in idle state", async () => {
+      const agent = await store.createAgent({
+        name: "executor-legacy-FN-3773",
+        role: "executor",
+        metadata: { taskWorker: true },
+      });
+
+      expect(agent.state).toBe("idle");
     });
 
     it("defaults heartbeat procedure path to canonical display-name directory", async () => {
@@ -313,6 +344,28 @@ describe("AgentStore", () => {
 
       const runtimeConfig = agent.runtimeConfig as Record<string, unknown>;
       expect(runtimeConfig.runMissedHeartbeatOnStartup).toBe(true);
+    });
+
+    it("stores default unrestricted permission policy for durable agents", async () => {
+      const agent = await store.createAgent({
+        name: "Policy Default",
+        role: "executor",
+      });
+
+      expect(agent.permissionPolicy?.presetId).toBe("unrestricted");
+      for (const category of AGENT_PERMISSION_POLICY_ACTION_CATEGORIES) {
+        expect(agent.permissionPolicy?.rules[category]).toBe("allow");
+      }
+    });
+
+    it("does not backfill permission policy for ephemeral task workers", async () => {
+      const agent = await store.createAgent({
+        name: "executor-FN-100",
+        role: "executor",
+        metadata: { agentKind: "task-worker", taskWorker: true },
+      });
+
+      expect(agent.permissionPolicy).toBeUndefined();
     });
 
     it("preserves custom metadata", async () => {
@@ -387,12 +440,24 @@ describe("AgentStore", () => {
       expect(found!.id).toBe(created.id);
       expect(found!.name).toBe("Lookup Agent");
       expect(found!.role).toBe("executor");
-      expect(found!.state).toBe("idle");
+      expect(found!.state).toBe("active");
     });
 
     it("returns null for a non-existent ID", async () => {
       const result = await store.getAgent("agent-nonexistent");
       expect(result).toBeNull();
+    });
+
+    it("resolves legacy durable agents without permissionPolicy to unrestricted", async () => {
+      const created = await store.createAgent({ name: "Legacy Policy", role: "executor" });
+      const testDb = (store as unknown as { db: { prepare: (sql: string) => { run: (...args: unknown[]) => unknown } } }).db;
+      testDb.prepare("UPDATE agents SET data = json_remove(data, '$.permissionPolicy') WHERE id = ?").run(created.id);
+
+      const hydrated = await store.getAgent(created.id);
+      expect(hydrated?.permissionPolicy?.presetId).toBe("unrestricted");
+      for (const category of AGENT_PERMISSION_POLICY_ACTION_CATEGORIES) {
+        expect(hydrated?.permissionPolicy?.rules[category]).toBe("allow");
+      }
     });
   });
 
@@ -935,7 +1000,7 @@ describe("AgentStore", () => {
       expect(revisions[0].after.name).toBe("Renamed");
     });
 
-    it("records revisions for runtimeConfig, permissions, instructions, soul, and memory changes", async () => {
+    it("records revisions for runtimeConfig, permissions, permissionPolicy, instructions, soul, and memory changes", async () => {
       const created = await store.createAgent({
         name: "Configurable",
         role: "executor",
@@ -945,6 +1010,13 @@ describe("AgentStore", () => {
 
       await store.updateAgent(created.id, { runtimeConfig: { heartbeatIntervalMs: 10000 } });
       await store.updateAgent(created.id, { permissions: { canReview: true, canExecute: true } });
+      await store.updateAgent(created.id, { permissionPolicy: { presetId: "locked-down", rules: {
+        "git-write": "block",
+        "file-write-delete": "block",
+        "shell-command": "block",
+        "network-api": "block",
+        "task-agent-management": "block",
+      } } });
       await store.updateAgent(created.id, { instructionsPath: "docs/agent.md" });
       await store.updateAgent(created.id, { instructionsText: "Follow safety checks." });
       await store.updateAgent(created.id, { soul: "Thoughtful collaborator" });
@@ -955,6 +1027,7 @@ describe("AgentStore", () => {
 
       expect(changedFields).toContain("runtimeConfig");
       expect(changedFields).toContain("permissions");
+      expect(changedFields).toContain("permissionPolicy");
       expect(changedFields).toContain("instructionsPath");
       expect(changedFields).toContain("instructionsText");
       expect(changedFields).toContain("soul");
@@ -1174,6 +1247,24 @@ describe("AgentStore", () => {
       expect(handler).toHaveBeenCalledOnce();
       expect(handler).toHaveBeenCalledWith(created.id);
     });
+
+    it("blocks delete when checked-out assigned task exists unless force=true", async () => {
+      const taskStore = new TaskStore(rootDir, join(rootDir, ".fusion-global-settings"));
+      await taskStore.init();
+      const linkedStore = new AgentStore({ rootDir, inMemoryDb: true, taskStore });
+      await linkedStore.init();
+
+      const created = await linkedStore.createAgent({ name: "Checked Out", role: "executor" });
+      const task = await taskStore.createTask({ title: "T", description: "D", column: "todo", assignedAgentId: created.id });
+      await taskStore.updateTask(task.id, { checkedOutBy: created.id });
+
+      await expect(linkedStore.deleteAgent(created.id)).rejects.toThrow("holds checkout");
+      await linkedStore.deleteAgent(created.id, { force: true });
+      expect(await taskStore.getTask(task.id)).toEqual(expect.objectContaining({ assignedAgentId: undefined, checkedOutBy: undefined }));
+
+      linkedStore.close();
+      taskStore.close();
+    });
   });
 
   // ── listAgents ────────────────────────────────────────────────────
@@ -1208,14 +1299,14 @@ describe("AgentStore", () => {
     });
 
     it("filters by state", async () => {
-      const a1 = await store.createAgent({ name: "Idle", role: "executor" });
+      const a1 = await store.createAgent({
+        name: "IdleTaskWorker",
+        role: "executor",
+        metadata: { agentKind: "task-worker" },
+      });
       const a2 = await store.createAgent({ name: "Active", role: "executor" });
-      // Record a heartbeat first so that updateAgentState(→active) doesn't
-      // trigger startHeartbeatRun internally (which would re-enter withLock).
-      await store.recordHeartbeat(a2.id, "ok");
-      await store.updateAgentState(a2.id, "active");
 
-      const idle = await store.listAgents({ state: "idle" });
+      const idle = await store.listAgents({ state: "idle", includeEphemeral: true });
       expect(idle).toHaveLength(1);
       expect(idle[0].id).toBe(a1.id);
 
@@ -1234,13 +1325,13 @@ describe("AgentStore", () => {
     });
 
     it("filters by both state and role", async () => {
-      const a1 = await store.createAgent({ name: "ActiveExec", role: "executor" });
-      await store.recordHeartbeat(a1.id, "ok");
-      await store.updateAgentState(a1.id, "active");
-      await store.createAgent({ name: "IdleExec", role: "executor" });
-      const a3 = await store.createAgent({ name: "ActiveReview", role: "reviewer" });
-      await store.recordHeartbeat(a3.id, "ok");
-      await store.updateAgentState(a3.id, "active");
+      await store.createAgent({ name: "ActiveExec", role: "executor" });
+      await store.createAgent({
+        name: "IdleExec",
+        role: "executor",
+        metadata: { agentKind: "task-worker" },
+      });
+      await store.createAgent({ name: "ActiveReview", role: "reviewer" });
 
       const result = await store.listAgents({ state: "active", role: "executor" });
       expect(result).toHaveLength(1);
@@ -1301,8 +1392,8 @@ describe("AgentStore", () => {
     });
 
     it("includeEphemeral filter works with state filter", async () => {
-      // Create a normal agent (return value not needed — just to ensure it exists in DB)
-      await store.createAgent({ name: "Normal Agent", role: "executor" });
+      // Create a normal agent
+      const normal = await store.createAgent({ name: "Normal Agent", role: "executor" });
 
       // Create a task-worker agent
       const taskWorker = await store.createAgent({
@@ -1315,12 +1406,13 @@ describe("AgentStore", () => {
 
       // Without includeEphemeral filter - only returns active non-ephemeral agents
       const activeNonEphemeral = await store.listAgents({ state: "active" });
-      expect(activeNonEphemeral).toHaveLength(0);
+      expect(activeNonEphemeral).toHaveLength(1);
+      expect(activeNonEphemeral[0].id).toBe(normal.id);
 
       // With includeEphemeral: true, returns all active agents
       const activeAll = await store.listAgents({ state: "active", includeEphemeral: true });
-      expect(activeAll).toHaveLength(1);
-      expect(activeAll[0].id).toBe(taskWorker.id);
+      expect(activeAll).toHaveLength(2);
+      expect(activeAll.map((agent) => agent.id).sort()).toEqual([normal.id, taskWorker.id].sort());
     });
 
     it("filters out agents marked with metadata.internal", async () => {
@@ -1532,17 +1624,16 @@ describe("AgentStore", () => {
   // ── updateAgentState ──────────────────────────────────────────────
 
   describe("updateAgentState", () => {
-    // Helper: create an agent and set lastHeartbeatAt so that
-    // idle→active transitions don't trigger the re-entrant
-    // startHeartbeatRun path (see FN-711 for the deadlock bug).
+    // Helper: create an active agent and set lastHeartbeatAt for tests that
+    // exercise heartbeat-aware state transitions.
     async function createReadyAgent(s: AgentStore, name: string) {
       const agent = await s.createAgent({ name, role: "executor" });
       await s.recordHeartbeat(agent.id, "ok");
       return agent;
     }
 
-    it("idle → active transition succeeds", async () => {
-      const agent = await createReadyAgent(store, "IdleToActive");
+    it("active → active transition succeeds as no-op", async () => {
+      const agent = await createReadyAgent(store, "ActiveToActive");
       const updated = await store.updateAgentState(agent.id, "active");
       expect(updated.state).toBe("active");
     });
@@ -1597,13 +1688,14 @@ describe("AgentStore", () => {
 
     it("same-state transition returns agent unchanged (no-op)", async () => {
       const agent = await store.createAgent({ name: "SameState", role: "executor" });
-      const unchanged = await store.updateAgentState(agent.id, "idle");
-      expect(unchanged.state).toBe("idle");
+      const unchanged = await store.updateAgentState(agent.id, "active");
+      expect(unchanged.state).toBe("active");
       expect(unchanged.updatedAt).toBe(agent.updatedAt);
     });
 
     it("idle → paused throws with descriptive error message", async () => {
       const agent = await store.createAgent({ name: "BadTransition", role: "executor" });
+      await store.updateAgentState(agent.id, "idle");
       await expect(
         store.updateAgentState(agent.id, "paused")
       ).rejects.toThrow("Invalid state transition: idle -> paused");
@@ -1617,16 +1709,16 @@ describe("AgentStore", () => {
       store.on("agent:stateChanged", stateHandler);
       store.on("agent:updated", updateHandler);
 
-      await store.updateAgentState(agent.id, "active");
+      await store.updateAgentState(agent.id, "idle");
 
       expect(stateHandler).toHaveBeenCalledOnce();
-      expect(stateHandler).toHaveBeenCalledWith(agent.id, "idle", "active");
+      expect(stateHandler).toHaveBeenCalledWith(agent.id, "active", "idle");
 
       // agent:updated is called with updated agent and previousState
       expect(updateHandler).toHaveBeenCalled();
       const [updatedAgent, previousState] = updateHandler.mock.calls[0];
-      expect(updatedAgent.state).toBe("active");
-      expect(previousState).toBe("idle");
+      expect(updatedAgent.state).toBe("idle");
+      expect(previousState).toBe("active");
     });
 
     it("throws for non-existent agent", async () => {
@@ -1848,6 +1940,18 @@ describe("AgentStore", () => {
       expect(claimedTask?.assignedAgentId).toBe(holderId);
       expect(claimedTask?.checkedOutBy).toBe(holderId);
       expect(claimedAgent?.taskId).toBe(taskId);
+    });
+
+    it("claimTaskForAgent rejects non-executor agents for implementation tasks", async () => {
+      const reviewer = await store.createAgent({ name: "Reviewer", role: "reviewer" });
+
+      const result = await store.claimTaskForAgent(reviewer.id, taskId);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toMatch(/requires an "executor"-role agent/);
+
+      const claimedTask = await taskStore.getTask(taskId);
+      expect(claimedTask?.assignedAgentId).toBeUndefined();
     });
 
     it("claimTaskForAgent rejects paused task", async () => {
@@ -2830,8 +2934,17 @@ describe("AgentStore", () => {
     const agent = await store.createAgent({ name: "Snapshot Agent", role: "executor" });
     await store.setLastBlockedState(agent.id, { taskId: "FN-1", blockedBy: "dep", recordedAt: new Date().toISOString(), contextHash: "h" });
 
+    const run1 = await store.startHeartbeatRun(agent.id);
+    await store.endHeartbeatRun(run1.id, "completed");
+    const run2 = await store.startHeartbeatRun(agent.id);
+    await store.endHeartbeatRun(run2.id, "completed");
+
     const agentSnapshot = await store.getAgentSnapshot();
     const runSnapshot = store.getAgentRunSnapshot();
+    const limitedRunSnapshot = store.getAgentRunSnapshot(1);
+
+    validateSnapshotEnvelope(agentSnapshot);
+    validateSnapshotEnvelope(runSnapshot);
 
     const applyAgent = await store.applyAgentSnapshot(agentSnapshot);
     const applyRun = await store.applyAgentRunSnapshot(runSnapshot);
@@ -2839,8 +2952,13 @@ describe("AgentStore", () => {
     const runSnapshot2 = store.getAgentRunSnapshot();
 
     expect(applyAgent.appliedAgents).toBeGreaterThan(0);
+    expect(agentSnapshot.payload.agents.length).toBeGreaterThan(0);
+    expect(agentSnapshot.payload.blockedStates.length).toBe(1);
     expect(agentSnapshot2.payload).toEqual(agentSnapshot.payload);
     expect(runSnapshot2.payload).toEqual(runSnapshot.payload);
+    expect(limitedRunSnapshot.payload.runs).toHaveLength(1);
+    const limitedRunId = limitedRunSnapshot.payload.runs[0]?.id;
+    expect([run1.id, run2.id]).toContain(limitedRunId);
     expect(applyRun.applied + applyRun.skipped).toBeGreaterThanOrEqual(0);
   });
 });

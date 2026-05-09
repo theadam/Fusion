@@ -29,6 +29,7 @@ All skill/extension tool invocations in this catalog use the public `fn_*` names
 | `fn_task_import_github_issue` | Import a specific GitHub issue as a Fusion task. Fetches the issue by number and creates a single task in the planning column with the issue title and body. |
 | `fn_task_browse_github_issues` | List open GitHub issues from a repository to browse before importing. Returns issue numbers, titles, and URLs for selection. Use with fn_task_import_github_issue to import specific issues by number. |
 | `fn_task_plan` | Create a task via AI-guided planning mode — interactive conversation to refine your idea into a well-specified task. |
+| `fn_web_fetch` | Lightweight URL fetch (no JS rendering). Use agent-browser skill for JS-heavy pages. URL to fetch (http/https) Optional extraction hint for downstream summarization Timeout in milliseconds (default: 30000) Max bytes to return (default: 512000) |
 | `fn_research_run` | Start a bounded research run and optionally wait for findings. |
 | `fn_research_list` | List recent research runs. |
 | `fn_research_get` | Get one research run and structured findings. |
@@ -49,6 +50,8 @@ All skill/extension tool invocations in this catalog use the public `fn_*` names
 | `fn_feature_link_task` | Link a feature to a fn task for implementation. Updates the feature status to 'triaged' and associates it with the task. |
 | `fn_agent_stop` | Stop a running agent — pauses its execution. Transitions the agent from running/active to paused state. |
 | `fn_agent_start` | Start a stopped agent — resumes its execution. Transitions the agent from paused to active state. |
+| `fn_agent_create` | Create a new non-ephemeral agent. |
+| `fn_agent_delete` | Delete a non-ephemeral agent. |
 | `fn_list_agents` | List all available agents in the system. Shows each agent's name, role, state, personality (soul), and current assignment. Use this to discover which agents exist and what they specialize in before delegating work. |
 | `fn_delegate_task` | Create a new task and assign it to a specific agent for execution. The task goes to 'todo' and will be picked up by the target agent on their next heartbeat cycle. Use fn_list_agents first to find available agents and their capabilities. |
 | `fn_agent_show` | Show detailed information about a single agent, including their role, state, position in the org hierarchy (reports-to, direct reports), skills, and current assignment. |

@@ -33,6 +33,7 @@ import {
 } from "./api-error.js";
 import { getOrCreateProjectStore } from "./project-store-resolver.js";
 
+
 // PluginRunner interface for optional plugin runner
 function isPluginRouteResponse(result: unknown): result is import("@fusion/core").PluginRouteResponse {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
@@ -406,8 +407,10 @@ export function createPluginRouter(
 
     if (plugin.state !== "started") {
       res.json({
-        hasSetup: false,
-        status: { status: "error", error: "Plugin not loaded" },
+        hasSetup: true,
+        setupCheckDeferred: true,
+        deferredReason: "plugin-not-started",
+        pluginState: plugin.state,
       });
       return;
     }
@@ -545,24 +548,32 @@ export function createPluginRouter(
             ? (req.body as { projectId: string }).projectId
             : undefined);
         const scopedStore = projectId ? await getOrCreateProjectStore(projectId) : null;
+        const taskStore = scopedStore ?? defaultTaskStore ?? ({} as import("@fusion/core").TaskStore);
 
-        // Create a minimal context for the handler
-        const ctx: PluginContext = {
-          pluginId,
-          taskStore: scopedStore ?? defaultTaskStore ?? ({} as import("@fusion/core").TaskStore),
-          settings: {},
-          logger: {
-            info: (...args: unknown[]) => console.log(`[plugin:${pluginId}]`, ...args),
-            warn: (...args: unknown[]) => console.warn(`[plugin:${pluginId}]`, ...args),
-            error: (...args: unknown[]) => console.error(`[plugin:${pluginId}]`, ...args),
-            debug: (...args: unknown[]) => {
-              if (process.env.DEBUG?.includes("plugins")) {
-                console.log(`[plugin:${pluginId}]`, ...args);
-              }
-            },
-          },
-          emitEvent: () => {},
-        };
+        let settings: Record<string, unknown> = {};
+        const scopedPluginStore = scopedStore?.getPluginStore?.();
+        if (scopedPluginStore) {
+          try {
+            const scopedPlugin = await scopedPluginStore.getPlugin(pluginId);
+            settings = scopedPlugin.settings;
+          } catch {
+            // Fall back to default store plugin settings when project-scoped plugin record is unavailable.
+          }
+        }
+        if (!scopedPluginStore || Object.keys(settings).length === 0) {
+          try {
+            const pluginRecord = await pluginStore.getPlugin(pluginId);
+            settings = pluginRecord.settings;
+          } catch {
+            // Keep empty settings when plugin store record isn't available.
+          }
+        }
+
+        const ctx: PluginContext = await pluginLoader.createRouteContext(pluginId, {
+          taskStore,
+          settings,
+          resolveProjectTaskStore: getOrCreateProjectStore,
+        });
 
         // Call the route handler with Express Request cast to unknown
         const result = await route.handler(req as unknown, ctx);
@@ -592,6 +603,9 @@ export function createPluginRouter(
           break;
         case "PUT":
           router.put(fullPath, handler);
+          break;
+        case "PATCH":
+          router.patch(fullPath, handler);
           break;
         case "DELETE":
           router.delete(fullPath, handler);

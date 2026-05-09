@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { X, Send, Loader2, Bot, AlertCircle } from "lucide-react";
 import type { ParticipantType, MessageType } from "@fusion/core";
 import { getErrorMessage } from "@fusion/core";
@@ -46,6 +46,16 @@ export function MessageComposer({
   const [wakeRecipient, setWakeRecipient] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const selectedAgent = useMemo(() => agents.find((agent) => agent.id === toId), [agents, toId]);
+  const prefilledRecipientAgent = useMemo(
+    () => (recipient ? agents.find((agent) => agent.id === recipient.id) : undefined),
+    [agents, recipient],
+  );
+  const recipientIsAgent = toType === "agent";
+  const recipientAlwaysImmediate = recipientIsAgent && selectedAgent?.runtimeConfig?.messageResponseMode === "immediate";
+  const wakeImmediately = recipientIsAgent && (wakeRecipient || recipientAlwaysImmediate);
 
   const isValid = toId.trim() !== "" && content.trim().length > 0 && content.length <= MAX_CONTENT_LENGTH;
 
@@ -57,14 +67,11 @@ export function MessageComposer({
 
     try {
       const messageType: MessageType = toType === "agent" ? "user-to-agent" : "system";
-      const includeWake = wakeRecipient && toType === "agent";
       const metadata =
-        replyContext || includeWake
-          ? {
-              ...(replyContext ? { replyTo: { messageId: replyContext.messageId } } : {}),
-              ...(includeWake ? { wakeRecipient: true } : {}),
-            }
+        replyContext
+          ? { replyTo: { messageId: replyContext.messageId } }
           : undefined;
+      const sendWakeImmediately = wakeImmediately;
       await sendMessage(
         {
           toId: toId.trim(),
@@ -72,6 +79,7 @@ export function MessageComposer({
           content: content.trim(),
           type: messageType,
           ...(metadata ? { metadata } : {}),
+          ...(sendWakeImmediately ? { wakeImmediately: true } : {}),
         },
         projectId,
       );
@@ -83,12 +91,35 @@ export function MessageComposer({
     } finally {
       setIsSending(false);
     }
-  }, [isValid, isSending, toId, toType, content, wakeRecipient, replyContext, projectId, onSend, addToast]);
+  }, [isValid, isSending, toId, toType, content, wakeImmediately, replyContext, projectId, onSend, addToast]);
 
   const handleAgentSelect = useCallback((agentId: string) => {
     setToId(agentId);
     setToType("agent");
   }, []);
+
+  useEffect(() => {
+    if (!replyContext) {
+      return;
+    }
+
+    textareaRef.current?.focus();
+  }, [replyContext]);
+
+  useEffect(() => {
+    if (!replyContext || typeof window === "undefined" || window.visualViewport == null) {
+      return;
+    }
+
+    const handleVisualViewportResize = () => {
+      textareaRef.current?.scrollIntoView({ block: "center", behavior: "auto" });
+    };
+
+    window.visualViewport.addEventListener("resize", handleVisualViewportResize);
+    return () => {
+      window.visualViewport?.removeEventListener("resize", handleVisualViewportResize);
+    };
+  }, [replyContext]);
 
   return (
     <div className="message-composer" data-testid="message-composer">
@@ -137,7 +168,7 @@ export function MessageComposer({
             <span className="message-composer-label">To:</span>
             <span className="message-composer-recipient-fixed">
               <Bot size={14} />
-              {recipient.id}
+              {prefilledRecipientAgent?.name || recipient.id}
             </span>
           </div>
         )}
@@ -158,6 +189,7 @@ export function MessageComposer({
           </label>
           <textarea
             id="message-content"
+            ref={textareaRef}
             className="message-composer-textarea"
             placeholder="Type your message…"
             value={content}
@@ -174,19 +206,22 @@ export function MessageComposer({
         </div>
 
         {/* Wake recipient toggle (agents only) */}
-        {toType === "agent" && (
+        {recipientIsAgent && (
           <div className="message-composer-field message-composer-field--wake">
             <label className="message-composer-wake-label">
               <input
                 type="checkbox"
-                checked={wakeRecipient}
+                checked={wakeImmediately}
+                disabled={recipientAlwaysImmediate}
                 onChange={(e) => setWakeRecipient(e.target.checked)}
                 data-testid="message-composer-wake"
               />
               <span>
-                Wake recipient immediately
-                <span className="message-composer-wake-hint">
-                  (overrides their messageResponseMode)
+                Wake agent immediately
+                <span className="message-composer-wake-hint" data-testid="message-composer-wake-hint">
+                  {recipientAlwaysImmediate
+                    ? "(agent is already set to immediate response mode)"
+                    : "(one-off override for this message only)"}
                 </span>
               </span>
             </label>

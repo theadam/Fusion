@@ -19,8 +19,8 @@ import { ResearchStepRunner } from "./research-step-runner.js";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type, type Static } from "@mariozechner/pi-ai";
 import type { AgentReflectionService } from "./agent-reflection.js";
-import { MAX_INSTRUCTIONS_TEXT_LENGTH, MAX_MEMORY_LENGTH, MAX_SOUL_LENGTH } from "./agent-instructions.js";
 import { createLogger } from "./logger.js";
+import { fetchWebContent, WebFetchError } from "./web-fetch.js";
 
 // ── Tool parameter schemas (canonical definitions) ────────────────────────
 
@@ -103,6 +103,35 @@ export const updateAgentConfigParams = Type.Object({
   ], { description: "How agent responds to messages" })),
 });
 
+export const createAgentParams = Type.Object({
+  name: Type.String({ description: "Name for the new agent" }),
+  role: Type.Union([
+    Type.Literal("triage"),
+    Type.Literal("executor"),
+    Type.Literal("reviewer"),
+    Type.Literal("merger"),
+    Type.Literal("engineer"),
+    Type.Literal("custom"),
+  ], { description: "Agent role/capability" }),
+  soul: Type.Optional(Type.String({ description: "Agent personality/identity text", maxLength: 10000 })),
+  instructions_text: Type.Optional(Type.String({ description: "Inline custom instructions", maxLength: 50000 })),
+  instructions_path: Type.Optional(Type.String({ description: "Path to instructions markdown file", maxLength: 500 })),
+  reportsTo: Type.Optional(Type.String({ description: "Manager agent ID. Defaults to the calling agent." })),
+  heartbeat_interval_ms: Type.Optional(Type.Number({ description: "Heartbeat polling interval in ms", minimum: 1000 })),
+  heartbeat_timeout_ms: Type.Optional(Type.Number({ description: "Heartbeat timeout in ms", minimum: 5000 })),
+  max_concurrent_runs: Type.Optional(Type.Number({ description: "Max concurrent heartbeat runs", minimum: 1 })),
+  message_response_mode: Type.Optional(Type.Union([
+    Type.Literal("immediate"),
+    Type.Literal("on-heartbeat"),
+  ], { description: "How agent responds to messages" })),
+});
+
+export const deleteAgentParams = Type.Object({
+  agent_id: Type.String({ description: "Agent ID to delete" }),
+  force: Type.Optional(Type.Boolean({ description: "Force delete even if the agent currently holds a checkout lease" })),
+  reassign_to: Type.Optional(Type.String({ description: "Optional replacement agent ID for tasks currently assigned to the deleted agent" })),
+});
+
 export const sendMessageParams = Type.Object({
   to_id: Type.String({ description: "Recipient ID (agent ID or user ID, depending on message type)" }),
   content: Type.String({ description: "Message body (1-2000 characters)" }),
@@ -129,6 +158,13 @@ export const memoryGetParams = Type.Object({
   path: Type.String({ description: "Memory path from fn_memory_search, e.g. .fusion/memory/MEMORY.md or .fusion/memory/YYYY-MM-DD.md" }),
   startLine: Type.Optional(Type.Number({ description: "1-based start line (default: 1)" })),
   lineCount: Type.Optional(Type.Number({ description: "Number of lines to read (default: 120, max: 400)" })),
+});
+
+export const webFetchParams = Type.Object({
+  url: Type.String({ description: "URL to fetch (http/https only)" }),
+  prompt: Type.Optional(Type.String({ description: "Optional extraction hint for downstream summarization" })),
+  timeoutMs: Type.Optional(Type.Number({ description: "Request timeout in milliseconds" })),
+  maxBytes: Type.Optional(Type.Number({ description: "Maximum content bytes to return" })),
 });
 
 export const researchRunParams = Type.Object({
@@ -194,6 +230,10 @@ type MemorySearchHit = {
 
 const log = createLogger("agent-tools");
 
+const MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000;
+const MAX_MEMORY_LENGTH = 50_000;
+const MAX_SOUL_LENGTH = 10_000;
+
 const AGENT_MEMORY_ROOT = ".fusion/agent-memory";
 const AGENT_MEMORY_FILENAME = "MEMORY.md";
 const AGENT_DREAMS_FILENAME = "DREAMS.md";
@@ -201,11 +241,11 @@ const agentQmdRefreshState = new Map<string, { lastStartedAt: number; inFlight?:
 const AGENT_QMD_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const DAILY_AGENT_MEMORY_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
 
-function sanitizeAgentMemoryId(agentId: string): string {
+export function sanitizeAgentMemoryId(agentId: string): string {
   return agentId.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
 }
 
-function agentMemoryDisplayPath(agentId: string): string {
+export function agentMemoryDisplayPath(agentId: string): string {
   return `${AGENT_MEMORY_ROOT}/${sanitizeAgentMemoryId(agentId)}/${AGENT_MEMORY_FILENAME}`;
 }
 
@@ -217,7 +257,7 @@ function agentMemoryDirectory(rootDir: string, agentId: string): string {
   return join(rootDir, AGENT_MEMORY_ROOT, sanitizeAgentMemoryId(agentId));
 }
 
-function agentMemoryFilePath(rootDir: string, agentId: string): string {
+export function agentMemoryFilePath(rootDir: string, agentId: string): string {
   return join(agentMemoryDirectory(rootDir, agentId), AGENT_MEMORY_FILENAME);
 }
 
@@ -227,6 +267,26 @@ function agentDreamsFilePath(rootDir: string, agentId: string): string {
 
 function agentDailyFilePath(rootDir: string, agentId: string, date = new Date()): string {
   return join(agentMemoryDirectory(rootDir, agentId), `${date.toISOString().slice(0, 10)}.md`);
+}
+
+export async function readAgentMemoryWorkspaceLongTerm(rootDir: string, agentId: string): Promise<string> {
+  const safeRoot = typeof rootDir === "string" ? rootDir.trim() : "";
+  const safeAgentId = typeof agentId === "string" ? agentId.trim() : "";
+  if (!safeRoot || !safeAgentId) {
+    return "";
+  }
+
+  const filePath = agentMemoryFilePath(safeRoot, safeAgentId);
+  try {
+    const fileStat = await stat(filePath);
+    if (!fileStat.isFile()) {
+      return "";
+    }
+    const content = await readFile(filePath, "utf-8");
+    return typeof content === "string" ? content.trim() : "";
+  } catch {
+    return "";
+  }
 }
 
 export function qmdAgentMemoryCollectionName(rootDir: string, agentId: string): string {
@@ -898,6 +958,60 @@ export function createMemoryAppendTool(rootDir: string, settings?: MemoryToolSet
   };
 }
 
+export function createWebFetchTool(options?: { allowPrivateHosts?: boolean }): ToolDefinition {
+  return {
+    name: "fn_web_fetch",
+    label: "WebFetch",
+    description: "Fetch and extract readable text from a URL (lightweight HTTP fetch, no JS rendering).",
+    parameters: webFetchParams,
+    execute: async (_id: string, params: Static<typeof webFetchParams>) => {
+      try {
+        const result = await fetchWebContent(params.url, {
+          timeoutMs: params.timeoutMs,
+          maxBytes: params.maxBytes,
+          allowPrivateHosts: options?.allowPrivateHosts ?? false,
+        });
+        const sections = [
+          `URL: ${result.finalUrl}`,
+          `Status: ${result.status}`,
+          `Content-Type: ${result.contentType}`,
+          params.prompt ? `Prompt: ${params.prompt}` : undefined,
+          result.title ? `Title: ${result.title}` : undefined,
+          "",
+          result.content,
+          result.truncated ? "\n[truncated to maxBytes]" : "",
+        ].filter(Boolean);
+        return {
+          content: [{ type: "text" as const, text: sections.join("\n") }],
+          details: {
+            finalUrl: result.finalUrl,
+            status: result.status,
+            contentType: result.contentType,
+            title: result.title,
+            truncated: result.truncated,
+            bytesRead: result.bytesRead,
+            prompt: params.prompt,
+          },
+        };
+      } catch (error) {
+        if (error instanceof WebFetchError) {
+          return {
+            content: [{ type: "text" as const, text: `ERROR [${error.code}]: ${error.message}` }],
+            details: { code: error.code, message: error.message },
+            isError: true,
+          };
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text" as const, text: `ERROR [network-error]: ${message}` }],
+          details: { code: "network-error", message },
+          isError: true,
+        };
+      }
+    },
+  };
+}
+
 export function createMemoryTools(rootDir: string, settings?: MemoryToolSettings, options?: MemoryToolOptions): ToolDefinition[] {
   if (settings?.memoryEnabled === false) {
     return [];
@@ -1237,6 +1351,11 @@ export function createGetAgentConfigTool(agentStore: AgentStore, callingAgentId:
   };
 }
 
+function isCallerPrivileged(caller: { id: string; role: string; reportsTo?: string | null } | null): boolean {
+  if (!caller) return false;
+  return caller.role === "ceo" || caller.reportsTo == null;
+}
+
 export function createUpdateAgentConfigTool(agentStore: AgentStore, callingAgentId: string): ToolDefinition {
   return {
     name: "fn_update_agent_config",
@@ -1344,6 +1463,100 @@ export function createUpdateAgentConfigTool(agentStore: AgentStore, callingAgent
  * @param taskStore - TaskStore for task creation
  * @returns ToolDefinition for the `fn_delegate_task` tool
  */
+export function createAgentCreateTool(
+  agentStore: AgentStore,
+  callingAgentId: string,
+  options?: { hireApprovalEnabled?: boolean },
+): ToolDefinition {
+  return {
+    name: "fn_agent_create",
+    label: "Create Agent",
+    description: "Create a new non-ephemeral direct-report agent.",
+    parameters: createAgentParams,
+    execute: async (_id: string, params: Static<typeof createAgentParams>) => {
+      const caller = await agentStore.getAgent(callingAgentId);
+      const privileged = isCallerPrivileged(caller);
+      const reportsTo = params.reportsTo ?? callingAgentId;
+
+      if (!privileged && reportsTo !== callingAgentId) {
+        return {
+          content: [{ type: "text" as const, text: "ERROR: You can only create agents that report to you" }],
+          details: {},
+        };
+      }
+
+      const runtimeConfig: Record<string, unknown> = {
+        ...(params.heartbeat_interval_ms !== undefined ? { heartbeatIntervalMs: params.heartbeat_interval_ms } : {}),
+        ...(params.heartbeat_timeout_ms !== undefined ? { heartbeatTimeoutMs: params.heartbeat_timeout_ms } : {}),
+        ...(params.max_concurrent_runs !== undefined ? { maxConcurrentRuns: params.max_concurrent_runs } : {}),
+        ...(params.message_response_mode !== undefined ? { messageResponseMode: params.message_response_mode } : {}),
+      };
+
+      const created = await agentStore.createAgent({
+        name: params.name,
+        role: params.role,
+        ...(params.soul !== undefined ? { soul: params.soul } : {}),
+        ...(params.instructions_text !== undefined ? { instructionsText: params.instructions_text } : {}),
+        ...(params.instructions_path !== undefined ? { instructionsPath: params.instructions_path } : {}),
+        reportsTo,
+        ...(Object.keys(runtimeConfig).length > 0 ? { runtimeConfig } : {}),
+      });
+
+      if (options?.hireApprovalEnabled) {
+        await agentStore.updateAgentState(created.id, "paused");
+        await agentStore.updateAgent(created.id, {
+          metadata: { ...(created.metadata ?? {}), pendingApproval: true },
+        });
+      }
+
+      return {
+        content: [{ type: "text" as const, text: `Created agent ${created.name} (${created.id})${options?.hireApprovalEnabled ? " in pending_approval" : ""}` }],
+        details: { agent: created, pendingApproval: options?.hireApprovalEnabled === true },
+      };
+    },
+  };
+}
+
+export function createAgentDeleteTool(agentStore: AgentStore, callingAgentId: string): ToolDefinition {
+  return {
+    name: "fn_agent_delete",
+    label: "Delete Agent",
+    description: "Delete one of your direct-report non-ephemeral agents.",
+    parameters: deleteAgentParams,
+    execute: async (_id: string, params: Static<typeof deleteAgentParams>) => {
+      const caller = await agentStore.getAgent(callingAgentId);
+      const target = await agentStore.getAgent(params.agent_id);
+      if (!target) {
+        return { content: [{ type: "text" as const, text: `ERROR: Agent ${params.agent_id} not found` }], details: {} };
+      }
+
+      const privileged = isCallerPrivileged(caller);
+      if (!privileged && target.reportsTo !== callingAgentId) {
+        return {
+          content: [{ type: "text" as const, text: "ERROR: You can only delete agents that report to you" }],
+          details: {},
+        };
+      }
+
+      if (isEphemeralAgent(target)) {
+        return { content: [{ type: "text" as const, text: `ERROR: Cannot delete ephemeral/runtime agent ${params.agent_id}` }], details: {} };
+      }
+
+      try {
+        await agentStore.deleteAgent(params.agent_id, { force: params.force === true, reassignTo: params.reassign_to });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `ERROR: ${message}` }], details: {} };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: `Deleted agent ${target.name} (${target.id})` }],
+        details: { agentId: target.id },
+      };
+    },
+  };
+}
+
 export function createDelegateTaskTool(
   agentStore: AgentStore,
   taskStore: TaskStore,

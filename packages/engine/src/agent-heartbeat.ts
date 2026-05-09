@@ -18,11 +18,11 @@
  */
 
 import type { AgentStore, AgentHeartbeatRun, HeartbeatInvocationSource, AgentHeartbeatConfig, AgentBudgetStatus, Message, MessageStore, TaskStore, TaskDetail, AgentRole, Agent, InboxTask, RunMutationContext, Settings, AgentConfigRevision, ReflectionStore } from "@fusion/core";
-import { buildExecutionMemoryInstructions, isEphemeralAgent, hasAgentIdentity } from "@fusion/core";
+import { ApprovalRequestStore, buildExecutionMemoryInstructions, isEphemeralAgent, hasAgentIdentity, resolveEffectiveAgentPermissionPolicy, canAgentTakeImplementationTask } from "@fusion/core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type, type Static } from "@mariozechner/pi-ai";
 import { createHash } from "node:crypto";
-import { createTaskCreateTool, createTaskLogToolWithContext, createTaskDocumentWriteTool, createTaskDocumentReadTool, createListAgentsTool, createDelegateTaskTool, createGetAgentConfigTool, createUpdateAgentConfigTool, createSendMessageTool, createReadMessagesTool, createMemoryTools, createReadEvaluationsTool, createUpdateIdentityTool, createReflectOnPerformanceTool, taskCreateParams } from "./agent-tools.js";
+import { createTaskCreateTool, createTaskLogToolWithContext, createTaskDocumentWriteTool, createTaskDocumentReadTool, createListAgentsTool, createDelegateTaskTool, createGetAgentConfigTool, createUpdateAgentConfigTool, createAgentCreateTool, createAgentDeleteTool, createSendMessageTool, createReadMessagesTool, createMemoryTools, createReadEvaluationsTool, createUpdateIdentityTool, createReflectOnPerformanceTool, createWebFetchTool, readAgentMemoryWorkspaceLongTerm, taskCreateParams } from "./agent-tools.js";
 import { AgentLogger } from "./agent-logger.js";
 import {
   resolveAgentInstructionsWithRatings,
@@ -34,6 +34,7 @@ import { heartbeatLog, formatError } from "./logger.js";
 import { createRunAuditor, type EngineRunContext } from "./run-audit.js";
 import { promptWithFallback } from "./pi.js";
 import { createResolvedAgentSession, extractRuntimeHint, extractRuntimeModel } from "./agent-session-helpers.js";
+import type { AgentActionGateContext } from "./agent-action-gate.js";
 import { buildSessionSkillContextSync } from "./session-skill-context.js";
 import type { AgentReflectionService } from "./agent-reflection.js";
 
@@ -401,8 +402,9 @@ export const HEARTBEAT_PROCEDURE = `## Heartbeat Procedure (run every tick, in o
    you expect, and surface any anomalies in your first text output before
    doing anything else. The full content is in the Custom Instructions
    section of your system prompt.
-2. **Inbox** — when fn_read_messages is available, call it. Process any pending
-   messages first; reply with reply_to_message_id when answering.
+2. **Inbox** — when fn_read_messages is available, call it immediately and
+   process unread/pending messages before any other action; reply with
+   reply_to_message_id when answering.
 3. **Wake delta** — read the Wake Delta block above. The wake reason is the
    highest-priority change for this heartbeat. If you were woken by a comment
    or a message, acknowledge it before doing anything else.
@@ -433,8 +435,9 @@ export const HEARTBEAT_NO_TASK_PROCEDURE = `## Heartbeat Procedure (run every ti
    you expect, and surface any anomalies in your first text output before
    doing anything else. The full content is in the Custom Instructions
    section of your system prompt.
-2. **Inbox** — when fn_read_messages is available, call it. Process any pending
-   messages first; reply with reply_to_message_id when answering.
+2. **Inbox** — when fn_read_messages is available, call it immediately and
+   process unread/pending messages before any other action; reply with
+   reply_to_message_id when answering.
 3. **Wake delta** — read the Wake Delta block above. The wake reason is the
    highest-priority change for this heartbeat. If you were woken by a comment
    or a message, acknowledge it before doing anything else.
@@ -487,16 +490,21 @@ function shortContentHash(value: string): string {
 function buildIdentitySnapshot(args: {
   agent: Agent;
   resolvedInstructions: string;
+  workspaceMemory: string;
 }): string {
-  const { agent, resolvedInstructions } = args;
+  const { agent, resolvedInstructions, workspaceMemory } = args;
 
   const soulTrimmed = typeof agent.soul === "string" ? agent.soul.trim() : "";
   const instrTrimmed = resolvedInstructions.trim();
-  const memTrimmed = typeof agent.memory === "string" ? agent.memory.trim() : "";
+  const inlineMemoryTrimmed = typeof agent.memory === "string" ? agent.memory.trim() : "";
+  const workspaceMemoryTrimmed = workspaceMemory.trim();
+  const memorySource = inlineMemoryTrimmed ? "inline" : workspaceMemoryTrimmed ? "workspace" : null;
+  const memTrimmed = inlineMemoryTrimmed || workspaceMemoryTrimmed;
 
-  const formatField = (trimmed: string): string => {
+  const formatField = (trimmed: string, source?: "inline" | "workspace"): string => {
     if (!trimmed) return "absent";
-    return `loaded (${trimmed.length} chars, sha256:${shortContentHash(trimmed)})`;
+    const sourceLabel = source ? `, source: ${source}` : "";
+    return `loaded (${trimmed.length} chars, sha256:${shortContentHash(trimmed)}${sourceLabel})`;
   };
 
   return [
@@ -509,7 +517,7 @@ function buildIdentitySnapshot(args: {
     `- role: ${agent.role}`,
     `- soul: ${formatField(soulTrimmed)}`,
     `- instructions: ${formatField(instrTrimmed)}`,
-    `- memory: ${formatField(memTrimmed)}`,
+    `- memory: ${formatField(memTrimmed, memorySource ?? undefined)}`,
   ].join("\n");
 }
 
@@ -544,6 +552,7 @@ export class HeartbeatMonitor {
   private reflectionStore?: ReflectionStore;
   private reflectionService?: AgentReflectionService;
   private selfImproveService?: SelfImproveServiceLike;
+  private approvalRequestStore?: ApprovalRequestStore;
 
   private trackedAgents: Map<string, TrackedAgent> = new Map();
   private agentStartLocks: Map<string, Promise<unknown>> = new Map();
@@ -571,6 +580,103 @@ export class HeartbeatMonitor {
     this.reflectionStore = options.reflectionStore;
     this.reflectionService = options.reflectionService;
     this.selfImproveService = options.selfImproveService;
+  }
+
+  private getApprovalRequestStore(): ApprovalRequestStore {
+    if (!this.approvalRequestStore) {
+      if (!this.taskStore) {
+        throw new Error("HeartbeatMonitor missing taskStore for approval request persistence");
+      }
+      this.approvalRequestStore = new ApprovalRequestStore(this.taskStore.getDatabase());
+    }
+    return this.approvalRequestStore;
+  }
+
+  private buildActionGateContext(agent: Agent, taskId?: string, runId?: string): AgentActionGateContext | undefined {
+    if (isEphemeralAgent(agent)) {
+      return undefined;
+    }
+    const policy = resolveEffectiveAgentPermissionPolicy(agent.permissionPolicy);
+    return {
+      agentId: agent.id,
+      agentName: agent.name,
+      isEphemeral: false,
+      taskId,
+      runId,
+      permissionPolicy: policy,
+      createApprovalRequest: async (decision, args) => this.getApprovalRequestStore().create({
+        requester: { actorId: agent.id, actorType: "agent", actorName: agent.name },
+        taskId,
+        runId,
+        targetAction: {
+          category: decision.category === "exempt" ? "command_execution" : decision.category,
+          action: decision.operation,
+          summary: decision.summary,
+          resourceType: decision.resourceType,
+          resourceId: decision.resourceId ?? "",
+          context: { ...decision.metadata, approvalDedupeKey: decision.approvalDedupeKey, toolName: decision.toolName, toolArgs: args },
+        },
+      }),
+      findApprovalByDedupeKey: async (dedupeKey) => {
+        const latest = this.getApprovalRequestStore().findLatestByDedupeKey({ requesterActorId: agent.id, taskId, dedupeKey });
+        return latest ? { id: latest.id, status: latest.status } : null;
+      },
+      findPendingApprovalByDedupeKey: async (dedupeKey) => {
+        const latest = this.getApprovalRequestStore().findLatestByDedupeKey({ requesterActorId: agent.id, taskId, dedupeKey });
+        return latest?.status === "pending" ? { id: latest.id } : null;
+      },
+      pauseForApproval: async ({ approvalRequestId, decision }) => {
+        if (taskId && this.taskStore) {
+          await this.taskStore.pauseTask(taskId, true, undefined, { pausedByAgentId: agent.id });
+          await this.taskStore.logEntry(
+            taskId,
+            `Approval required for ${decision.toolName}. Request ${approvalRequestId} created; task and agent paused awaiting decision.`,
+          );
+        }
+        await this.store.updateAgentState(agent.id, "paused");
+        await this.store.updateAgent(agent.id, { pauseReason: "awaiting-approval" });
+      },
+      markApprovalCompleted: async (approvalRequestId) => {
+        await this.getApprovalRequestStore().markCompleted(approvalRequestId, {
+          actor: { actorId: agent.id, actorType: "agent", actorName: agent.name },
+          note: "Tool executed after approval",
+        });
+      },
+    };
+  }
+
+  private buildPermanentAgentGatingContext(agent: Agent, taskId?: string, runId?: string): import("@fusion/core").PermanentAgentGatingContext | undefined {
+    if (isEphemeralAgent(agent)) {
+      return undefined;
+    }
+
+    return {
+      permissionPolicy: resolveEffectiveAgentPermissionPolicy(agent.permissionPolicy),
+      requester: { actorId: agent.id, actorType: "agent", actorName: agent.name },
+      taskId,
+      runId,
+      createApprovalRequest: async ({ category, toolName, args }) => this.getApprovalRequestStore().create({
+        requester: { actorId: agent.id, actorType: "agent", actorName: agent.name },
+        taskId,
+        runId,
+        targetAction: {
+          category,
+          action: toolName,
+          summary: `Permanent-agent gated action for ${toolName}`,
+          resourceType: "tool",
+          resourceId: toolName,
+          context: {
+            toolName,
+            toolArgs: args,
+            source: "permanent-agent-gating",
+          },
+        },
+      }),
+      findPendingApprovalRequest: async (dedupeKey) => {
+        const pending = this.getApprovalRequestStore().list({ status: "pending", requesterActorId: agent.id, taskId, limit: 100 });
+        return pending.find((request) => request.targetAction.context?.approvalDedupeKey === dedupeKey) ?? null;
+      },
+    };
   }
 
   /**
@@ -1373,7 +1479,13 @@ export class HeartbeatMonitor {
         let inboxSelection: InboxTask | null = null;
 
         if (!taskId) {
-          inboxSelection = await taskStore.selectNextTaskForAgent(agentId);
+          inboxSelection = await taskStore.selectNextTaskForAgent(agentId, { id: agent.id, role: agent.role });
+          if (inboxSelection && !canAgentTakeImplementationTask(agent, inboxSelection.task)) {
+            heartbeatLog.log(
+              `Agent ${agentId} (role=${agent.role}) skipped inbox-selected task ${inboxSelection.task.id} due to executor-role assignment policy`,
+            );
+            inboxSelection = null;
+          }
           if (inboxSelection) {
             taskId = inboxSelection.task.id;
             heartbeatLog.log(`Inbox selected task ${taskId} (priority: ${inboxSelection.priority}) for agent ${agentId}`);
@@ -1444,8 +1556,16 @@ export class HeartbeatMonitor {
                 })
                 .slice(0, 10);
 
-              autoClaimCandidates = openCandidates;
-              const ranked = openCandidates
+              const roleCompatibleCandidates = openCandidates.filter((candidate) => canAgentTakeImplementationTask(agent, candidate));
+              const skippedIncompatibleCount = openCandidates.length - roleCompatibleCandidates.length;
+              if (skippedIncompatibleCount > 0) {
+                heartbeatLog.log(
+                  `Agent ${agentId} (role=${agent.role}) skipped auto-claim of ${skippedIncompatibleCount} implementation task(s) — only executor agents may claim implementation work`,
+                );
+              }
+
+              autoClaimCandidates = roleCompatibleCandidates;
+              const ranked = roleCompatibleCandidates
                 .map((candidate) => ({ candidate, score: taskRelevanceScore(agent, candidate as TaskDetail) }))
                 .filter((entry) => entry.score > 0)
                 .sort((a, b) => b.score - a.score || (a.candidate.columnMovedAt ?? a.candidate.createdAt).localeCompare(b.candidate.columnMovedAt ?? b.candidate.createdAt));
@@ -1636,6 +1756,8 @@ export class HeartbeatMonitor {
           heartbeatTools.push(createDelegateTaskTool(this.store, taskStore, { rootDir: this.rootDir }));
           heartbeatTools.push(createGetAgentConfigTool(this.store, agentId));
           heartbeatTools.push(createUpdateAgentConfigTool(this.store, agentId));
+          heartbeatTools.push(createAgentCreateTool(this.store, agentId));
+          heartbeatTools.push(createAgentDeleteTool(this.store, agentId));
 
           // Messaging tools — when MessageStore is available
           if (this.messageStore) {
@@ -1653,6 +1775,8 @@ export class HeartbeatMonitor {
           // taskId is guaranteed to be defined here because isNoTaskRun = !taskId
           heartbeatTools = this.createHeartbeatTools(agentId, taskStore, taskId!, runContext, audit, this.messageStore);
         }
+
+        heartbeatTools.push(createWebFetchTool());
 
         let memorySettings: Settings | undefined;
         try {
@@ -1675,11 +1799,19 @@ export class HeartbeatMonitor {
           ? HEARTBEAT_NO_TASK_SYSTEM_PROMPT
           : HEARTBEAT_SYSTEM_PROMPT;
         let resolvedInstructionsForIdentity = "";
+        let workspaceMemoryForIdentity = "";
         try {
           resolvedInstructionsForIdentity = await resolveAgentInstructionsWithRatings(agent, rootDir, this.store);
         } catch (instructionError) {
           const message = instructionError instanceof Error ? instructionError.message : String(instructionError);
           heartbeatLog.warn(`Failed to resolve agent instructions for heartbeat ${agentId}: ${message}`);
+        }
+
+        try {
+          workspaceMemoryForIdentity = await readAgentMemoryWorkspaceLongTerm(rootDir, agent.id);
+        } catch (memoryReadErr) {
+          const message = memoryReadErr instanceof Error ? memoryReadErr.message : String(memoryReadErr);
+          heartbeatLog.warn(`Failed to resolve workspace memory for heartbeat ${agentId}: ${message}`);
         }
 
         let memoryInstructions = "";
@@ -1775,6 +1907,8 @@ export class HeartbeatMonitor {
           },
           // Skill selection: use waking agent's skills (heartbeat has no role fallback)
           ...(skillContext.skillSelectionContext ? { skillSelection: skillContext.skillSelectionContext } : {}),
+          actionGateContext: this.buildActionGateContext(agent, taskId, run.id),
+          permanentAgentGating: this.buildPermanentAgentGatingContext(agent, taskId, run.id),
         });
 
         // Track for monitoring
@@ -1848,7 +1982,11 @@ export class HeartbeatMonitor {
               `Heartbeat execution for agent "${agent.name}" (ID: ${agent.id})`,
               `Source: ${source}${triggerDetail ? ` (${triggerDetail})` : ""}`,
               "",
-              buildIdentitySnapshot({ agent, resolvedInstructions: resolvedInstructionsForIdentity }),
+              buildIdentitySnapshot({
+                agent,
+                resolvedInstructions: resolvedInstructionsForIdentity,
+                workspaceMemory: workspaceMemoryForIdentity,
+              }),
               "",
               "## Wake Delta",
               `- source: ${source}${triggerDetail ? ` (${triggerDetail})` : ""}`,
@@ -1956,7 +2094,11 @@ export class HeartbeatMonitor {
               `Source: ${source}${triggerDetail ? ` (${triggerDetail})` : ""}`,
               `Assigned task: ${taskId} — ${taskTitle}`,
               "",
-              buildIdentitySnapshot({ agent, resolvedInstructions: resolvedInstructionsForIdentity }),
+              buildIdentitySnapshot({
+                agent,
+                resolvedInstructions: resolvedInstructionsForIdentity,
+                workspaceMemory: workspaceMemoryForIdentity,
+              }),
               "",
               "## Wake Delta",
               `- source: ${source}${triggerDetail ? ` (${triggerDetail})` : ""}`,
@@ -2287,6 +2429,8 @@ export class HeartbeatMonitor {
     tools.push(createDelegateTaskTool(this.store, taskStore, { rootDir: this.rootDir }));
     tools.push(createGetAgentConfigTool(this.store, agentId));
     tools.push(createUpdateAgentConfigTool(this.store, agentId));
+    tools.push(createAgentCreateTool(this.store, agentId));
+    tools.push(createAgentDeleteTool(this.store, agentId));
 
     // Messaging tools — when MessageStore is available, agents can send and receive messages
     if (messageStore) {

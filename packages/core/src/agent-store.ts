@@ -30,6 +30,7 @@ import type {
   AgentConfigRevision,
   AgentConfigSnapshot,
   AgentAccessState,
+  AgentPermissionPolicy,
   OrgTreeNode,
   InstructionsBundleConfig,
   AgentRating,
@@ -54,6 +55,8 @@ import {
 import type { RunMutationContext } from "./types.js";
 import type { TaskStore } from "./store.js";
 import { computeAccessState } from "./agent-permissions.js";
+import { canAgentTakeImplementationTask, formatRoleMismatchReason } from "./agent-role-policy.js";
+import { resolveEffectiveAgentPermissionPolicy } from "./agent-permission-policy.js";
 import { Database } from "./db.js";
 import { createAgentRunSnapshot, createAgentSnapshot, validateSnapshotEnvelope, type AgentRunSnapshot, type AgentSnapshot } from "./shared-mesh-state.js";
 
@@ -125,6 +128,7 @@ interface AgentData {
   runtimeConfig?: Record<string, unknown>;
   pauseReason?: string;
   permissions?: Record<string, boolean>;
+  permissionPolicy?: AgentPermissionPolicy;
   totalInputTokens?: number;
   totalOutputTokens?: number;
   lastError?: string;
@@ -555,7 +559,7 @@ export class AgentStore extends EventEmitter {
   }
 
   /**
-   * Create a new agent with "idle" state.
+   * Create a new agent with a default state based on ephemeral classification.
    *
    * For non-ephemeral agents, ensures `runtimeConfig.heartbeatIntervalMs` is
    * persisted at creation time — previously it was only ever written when the
@@ -606,11 +610,18 @@ export class AgentStore extends EventEmitter {
     const resolvedHeartbeatProcedurePath = input.heartbeatProcedurePath
       ?? (ephemeral ? undefined : getDefaultHeartbeatProcedurePath(agentId, input.name));
 
+    const normalizedPermissionPolicy = ephemeral
+      ? input.permissionPolicy
+      : resolveEffectiveAgentPermissionPolicy(input.permissionPolicy);
+
     const agent: Agent = {
       id: agentId,
       name: normalizedName,
       role: input.role,
-      state: "idle",
+      // Non-ephemeral agents start active so they immediately participate in
+      // heartbeat scheduling; ephemeral/task-worker agents start idle and are
+      // activated by the engine when work is assigned.
+      state: ephemeral ? "idle" : "active",
       createdAt: now,
       updatedAt: now,
       metadata,
@@ -620,6 +631,7 @@ export class AgentStore extends EventEmitter {
       ...(input.reportsTo && { reportsTo: input.reportsTo }),
       ...(runtimeConfig && { runtimeConfig }),
       ...(input.permissions && { permissions: input.permissions }),
+      ...(normalizedPermissionPolicy && { permissionPolicy: normalizedPermissionPolicy }),
       ...(input.instructionsPath && { instructionsPath: input.instructionsPath }),
       ...(input.instructionsText && { instructionsText: input.instructionsText }),
       ...(input.soul && { soul: input.soul }),
@@ -1072,6 +1084,7 @@ export class AgentStore extends EventEmitter {
         ...("runtimeConfig" in updates && { runtimeConfig: updates.runtimeConfig }),
         ...("pauseReason" in updates && { pauseReason: updates.pauseReason }),
         ...("permissions" in updates && { permissions: updates.permissions }),
+        ...("permissionPolicy" in updates && { permissionPolicy: updates.permissionPolicy }),
         ...("lastError" in updates && { lastError: updates.lastError }),
         ...("totalInputTokens" in updates && { totalInputTokens: updates.totalInputTokens }),
         ...("totalOutputTokens" in updates && { totalOutputTokens: updates.totalOutputTokens }),
@@ -1309,6 +1322,10 @@ export class AgentStore extends EventEmitter {
 
     if (task.paused) {
       return { ok: false, reason: "paused", task };
+    }
+
+    if (!canAgentTakeImplementationTask(agent, task)) {
+      return { ok: false, reason: formatRoleMismatchReason(agent, task), task };
     }
 
     if (task.column === "done" || task.column === "archived") {
@@ -1610,11 +1627,25 @@ export class AgentStore extends EventEmitter {
    * @param agentId - The agent ID
    * @throws Error if agent not found
    */
-  async deleteAgent(agentId: string): Promise<void> {
+  async deleteAgent(agentId: string, options?: { force?: boolean; reassignTo?: string }): Promise<void> {
     await this.withLock(agentId, async () => {
       const agent = await this.getAgent(agentId);
       if (!agent) {
         throw new Error(`Agent ${agentId} not found`);
+      }
+
+      if (this.taskStore && typeof (this.taskStore as { getTasksByAssignedAgent?: unknown }).getTasksByAssignedAgent === "function") {
+        const assignedTasks = await this.taskStore.getTasksByAssignedAgent(agentId);
+        for (const task of assignedTasks) {
+          if (task.checkedOutBy === agentId && options?.force !== true) {
+            throw new Error(`Agent ${agentId} holds checkout for task ${task.id}; pass force=true to delete`);
+          }
+
+          await this.taskStore.updateTask(task.id, {
+            assignedAgentId: options?.reassignTo ?? null,
+            checkedOutBy: task.checkedOutBy === agentId ? null : undefined,
+          });
+        }
       }
 
       this.db.prepare("DELETE FROM agents WHERE id = ?").run(agentId);
@@ -2175,12 +2206,19 @@ export class AgentStore extends EventEmitter {
     return { appliedAgents, appliedBlockedStates };
   }
 
-  getAgentRunSnapshot(): AgentRunSnapshot {
-    const runs = this.db.prepare("SELECT data FROM agentRuns ORDER BY startedAt ASC").all() as Array<{ data: string }>;
-    const parsed = runs
+  getAgentRunSnapshot(limit?: number): AgentRunSnapshot {
+    const normalizedLimit = typeof limit === "number" && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
+    const query = normalizedLimit
+      ? "SELECT data FROM agentRuns ORDER BY startedAt DESC, rowid DESC LIMIT ?"
+      : "SELECT data FROM agentRuns ORDER BY startedAt ASC, rowid ASC";
+    const rows = normalizedLimit
+      ? (this.db.prepare(query).all(normalizedLimit) as Array<{ data: string }>)
+      : (this.db.prepare(query).all() as Array<{ data: string }>);
+    const parsed = rows
       .map((row) => this.parseJson<AgentHeartbeatRun | null>(row.data, null))
       .filter((run): run is AgentHeartbeatRun => run !== null);
-    return createAgentRunSnapshot(parsed);
+    const orderedRuns = normalizedLimit ? parsed.reverse() : parsed;
+    return createAgentRunSnapshot(orderedRuns);
   }
 
   async applyAgentRunSnapshot(snapshot: AgentRunSnapshot): Promise<{ applied: number; skipped: number }> {
@@ -2274,6 +2312,7 @@ export class AgentStore extends EventEmitter {
     | "reportsTo"
     | "runtimeConfig"
     | "permissions"
+    | "permissionPolicy"
     | "instructionsPath"
     | "instructionsText"
     | "soul"
@@ -2291,6 +2330,12 @@ export class AgentStore extends EventEmitter {
       reportsTo: snapshot.reportsTo,
       runtimeConfig: snapshot.runtimeConfig ? { ...snapshot.runtimeConfig } : undefined,
       permissions: snapshot.permissions ? { ...snapshot.permissions } : undefined,
+      permissionPolicy: snapshot.permissionPolicy
+        ? {
+            presetId: snapshot.permissionPolicy.presetId,
+            rules: { ...snapshot.permissionPolicy.rules },
+          }
+        : undefined,
       instructionsPath: snapshot.instructionsPath,
       instructionsText: snapshot.instructionsText,
       soul: snapshot.soul,
@@ -2575,6 +2620,9 @@ export class AgentStore extends EventEmitter {
       runtimeConfig: data.runtimeConfig,
       pauseReason: data.pauseReason,
       permissions: data.permissions,
+      permissionPolicy: isEphemeralAgent(data)
+        ? data.permissionPolicy
+        : resolveEffectiveAgentPermissionPolicy(data.permissionPolicy),
       totalInputTokens: data.totalInputTokens,
       totalOutputTokens: data.totalOutputTokens,
       lastError: data.lastError,
@@ -2605,6 +2653,7 @@ export class AgentStore extends EventEmitter {
       runtimeConfig: agent.runtimeConfig,
       pauseReason: agent.pauseReason,
       permissions: agent.permissions,
+      permissionPolicy: agent.permissionPolicy,
       totalInputTokens: agent.totalInputTokens,
       totalOutputTokens: agent.totalOutputTokens,
       lastError: agent.lastError,

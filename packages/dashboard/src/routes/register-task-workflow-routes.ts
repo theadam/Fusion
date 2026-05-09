@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import type { TaskStore, Task, TaskDetail, Column } from "@fusion/core";
+import type { TaskStore, Task, TaskDetail, Column, TaskReviewData, TaskReviewItem, TaskReviewSummary } from "@fusion/core";
 import {
   COLUMNS,
   TASK_PRIORITIES,
@@ -9,11 +9,91 @@ import {
   resolveTitleSummarizerSettingsModel,
   toReplicatedCreateInput,
   validateNodeOverrideChange,
+  canAgentTakeImplementationTask,
+  formatRoleMismatchReason,
+  getCurrentRepo,
 } from "@fusion/core";
+import { GitHubClient } from "../github.js";
+import { parseGitHubBadgeUrl } from "./register-git-github.js";
 import { planTaskWorktreePath } from "@fusion/engine";
 import { ApiError, badRequest, conflict, notFound } from "../api-error.js";
 import { fetchFromRemoteNode } from "./register-settings-sync-helpers.js";
 import type { ApiRoutesContext } from "./types.js";
+
+const REVIEW_BLOCK_RE = /##\s+(Code|Plan)\s+Review:[\s\S]*?(?=\n##\s+(?:Code|Plan)\s+Review:|$)/gi;
+const REVIEW_VERDICT_RE = /###\s+Verdict:\s*(APPROVE|REVISE|RETHINK|UNAVAILABLE)\b/i;
+const REVIEW_STEP_RE = /^(plan|code) review Step (\d+): (APPROVE|REVISE|RETHINK|UNAVAILABLE)\b/i;
+
+function buildReviewerAgentItemId(input: { index: number; reviewType: "plan" | "code"; step?: number; verdict?: string; createdAt?: string }): string {
+  const stepPart = input.step ? `step-${input.step}` : "step-na";
+  const verdictPart = (input.verdict ?? "unknown").toLowerCase();
+  const timePart = (input.createdAt ?? "na").replace(/[:.]/g, "-");
+  return `reviewer-${input.reviewType}-${stepPart}-${verdictPart}-${timePart}-${input.index + 1}`;
+}
+
+async function buildDirectTaskReviewData(task: Task, store: TaskStore): Promise<TaskReviewData> {
+  const agentLogs = await store.getAgentLogs(task.id);
+  const reviewerText = agentLogs.filter((entry) => entry.agent === "reviewer" && entry.type === "text").map((entry) => entry.text).join("\n");
+  const fallbackLogs = (task.log ?? []).filter((entry) => REVIEW_STEP_RE.test(entry.action));
+
+  const items: TaskReviewItem[] = [];
+  const blocks = reviewerText.match(REVIEW_BLOCK_RE) ?? [];
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index] ?? "";
+    const typeMatch = block.match(/##\s+(Code|Plan)\s+Review:/i);
+    const reviewType = typeMatch?.[1]?.toLowerCase() === "plan" ? "plan" : "code";
+    const verdict = block.match(REVIEW_VERDICT_RE)?.[1]?.toUpperCase();
+    const fallback = fallbackLogs[index];
+    const createdAt = fallback?.timestamp ?? task.updatedAt;
+    items.push({
+      itemId: buildReviewerAgentItemId({ index, reviewType, verdict, createdAt }),
+      sourceMode: "reviewer-agent",
+      title: `${reviewType} review ${verdict ?? "feedback"}`,
+      body: block.trim(),
+      author: "reviewer-agent",
+      createdAt,
+      updatedAt: createdAt,
+      reviewState: verdict ?? null,
+      progressStatus: null,
+    });
+  }
+
+  if (items.length === 0) {
+    fallbackLogs.forEach((entry, index) => {
+      const match = entry.action.match(REVIEW_STEP_RE);
+      const reviewType = match?.[1]?.toLowerCase() === "plan" ? "plan" : "code";
+      const verdict = match?.[3]?.toUpperCase();
+      items.push({
+        itemId: buildReviewerAgentItemId({ index, reviewType, step: match?.[2] ? Number.parseInt(match[2], 10) : undefined, verdict, createdAt: entry.timestamp }),
+        sourceMode: "reviewer-agent",
+        title: `${reviewType} review ${verdict ?? "feedback"}`,
+        body: entry.action,
+        author: "reviewer-agent",
+        createdAt: entry.timestamp,
+        updatedAt: entry.timestamp,
+        reviewState: verdict ?? null,
+        progressStatus: null,
+      });
+    });
+  }
+
+  const sorted = [...items].sort((a, b) => Date.parse(b.createdAt ?? "") - Date.parse(a.createdAt ?? ""));
+  const latest = sorted[0];
+  const summary: TaskReviewSummary | null = latest
+    ? {
+        summary: latest.title,
+        verdict: (latest.reviewState as "APPROVE" | "REVISE" | "RETHINK" | "UNAVAILABLE" | null | undefined) ?? undefined,
+      }
+    : null;
+
+  return {
+    mode: "reviewer-agent",
+    refreshable: true,
+    fetchedAt: new Date().toISOString(),
+    summary,
+    items: sorted,
+  };
+}
 
 interface TaskWorkflowRouteDeps {
   runtimeLogger: { error: (message: string, data?: Record<string, unknown>) => void; warn: (message: string, data?: Record<string, unknown>) => void };
@@ -249,53 +329,70 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       const remoteNodes = nodes.filter((node) => node.type === "remote" && node.url && node.apiKey);
       await central.close();
 
-      const reservation = await allocator.reserveDistributedTaskId({
-        prefix: "FN",
-        nodeId: localNode?.id ?? "local",
-      });
-
-      let createdTask: Task | null = null;
-      try {
-        createdTask = await scopedStore.createTaskWithReservedId(createInput, {
-          taskId: reservation.taskId,
-        });
-
-        const replicatedPayload = buildMeshReplicatedTaskCreatePayload({
-          taskId: createdTask.id,
-          reservationId: reservation.reservationId,
-          sourceNodeId: localNode?.id ?? "local",
-          createdAt: createdTask.createdAt,
-          updatedAt: createdTask.updatedAt,
-          prompt: (await scopedStore.getTask(createdTask.id)).prompt,
-          createInput: toReplicatedCreateInput(createdTask),
-        });
-
-        for (const peer of remoteNodes) {
-          await fetchFromRemoteNode(peer, "/api/mesh/tasks/create", {
-            method: "POST",
-            body: replicatedPayload,
-          });
-        }
-
-        await allocator.commitDistributedTaskIdReservation({
-          reservationId: reservation.reservationId,
-          nodeId: localNode?.id ?? "local",
-        });
-
-        res.status(201).json(createdTask);
-      } catch (err: unknown) {
-        await allocator.abortDistributedTaskIdReservation({
-          reservationId: reservation.reservationId,
-          nodeId: localNode?.id ?? "local",
-          reason: "failed-create",
-        }).catch(() => undefined);
-
-        if (createdTask) {
-          await scopedStore.deleteTask(createdTask.id).catch(() => undefined);
-        }
-
+      const nodeIdForReservation = localNode?.id ?? "local";
+      const isOverlapClassFailure = (err: unknown): boolean => {
         const message = err instanceof Error ? err.message : String(err);
-        throw new ApiError(503, `Cluster task create failed: ${message}`);
+        return (
+          message.includes("Task ID already exists:") ||
+          message.includes("Replicated task payload collision for existing task")
+        );
+      };
+
+      const maxCreateAttempts = 3;
+      for (let attempt = 1; attempt <= maxCreateAttempts; attempt += 1) {
+        const reservation = await allocator.reserveDistributedTaskId({
+          prefix: "FN",
+          nodeId: nodeIdForReservation,
+        });
+
+        let createdTask: Task | null = null;
+        try {
+          createdTask = await scopedStore.createTaskWithReservedId(createInput, {
+            taskId: reservation.taskId,
+          });
+
+          const replicatedPayload = buildMeshReplicatedTaskCreatePayload({
+            taskId: createdTask.id,
+            reservationId: reservation.reservationId,
+            sourceNodeId: nodeIdForReservation,
+            createdAt: createdTask.createdAt,
+            updatedAt: createdTask.updatedAt,
+            prompt: (await scopedStore.getTask(createdTask.id)).prompt,
+            createInput: toReplicatedCreateInput(createdTask),
+          });
+
+          for (const peer of remoteNodes) {
+            await fetchFromRemoteNode(peer, "/api/mesh/tasks/create", {
+              method: "POST",
+              body: replicatedPayload,
+            });
+          }
+
+          await allocator.commitDistributedTaskIdReservation({
+            reservationId: reservation.reservationId,
+            nodeId: nodeIdForReservation,
+          });
+
+          res.status(201).json(createdTask);
+          return;
+        } catch (err: unknown) {
+          await allocator.abortDistributedTaskIdReservation({
+            reservationId: reservation.reservationId,
+            nodeId: nodeIdForReservation,
+            reason: "failed-create",
+          }).catch(() => undefined);
+
+          if (createdTask) {
+            await scopedStore.deleteTask(createdTask.id).catch(() => undefined);
+          }
+
+          if (attempt < maxCreateAttempts && isOverlapClassFailure(err)) {
+            continue;
+          }
+
+          const message = err instanceof Error ? err.message : String(err);
+          throw new ApiError(503, `Cluster task create failed: ${message}`);
+        }
       }
     } catch (err: unknown) {
       if (err instanceof ApiError) {
@@ -1643,7 +1740,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
   // Assign or unassign a task to an explicit agent
   router.patch("/tasks/:id/assign", async (req, res) => {
     try {
-      const { agentId } = req.body as { agentId?: string | null };
+      const { agentId, override } = req.body as { agentId?: string | null; override?: boolean };
       if (agentId !== null && typeof agentId !== "string") {
         throw badRequest("agentId must be a string or null");
       }
@@ -1660,6 +1757,15 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         const agent = await agentStore.getAgent(agentId);
         if (!agent) {
           throw notFound("Agent not found");
+        }
+
+        const targetTask = await scopedStore.getTask(req.params.id);
+        if (!targetTask) {
+          throw notFound("Task not found");
+        }
+
+        if (override !== true && !canAgentTakeImplementationTask(agent, targetTask)) {
+          throw new ApiError(409, formatRoleMismatchReason(agent, targetTask));
         }
       }
 
@@ -1737,6 +1843,204 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       } else {
         rethrowAsApiError(err);
       }
+    }
+  });
+
+  router.get("/tasks/:id/review", async (req, res) => {
+    try {
+      const { store: scopedStore } = await getProjectContext(req);
+      const task = await scopedStore.getTask(req.params.id);
+      let reviewData: TaskReviewData;
+
+      if (task.prInfo) {
+        const badgeParsed = parseGitHubBadgeUrl(task.prInfo.url);
+        const repoInfo = getCurrentRepo(scopedStore.getRootDir());
+        const owner = badgeParsed?.owner ?? repoInfo?.owner;
+        const repo = badgeParsed?.repo ?? repoInfo?.repo;
+        if (!owner || !repo) {
+          throw badRequest("Could not determine GitHub repository for PR review fetch");
+        }
+        reviewData = await new GitHubClient(options?.githubToken ?? process.env.GITHUB_TOKEN).getPrReviewDetails(owner, repo, task.prInfo.number);
+      } else {
+        reviewData = await buildDirectTaskReviewData(task, scopedStore);
+      }
+
+      res.json(reviewData);
+    } catch (err: unknown) {
+      if (err instanceof ApiError) throw err;
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw notFound(`Task ${req.params.id} not found`);
+      }
+      rethrowAsApiError(err);
+    }
+  });
+
+  router.post("/tasks/:id/review/refresh", async (req, res) => {
+    try {
+      const { store: scopedStore } = await getProjectContext(req);
+      const task = await scopedStore.getTask(req.params.id);
+      let reviewData: TaskReviewData;
+      if (task.prInfo) {
+        const badgeParsed = parseGitHubBadgeUrl(task.prInfo.url);
+        const repoInfo = getCurrentRepo(scopedStore.getRootDir());
+        const owner = badgeParsed?.owner ?? repoInfo?.owner;
+        const repo = badgeParsed?.repo ?? repoInfo?.repo;
+        if (!owner || !repo) {
+          throw badRequest("Could not determine GitHub repository for PR review refresh");
+        }
+        reviewData = await new GitHubClient(options?.githubToken ?? process.env.GITHUB_TOKEN).getPrReviewDetails(owner, repo, task.prInfo.number);
+      } else {
+        reviewData = await buildDirectTaskReviewData(task, scopedStore);
+      }
+      res.json(reviewData);
+    } catch (err: unknown) {
+      if (err instanceof ApiError) throw err;
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw notFound(`Task ${req.params.id} not found`);
+      }
+      rethrowAsApiError(err);
+    }
+  });
+
+  // Queue same-task revision pass for selected review items
+  router.post("/tasks/:id/review/address", async (req, res) => {
+    try {
+      const { store: scopedStore } = await getProjectContext(req);
+      const task = await scopedStore.getTask(req.params.id);
+
+      type SelectedReviewItem = {
+        id: string;
+        source: "pr-review" | "reviewer-agent";
+        threadId?: string;
+        filePath?: string;
+        lineNumber?: number;
+        author?: string;
+        summary: string;
+        body: string;
+        url?: string;
+      };
+
+      const selectedItems: SelectedReviewItem[] = Array.isArray(req.body?.selectedItems)
+        ? req.body.selectedItems.filter((value: unknown): value is SelectedReviewItem => {
+            if (!value || typeof value !== "object") return false;
+            const item = value as Record<string, unknown>;
+            return typeof item.id === "string" && item.id.trim().length > 0 && typeof item.summary === "string" && typeof item.body === "string";
+          })
+        : [];
+
+      if (selectedItems.length === 0) {
+        throw badRequest("selectedItems must be a non-empty array of review items");
+      }
+      const unsupportedSource = selectedItems.find((item) => item.source !== "pr-review" && item.source !== "reviewer-agent");
+      if (unsupportedSource) {
+        throw badRequest(`Unsupported review source: ${String(unsupportedSource.source)}`);
+      }
+      if (!task.reviewState) {
+        throw badRequest("Task has no reviewState payload");
+      }
+
+      const now = new Date().toISOString();
+      const selectedSet = new Set(selectedItems.map((item: SelectedReviewItem) => item.id));
+      const sourceById = new Map(selectedItems.map((item: SelectedReviewItem) => [item.id, item.source] as const));
+      const reviewSourceMismatch = task.reviewState.items.find((item: NonNullable<typeof task.reviewState>["items"][number]) => {
+        const selectedSource = sourceById.get(item.id);
+        if (!selectedSource || !task.reviewState) return false;
+        const expectedSource = task.reviewState.source === "pull-request" ? "pr-review" : "reviewer-agent";
+        return selectedSource !== expectedSource;
+      });
+      if (reviewSourceMismatch) {
+        throw badRequest("Selected review source does not match task review mode");
+      }
+      const matchedItems = task.reviewState.items.filter((item: NonNullable<typeof task.reviewState>["items"][number]) => selectedSet.has(item.id));
+      if (matchedItems.length !== selectedSet.size) {
+        throw badRequest("selectedItems must reference existing review items");
+      }
+
+      const modeSummary = `${task.reviewState.source === "pull-request" ? "pull-request" : "reviewer-agent"} · ${selectedItems.length} selected item(s)`;
+      const steeringItems = selectedItems.map((item: SelectedReviewItem, index: number) => {
+        const location = item.filePath ? `${item.filePath}${typeof item.lineNumber === "number" ? `:${item.lineNumber}` : ""}` : undefined;
+        const snippetSource = item.body.trim() || item.summary.trim();
+        const snippet = snippetSource.length > 220 ? `${snippetSource.slice(0, 220)}…` : snippetSource;
+        const urlSuffix = item.url ? ` | url: ${item.url}` : "";
+        return `${index + 1}. source: ${item.source}${location ? ` | location: ${location}` : ""} | "${snippet}"${urlSuffix}`;
+      });
+      const steeringText = ["Selected review feedback to address", modeSummary, ...steeringItems].join("\n");
+
+      const priorAddressingById = new Map(task.reviewState.addressing.map((record) => [record.itemId, record] as const));
+      const nextAddressing = [
+        ...task.reviewState.addressing.filter((record) => !selectedSet.has(record.itemId)),
+        ...selectedItems.map((item: SelectedReviewItem) => {
+          const existing = priorAddressingById.get(item.id);
+          return {
+            itemId: item.id,
+            status: "queued" as const,
+            selectedAt: now,
+            startedAt: undefined,
+            completedAt: undefined,
+            error: undefined,
+            stale: false,
+            snapshot: {
+              itemId: item.id,
+              sourceMode: task.reviewState?.source ?? "pull-request",
+              source: item.source,
+              summary: item.summary,
+              body: item.body,
+              authorLogin: item.author,
+              filePath: item.filePath,
+              lineNumber: item.lineNumber,
+              threadId: item.threadId,
+              url: item.url,
+            },
+            ...(existing ? { startedAt: existing.startedAt, completedAt: existing.completedAt } : {}),
+          };
+        }),
+      ];
+
+      const reviewState = {
+        ...task.reviewState,
+        addressing: nextAddressing,
+      };
+
+      await scopedStore.updateTask(task.id, { reviewState });
+
+      let steeringCommentId: string | null = null;
+      const steeringComment = await scopedStore.addSteeringComment(task.id, steeringText, "user");
+      steeringCommentId = steeringComment.id;
+
+      let updatedTask: Task = await scopedStore.getTask(task.id);
+
+      if (task.column === "in-review") {
+        await scopedStore.updateTask(task.id, {
+          status: null,
+          error: null,
+          sessionFile: null,
+        });
+        const lastDoneStep = [...task.steps]
+          .map((step, index) => ({ step, index }))
+          .reverse()
+          .find(({ step }) => step.status === "done" || step.status === "in-progress");
+        if (lastDoneStep) {
+          await scopedStore.updateStep(task.id, lastDoneStep.index, "pending");
+        }
+        updatedTask = await scopedStore.moveTask(task.id, "in-progress", { preserveProgress: true });
+      }
+
+      const hasActiveSession = Boolean(updatedTask.sessionFile);
+      if (steeringCommentId && updatedTask.column === "in-progress" && updatedTask.assignedAgentId && !hasActiveSession) {
+        await triggerCommentWakeForAssignedAgent(scopedStore, updatedTask, {
+          triggeringCommentType: "steering",
+          triggeringCommentIds: [steeringCommentId],
+          triggerDetail: "review-address",
+        });
+      }
+
+      await scopedStore.logEntry(task.id, "Same-task review revision requested", `${selectedItems.length} item(s) submitted from review tab`);
+      res.json({ task: updatedTask, reviewState });
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        throw err;
+      }
+      rethrowAsApiError(err);
     }
   });
 

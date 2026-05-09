@@ -177,6 +177,8 @@ Additional backend notes:
 | `automations` | Scheduled automation definitions, run state, and run history. |
 | `agents` | Agent registry/state/task assignment metadata. |
 | `agentHeartbeats` | Heartbeat run events linked to agents (`agentId` FK cascade). |
+| `approval_requests` | Durable approval request records: requester actor snapshot, target action payload (category/action/resource/context), lifecycle status (`pending`/`approved`/`denied`/`completed`), optional task/run context, and requested/decided/completed timestamps. |
+| `approval_request_audit_events` | Append-only audit trail for approval requests. Each row stores event type (`created`/`approved`/`denied`/`completed`), immutable actor snapshot, optional note, and deterministic per-request ordering by `(createdAt, rowid)`. |
 | `task_documents` | Task-scoped document metadata/content keyed by `(taskId, key)` with current revision pointer. |
 | `task_document_revisions` | Immutable revision history for task documents (content snapshots by revision). |
 | `__meta` | Schema version + monotonic `lastModified` change detector. |
@@ -187,9 +189,9 @@ Additional backend notes:
 | `mission_events` | Mission event log with ordered sequence numbers and metadata payloads. |
 | `plugins` | Plugin registry, lifecycle state, dependency metadata, and settings blobs. |
 | `routines` | Routine definitions (trigger config, steps/command, catch-up policy, run history, and persisted `agentId` ownership metadata). Legacy databases missing routine fields (including `agentId`) are backfilled during init-time compatibility migration. |
-| `roadmaps` | Standalone roadmap metadata. |
-| `roadmap_milestones` | Milestones within roadmaps (`roadmapId` FK). |
-| `roadmap_features` | Features within roadmap milestones (`milestoneId` FK). |
+| `roadmaps` | Roadmap plugin metadata (owned/registered by `plugins/fusion-plugin-roadmap`). |
+| `roadmap_milestones` | Milestones within roadmaps (`roadmapId` FK), owned/registered by roadmap plugin schema hooks. |
+| `roadmap_features` | Features within roadmap milestones (`milestoneId` FK), owned/registered by roadmap plugin schema hooks. |
 | `project_insights` | Extracted project insights with fingerprint-based deduplication and provenance metadata. |
 | `project_insight_runs` | Insight extraction run history with durable lifecycle metadata (`lifecycle` JSON includes terminalReason/cause, failureClass, retryable flag, cancellationRequestedAt, timeoutAt, retry lineage fields). Terminal rows are immutable for state transitions. |
 | `project_insight_run_events` | Append-only per-run lifecycle trail (`seq`, `type`, `message`, optional `status`/`classification`/`metadata`) used by cancel/retry/timeout auditing and API inspection. |
@@ -200,6 +202,9 @@ Additional backend notes:
 | `agentRatings` *(migration-created)* | Agent performance ratings (1-5), optional reviewer metadata, and run/task attribution. |
 | `chat_sessions` *(migration-created)* | Chat session metadata (agent/project/model/status/title timestamps). |
 | `chat_messages` *(migration-created)* | Chat message history per session (`role`, `content`, thinking output, metadata). |
+| `chat_rooms` *(migration-created)* | Room metadata (`name`, `slug`, `description`, `projectId`, `createdBy`, status and timestamps). |
+| `chat_room_members` *(migration-created)* | Room membership map with composite PK `(roomId, agentId)` and role (`owner`/`member`). |
+| `chat_room_messages` *(migration-created)* | Room message history with `senderAgentId`, JSON `mentions`, attachments/metadata blobs, ordered by `createdAt`. |
 | `runAuditEvents` *(migration-created)* | Run audit trail events across database/git/filesystem mutation domains. |
 | `mission_contract_assertions` *(migration-created)* | Milestone contract assertions used by mission validator workflows. |
 | `mission_feature_assertions` *(migration-created)* | Many-to-many links between mission features and contract assertions. |
@@ -214,6 +219,15 @@ Additional backend notes:
 | `eval_run_events` | Append-only eval run event trail (`runId` FK cascade, ordered by `seq`) for orchestration/debug auditing and downstream API/UI drill-down. |
 
 ---
+
+### Chat rooms (migration 70)
+
+`ChatStore` now persists room chat data across three tables: `chat_rooms`, `chat_room_members`, and `chat_room_messages`.
+
+- `chat_rooms` stores canonical room identity (`id`, normalized `name`, unique `slug` scoped by `projectId`), metadata (`description`, `createdBy`), lifecycle status, and timestamps.
+- `chat_room_members` links agents to rooms via composite primary key `(roomId, agentId)` and tracks `role` plus `addedAt`.
+- `chat_room_messages` stores room history with message role/content, optional `thinkingOutput`, JSON `metadata`, JSON `attachments`, optional `senderAgentId`, and JSON `mentions`.
+- Foreign keys from members/messages to `chat_rooms(id)` use `ON DELETE CASCADE`, so deleting a room automatically removes memberships and room message history.
 
 ## 5) Issues Found
 

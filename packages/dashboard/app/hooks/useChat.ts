@@ -35,6 +35,7 @@ export interface ChatSessionInfo {
 export type { ChatMessageInfo, FallbackInfo, ToolCallInfo } from "./chatTypes";
 import type { ChatMessageInfo, FallbackInfo, ToolCallInfo } from "./chatTypes";
 import { createChatStreamHandlers } from "./createChatStreamHandlers";
+import { isLikelyTabSuspensionError, useTabVisibilitySuspension } from "./visibilitySuspension";
 
 export interface UseChatReturn {
   // Session state
@@ -485,11 +486,16 @@ export function useChat(
    * @param content Message text content to send.
    * @param attachments Optional files to upload with the message in the same request.
    */
+  const sendMessageRef = useRef<(content: string, attachments?: File[]) => void>(() => {
+    // no-op until sendMessage is defined
+  });
+  const visibilitySuspension = useTabVisibilitySuspension();
+
   const sendMessage = useCallback(
     (content: string, attachments?: File[]) => {
       if (!activeSession) return;
 
-      if (isStreaming) {
+      if (isStreamingRef.current) {
         pendingMessageRef.current = content;
         setPendingMessage(content);
         addToast?.("Still waiting for previous response — message queued", "warning");
@@ -561,6 +567,7 @@ export function useChat(
           setStreamingThinking("");
           setStreamingToolCalls([]);
           setIsStreaming(false);
+          isStreamingRef.current = false;
           streamRef.current = null;
 
           // Clean up tracked ID after a short delay (SSE event should arrive quickly)
@@ -574,7 +581,7 @@ export function useChat(
           if (queuedMessage) {
             pendingMessageRef.current = "";
             setPendingMessage("");
-            sendMessage(queuedMessage);
+            sendMessageRef.current(queuedMessage);
           }
         },
         onError: (data, tempUserMessageId) => {
@@ -583,16 +590,29 @@ export function useChat(
           setStreamingThinking("");
           setStreamingToolCalls([]);
           setIsStreaming(false);
+          isStreamingRef.current = false;
           streamRef.current = null;
           console.error("[useChat] Stream error:", data);
-          addToast?.(typeof data === "string" && data.trim() ? data : "Failed to get response", "error");
+          const errorMessage = typeof data === "string" && data.trim() ? data : "Failed to get response";
+          const shouldSuppressSuspensionError = typeof data === "string"
+            && isLikelyTabSuspensionError(data)
+            && (visibilitySuspension.isHiddenNow() || visibilitySuspension.wasRecentlyHidden(5000));
+
+          if (shouldSuppressSuspensionError) {
+            console.info("[useChat] Suppressed tab-suspension stream error:", data);
+            if (activeSession?.id) {
+              void loadMessages(activeSession.id);
+            }
+          } else {
+            addToast?.(errorMessage, "error");
+          }
 
           if (!cancelledByUserRef.current) {
             const queuedMessage = pendingMessageRef.current.trim();
             if (queuedMessage) {
               pendingMessageRef.current = "";
               setPendingMessage("");
-              sendMessage(queuedMessage);
+              sendMessageRef.current(queuedMessage);
             }
           }
         },
@@ -600,8 +620,10 @@ export function useChat(
 
       streamRef.current = streamChatResponse(activeSession.id, content, handlers, attachments, projectId);
     },
-    [activeSession, isStreaming, projectId, refreshSessions, addToast],
+    [activeSession, projectId, refreshSessions, addToast, loadMessages, visibilitySuspension],
   );
+
+  sendMessageRef.current = sendMessage;
 
   // Filter sessions based on search query
   const filteredSessions = searchQuery

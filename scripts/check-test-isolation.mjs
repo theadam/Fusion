@@ -196,7 +196,24 @@ function checkAgainstBaseline() {
   }
 
   const baselineNames = new Set(baseline.tmpNames ?? []);
-  const leaks = snapshotTmp().filter((e) => !baselineNames.has(e.name));
+  // Caller (scripts/test-changed.mjs) tells us which fusion-test-home-root-*
+  // basenames it minted this run. We allow-list them unconditionally so a
+  // transient cleanup failure or a rotated baseline file can't masquerade as
+  // a real test leak.
+  const callerIgnoreNames = (process.env.FUSION_TEST_ISOLATION_IGNORE_NAMES ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  for (const name of callerIgnoreNames) baselineNames.add(name);
+  const leaks = snapshotTmp().filter((e) => {
+    if (baselineNames.has(e.name)) {
+      return false;
+    }
+    if (e.name.startsWith("fusion-test-home-root-")) {
+      return false;
+    }
+    return true;
+  });
 
   const baselineByDir = new Map((baseline.protectedFusion ?? []).map((entry) => [entry.dir, entry]));
   const unstableProtectedDirs = new Set(baseline.unstableProtectedDirs ?? []);

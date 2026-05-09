@@ -246,6 +246,8 @@ const DEFAULT_NTFY_EVENTS: NtfyNotificationEvent[] = [
   "gridlock",
   "fallback-used",
   "memory-dreams-processed",
+  "message:agent-to-user",
+  "message:agent-to-agent",
 ];
 
 const NOTIFICATION_EVENT_OPTIONS: Array<{ event: NtfyNotificationEvent; label: string; description: string }> = [
@@ -258,6 +260,8 @@ const NOTIFICATION_EVENT_OPTIONS: Array<{ event: NtfyNotificationEvent; label: s
   { event: "gridlock", label: "Pipeline gridlocked", description: "When all schedulable todo tasks are blocked and work cannot advance" },
   { event: "fallback-used", label: "Fallback model used (recovered)", description: "When Fusion recovers from a retryable model failure by switching to a fallback model" },
   { event: "memory-dreams-processed", label: "DREAMS.md entry added", description: "When manual dream processing writes a new entry to project or agent DREAMS.md" },
+  { event: "message:agent-to-user", label: "Agent → user message", description: "An agent sent you a direct message" },
+  { event: "message:agent-to-agent", label: "Agent → agent message", description: "Agents are talking to each other (including replies)" },
 ];
 
 /** Well-known experimental feature flags with display labels.
@@ -275,6 +279,7 @@ const KNOWN_EXPERIMENTAL_FEATURES: Record<string, string> = {
   devServerView: "Dev Server",
   todoView: "Todo List",
   researchView: "Research View",
+  evalsView: "Evals View",
   agentOnboarding: "Planning-style Agent Onboarding",
 };
 
@@ -444,6 +449,7 @@ export function SettingsModal({
   const experimentalFeatures = form.experimentalFeatures ?? {};
   const remoteAccessEnabled = isExperimentalFeatureEnabled(experimentalFeatures, "remoteAccess");
   const researchViewEnabled = isExperimentalFeatureEnabled(experimentalFeatures, "researchView");
+  const evalsViewEnabled = isExperimentalFeatureEnabled(experimentalFeatures, "evalsView");
   const visibleSections = SETTINGS_SECTIONS.filter((section) => {
     if (section.id === "remote") {
       return remoteAccessEnabled;
@@ -451,6 +457,10 @@ export function SettingsModal({
 
     if (section.id === "research-global" || section.id === "research-project") {
       return researchViewEnabled;
+    }
+
+    if (section.id === "scheduled-evals") {
+      return evalsViewEnabled;
     }
 
     return true;
@@ -471,10 +481,15 @@ export function SettingsModal({
       return;
     }
 
+    if (activeSection === "scheduled-evals" && !evalsViewEnabled) {
+      setActiveSection(firstVisibleSectionId);
+      return;
+    }
+
     if (!visibleSections.some((section) => section.id === activeSection)) {
       setActiveSection(firstVisibleSectionId);
     }
-  }, [activeSection, remoteAccessEnabled, researchViewEnabled, firstVisibleSectionId, visibleSections]);
+  }, [activeSection, remoteAccessEnabled, researchViewEnabled, evalsViewEnabled, firstVisibleSectionId, visibleSections]);
 
   // Auth state (independent of the settings save flow)
   const [authProviders, setAuthProviders] = useState<AuthProvider[]>([]);

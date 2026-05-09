@@ -10,6 +10,23 @@ The dashboard now handles browser back navigation consistently on desktop and mo
 Using Back will first dismiss open modals and then step back through in-app view changes (for example, task detail → board) before leaving the app.
 This behavior used to be mobile-only, and now applies across all viewports.
 
+## Deep Links
+
+Use deep links to open a specific task directly from notifications, chat, or external tools.
+
+- `/tasks/<TASK_ID>` (for example, `/tasks/FN-1234`) opens that task, and can include `?project=<project-id>` for multi-project routing.
+- `/?task=<TASK_ID>[&project=<project-id>]` is the canonical in-app form and opens the task detail modal on load.
+- Legacy path-style links (including trailing-slash forms like `/tasks/<TASK_ID>/` and older hash-style entry points that resolve to that path) are normalized client-side to the canonical query form with `history.replaceState`, so the URL updates without a full reload.
+- In non-headless dashboard mode, the server also issues an HTTP 301 redirect from `/tasks/<TASK_ID>` to `/?task=<TASK_ID>` and preserves `?project=` when present.
+- Theme assets resolve `theme-data.css` against the current document base (HTTP/HTTPS, `file://`, and Electron fallback paths), so non-default themes still load correctly when you land on deep-linked or sub-path URLs.
+- Configure `dashboardHost` and `ntfyDashboardHost` in [settings reference](./settings-reference.md) so generated notification links use the correct base URL.
+
+```text
+/tasks/FN-1234
+/?task=FN-1234
+/?task=FN-1234&project=my-project
+```
+
 ## Board View
 
 Board view is the kanban surface for day-to-day operation.
@@ -57,6 +74,10 @@ Behavior:
 - Supports cursor-centered wheel zoom, pinch zoom, keyboard shortcuts (`Ctrl/Cmd+=`, `Ctrl/Cmd+-`, `Ctrl/Cmd+0`, `Ctrl/Cmd+Shift+F`, `Escape`), and fit/reset controls via the floating toolbar with live zoom percentage
 - Dependency graph nodes reuse the same `TaskCard` UI as board/list views, so status badges, progress/steps, mission badges, retry/archive controls, and active-task glow stay visually consistent
 - Active graph nodes also add a dedicated top status indicator bar and current-step row highlighting so in-progress execution state stays visible even when zoomed out
+- Clicking a graph card opens task details via the host detail handler (`onOpenDetail`, with `onOpenTaskDetail` fallback), while clicking the same card again or empty canvas clears selection
+- Hovering or selecting a node highlights its full upstream and downstream dependency chain; highlighted nodes and connecting edges are emphasized while non-chain nodes are dimmed, and highlight clears when hover/selection is removed
+- Nodes support manual drag repositioning with a 4px movement threshold to separate click from drag, using pointer capture and zoom-aware delta scaling for reliable tracking
+- Custom node positions persist per project in browser localStorage (`kb:${projectId}:fusion-plugin-dependency-graph:positions`) across refresh/project switches, and **Fit to graph** clears saved positions and restores auto-layout
 
 ## Chat View
 
@@ -72,6 +93,19 @@ Chat view provides project-scoped conversations with agents.
 - Agent-backed chat sessions now expose the same mailbox messaging tools (`fn_send_message`, `fn_read_messages`) used by runtime execution/heartbeat flows whenever the engine `MessageStore` is available; model-only chats continue to run without mailbox tools.
 
 ![Chat view](./screenshots/chat-view.png)
+
+### Chat Rooms
+
+Chat Rooms are project-scoped group conversations for multiple agents. They are separate from one-on-one direct chat sessions.
+
+- Use the **Direct / Rooms** toggle in the Chat sidebar to switch scopes. The selected scope is saved and restored the next time you open Chat.
+- In **Rooms**, click **Create room** to open the room-creation modal.
+- Room names follow strict validation: a leading `#` is removed automatically, names must be lowercase, up to 80 characters, use only `a-z`, `0-9`, `-`, or `_`, cannot start or end with `-`/`_`, and must be unique in the current project.
+- The modal includes a member picker with search + multi-select from project agents. You must pick at least one member before creating the room.
+- Members are currently chosen during room creation. The shipped UI does not yet provide full post-creation member management in Chat View.
+- When you select a room today, the thread pane shows a placeholder (`Coming soon — room messaging is being wired up (FN-3807)`). Messaging/mentions streaming behavior for rooms is planned to follow the same model contract used by direct Chat once room messaging is fully landed.
+- Relationship summary: direct Chat runs one target (agent or model) per session; rooms are shared threads with multiple agent members; Quick Chat stays a floating single-target panel and does not host rooms.
+- For backend details, see the [Chat Room REST API reference](./architecture.md#real-time-channels) and the [chat room storage schema (`chat_rooms`, `chat_room_members`, `chat_room_messages`)](./storage.md#chat-rooms-migration-70).
 
 ## Quick Chat
 
@@ -98,6 +132,12 @@ Quick Chat is an optional floating panel for fast, project-scoped assistant conv
 Mailbox view shows inbox/outbox communication threads and unread state.
 
 - Inbox renders one row per message (no sender-based collapsing)
+- clicking a message in the Mail tab opens the task detail pane with full message content and conversation context
+- reply rows in the mailbox modal can expand inline to show the replied-to message context for easier thread reading
+- mailbox now includes an **Approvals** tab with pending and history filters (`approved` / `denied` / `completed`), approval detail context, and inline approve/deny actions for pending requests
+- mailbox entry points now show pending-approval indicators: Header mailbox toggle dot, Header overflow mailbox badge, Mobile mailbox tab dot, and Mobile More → Mailbox badge
+- approval lifecycle SSE events (`approval:requested`, `approval:updated`, `approval:decided`) trigger mailbox approvals refresh without manual reload
+- when a task newly enters `awaiting-approval`, the app shows a persistent approval banner above project content with an **Open Mailbox** CTA; dismissals are remembered per approval item until that item advances or a different one arrives
 - Visible message history/threading is driven by explicit `message.metadata.replyTo.messageId` links
 - Separate top-level messages from the same sender remain independent in the inbox and detail pane
 
@@ -125,6 +165,7 @@ Features:
 - Branch/worktree visibility
 - Commit and diff browsing
 - Push/pull/fetch actions
+- Pull with rebase option (split-button chooses between `git pull` and `git pull --rebase`)
 - Remote editing controls
 - Stash inspection (view stat + patch) before apply/pop/drop actions
 - Remotes tab keeps "Recent commits on {remote}" in sync immediately after successful push/pull actions
@@ -207,6 +248,12 @@ Memory view provides a multi-file editor for project and daily memory files.
 
 ## Agents View
 
+Agent list and detail surfaces now surface pending approvals per agent:
+- Agents list/board cards show a warning-colored pending-approval badge when `pendingApprovalCount > 0`
+- Agent detail summary shows a matching pending-approval badge for the selected agent
+- Approval SSE events refresh these indicators live (no page reload required)
+
+
 Agents view is the control surface for runtime agents and team structure.
 
 Navigation:
@@ -217,7 +264,7 @@ Features:
 - Switch between **List**, **Board**, and **Org chart** layouts
 - Filter by role/state, include/exclude system agents, and inspect health/status
 - Start, pause, stop, and trigger agent runs from the view and from detail panels
-- Open agent detail tabs for runs, logs, settings/config, tasks, memory, and chain-of-command relationships
+- Open agent detail tabs for runs, logs, read-only mail (agent inbox/outbox), settings/config, tasks, memory, and chain-of-command relationships
 - Error indicator on agent list cards when an agent is in the `error` state and has a captured error (`lastError`); select it to open **Agent Error Details**
 - Run-level error indicator in **Agent detail → Runs** when a run has captured stderr; select it to open the same **Agent Error Details** modal
 - **Agent Error Details** shows full error text plus **Copy** and **Report on GitHub** actions
@@ -244,6 +291,22 @@ Features:
 - Feed roadmap output into mission/task planning workflows
 
 For mission planning context and handoff structure, see [Missions guide](./missions.md).
+
+## Evals View
+
+Evals view is a dedicated dashboard surface for reviewing scheduled task-evaluation output.
+
+> Available when `experimentalFeatures.evalsView` is enabled.
+
+Navigation:
+- Desktop: **Header → More views → Evals**
+- Mobile: **More** sheet → **Evals**
+
+Features:
+- Filter eval results by free-text query, run, and score range
+- Review list summaries (task, eval/run identity, timestamps, and score)
+- Drill into full rationale, category scores, evidence references, and suggested follow-ups
+- Open Scheduled Evals settings directly when setup is disabled
 
 ## Insights View
 
@@ -305,9 +368,14 @@ For related global/project configuration behavior, see [Settings reference](./se
 
 ## Task Detail Modal
 
-Inspect task definition, logs, comments, documents, workflow outcomes, model overrides, and task routing from a single modal.
+Inspect task definition, logs, review feedback, comments, documents, workflow outcomes, model overrides, and task routing from a single modal.
 
 - The priority chip in task metadata is now an inline picker: you can change priority directly from the chip without entering full edit mode.
+- Execution mode now also has a read-mode inline control: a lightning-bolt toggle lets you switch Fast mode on/off from task metadata without opening the full edit form.
+- The **Review** tab is separate from **Comments**: Review shows actionable PR/reviewer feedback and same-task revision controls, while Comments remains the general collaboration thread.
+- **Request revision** in Review resumes work on the same task ID (no refinement task): `in-progress` tasks get steering injection, while `in-review` tasks are moved back to `in-progress` for the same branch/worktree revision pass.
+- Review supports a manual **Refresh** action in-place: PR mode pulls latest GitHub review state/decision, while direct mode rehydrates reviewer-agent feedback from persisted task data (no GitHub call).
+- In direct/non-PR auto-merge mode, Review renders normalized reviewer-agent feedback (verdict/step/timestamp/detail) with dedicated loading/error/empty states; it does not require users to read raw agent logs.
 
 ### Logs → Agent Log view
 
@@ -353,6 +421,19 @@ Click the chevron next to the status indicator to open the node selector dropdow
 - **Local** — Switch back to viewing the local Fusion instance
 - **Remote nodes** — Select a remote node to view its tasks, projects, and status
 
+### Remote Node Onboarding Discovery
+
+When adding a **remote** node in the Nodes view, onboarding now discovers projects directly from the target node **before** the node is registered.
+
+1. Enter the remote URL (and API key when required)
+2. Click **Discover Remote Projects**
+3. Fusion calls the remote node's `/api/projects` endpoint and shows discovered projects (`name`, `path`, `status`)
+4. For selected local projects, Fusion only auto-prefills a node path when there is exactly one discovered project with the same name
+5. If discovery fails, onboarding shows an inline error and does not prefill remote mappings for that attempt
+6. If discovery succeeds with zero projects, onboarding shows an explicit empty state
+
+This keeps remote path mappings anchored to remote-authoritative data instead of local guesses.
+
 ### How Node Switching Works
 
 1. The node selector appears in the header when remote nodes are registered in the mesh
@@ -375,6 +456,22 @@ Click the chevron next to the status indicator to open the node selector dropdow
 | Online | Green | Node is connected and responsive |
 | Offline | Red | Node is unreachable or shut down |
 | Connecting | Yellow (pulsing) | Connection attempt in progress |
+
+### Project availability and path visibility
+
+Node and project surfaces now use per-node project mappings (`nodeMappings`) instead of a single `project.nodeId` assumption.
+
+- **Node cards / counts** include only projects with an `available: true` mapping for that node.
+- **Node Details modal** lists one row per project available on the selected node and shows:
+  - project name
+  - project ID
+  - configured path for that node
+- **Project node filter** in the Projects view is built from available mappings and uses canonical node-name resolution (`Node.name` → mapping name → source node name → node ID).
+- **Project cards** show node availability as compact `Node → /path` rows:
+  - up to 3 rows inline
+  - `+N more` summary when additional mappings exist
+  - single-node projects still show the configured path clearly
+- Mappings marked `available: false` are excluded from node counts, node filter options, node detail project rows, and project-card availability summaries.
 
 ### Persistence
 

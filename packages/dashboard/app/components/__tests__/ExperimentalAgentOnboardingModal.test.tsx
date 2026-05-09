@@ -22,7 +22,7 @@ vi.mock("../../api", () => ({
         streamHandlers?.onSummary?.({
           name: "Docs Reviewer",
           role: "reviewer",
-          instructionsText: "Review docs for accuracy and clarity.",
+          instructionsText: "Review docs for accuracy and clarity. Focus on sequencing, examples, and edge cases.",
           thinkingLevel: "medium",
           maxTurns: 20,
           soul: "Thorough and empathetic reviewer.",
@@ -30,6 +30,11 @@ vi.mock("../../api", () => ({
           skills: ["docs", "review"],
           templateId: "reviewer-template",
           rationale: "Matched your request to the reviewer preset",
+          heartbeatProcedurePath: ".fusion/agents/docs-reviewer/HEARTBEAT.md",
+          heartbeatIntervalMs: 45000,
+          heartbeatEnabled: true,
+          modelHint: "anthropic/claude-sonnet-4-5",
+          runtimeHint: "openclaw",
         }),
       0,
     );
@@ -43,14 +48,16 @@ const mockStartAgentOnboardingStreaming = vi.mocked(apiModule.startAgentOnboardi
 describe("ExperimentalAgentOnboardingModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    streamHandlers = undefined;
   });
 
-  it("walks onboarding flow and hands draft to create form", async () => {
+  it("renders draft review and only applies after explicit confirmation", async () => {
     const onUseDraft = vi.fn();
+    const onClose = vi.fn();
     render(
       <ExperimentalAgentOnboardingModal
         isOpen={true}
-        onClose={vi.fn()}
+        onClose={onClose}
         onUseDraft={onUseDraft}
         existingAgents={[]}
       />,
@@ -72,24 +79,34 @@ describe("ExperimentalAgentOnboardingModal", () => {
     fireEvent.click(screen.getByText("Continue"));
 
     await screen.findByText("Draft ready for review");
-    expect(screen.getByText("Template:")).toBeTruthy();
-    expect(screen.getByText("reviewer-template")).toBeTruthy();
+    expect(screen.getByText("Identity")).toBeTruthy();
+    expect(screen.getByText("Configuration")).toBeTruthy();
+    expect(screen.getByText("Runtime Hints")).toBeTruthy();
+    expect(screen.getByText("Rationale")).toBeTruthy();
+    expect(screen.getByText("Title")).toBeTruthy();
+    expect(screen.getByText("Icon")).toBeTruthy();
+    expect(screen.getByText("Reports To")).toBeTruthy();
+    expect(screen.getByText("Soul")).toBeTruthy();
+    expect(screen.getByText("Agent Memory")).toBeTruthy();
+    expect(screen.getByText("Thinking Level")).toBeTruthy();
+    expect(screen.getByText("Max Turns")).toBeTruthy();
+    expect(screen.getByText("Template")).toBeTruthy();
+    expect(screen.getByText("Pattern Agent")).toBeTruthy();
+    expect(screen.getByText("Inline Instructions")).toBeTruthy();
+    expect(screen.getByText(/Review docs for accuracy and clarity\./)).toBeTruthy();
     expect(screen.getByText(/Matched your request/)).toBeTruthy();
-    expect(screen.getByText("Soul / personality")).toBeTruthy();
-    expect(screen.getByText("Thorough and empathetic reviewer.")).toBeTruthy();
-    expect(screen.getByText("Core instructions")).toBeTruthy();
-    expect(screen.getByText("Review docs for accuracy and clarity.")).toBeTruthy();
-    expect(screen.getByText("Runtime hints")).toBeTruthy();
-    expect(screen.getByText("Thinking level:")).toBeTruthy();
-    expect(screen.getByText("Max turns:")).toBeTruthy();
-    expect(screen.getByText("Starter memory / playbook")).toBeTruthy();
-    expect(screen.getByText(/Follow docs style guide/)).toBeTruthy();
-    expect(screen.getByText("Skills")).toBeTruthy();
-    expect(screen.getByText("docs, review")).toBeTruthy();
-    fireEvent.click(screen.getByText("Continue to agent form"));
+    expect(screen.getByText(/\.fusion\/agents\/docs-reviewer\/HEARTBEAT\.md/)).toBeTruthy();
+    expect(screen.getByText(/45000ms/)).toBeTruthy();
+    expect(screen.getByText(/anthropic\/claude-sonnet-4-5/)).toBeTruthy();
+    expect(screen.getByText(/openclaw/)).toBeTruthy();
+    expect(onUseDraft).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Continue to agent form" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply draft to agent form" }));
 
     await waitFor(() => {
       expect(onUseDraft).toHaveBeenCalledWith(expect.objectContaining({ name: "Docs Reviewer" }));
+      expect(onClose).toHaveBeenCalled();
     });
   });
 
@@ -128,7 +145,7 @@ describe("ExperimentalAgentOnboardingModal", () => {
     fireEvent.click(screen.getByText("Continue"));
 
     await screen.findByText("Updated draft ready for review");
-    expect(screen.getByRole("button", { name: "Apply draft to settings" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Apply draft to settings form" })).toBeTruthy();
   });
 
   it("renders stream errors and still closes cleanly", async () => {
@@ -150,13 +167,15 @@ describe("ExperimentalAgentOnboardingModal", () => {
     });
   });
 
-  it("cancels server session on close", async () => {
+  it("does not apply draft when cancelled from question step", async () => {
     const onClose = vi.fn();
+    const onUseDraft = vi.fn();
+
     render(
       <ExperimentalAgentOnboardingModal
         isOpen={true}
         onClose={onClose}
-        onUseDraft={vi.fn()}
+        onUseDraft={onUseDraft}
         existingAgents={[]}
       />,
     );
@@ -165,11 +184,44 @@ describe("ExperimentalAgentOnboardingModal", () => {
     fireEvent.click(screen.getByText("Start onboarding"));
 
     await screen.findByText("What should this agent primarily help with?");
+    expect(screen.queryByText("Draft ready for review")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply draft to agent form" })).toBeNull();
+
+    fireEvent.click(screen.getByText("Cancel"));
+
+    await waitFor(() => {
+      expect(mockCancel).toHaveBeenCalledWith("onb-1", undefined);
+      expect(onClose).toHaveBeenCalled();
+      expect(onUseDraft).not.toHaveBeenCalled();
+    });
+  });
+
+  it("cancels server session on close", async () => {
+    const onClose = vi.fn();
+    const onUseDraft = vi.fn();
+    render(
+      <ExperimentalAgentOnboardingModal
+        isOpen={true}
+        onClose={onClose}
+        onUseDraft={onUseDraft}
+        existingAgents={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("What should this new agent own?"), { target: { value: "Review docs" } });
+    fireEvent.click(screen.getByText("Start onboarding"));
+
+    await screen.findByText("What should this agent primarily help with?");
+    fireEvent.change(screen.getByLabelText("What should this agent primarily help with?"), { target: { value: "Docs" } });
+    fireEvent.click(screen.getByText("Continue"));
+    await screen.findByText("Draft ready for review");
+
     fireEvent.click(screen.getByLabelText("Close"));
 
     await waitFor(() => {
       expect(mockCancel).toHaveBeenCalledWith("onb-1", undefined);
       expect(onClose).toHaveBeenCalled();
+      expect(onUseDraft).not.toHaveBeenCalled();
     });
   });
 

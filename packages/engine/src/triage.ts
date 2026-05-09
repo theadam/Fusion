@@ -18,13 +18,18 @@ import type {
   AgentSession,
 } from "@mariozechner/pi-coding-agent";
 import { describeModel, promptWithFallback } from "./pi.js";
-import { createResolvedAgentSession, extractRuntimeHint } from "./agent-session-helpers.js";
+import {
+  createResolvedAgentSession,
+  extractRuntimeHint,
+  resolvePlanningSessionModel,
+} from "./agent-session-helpers.js";
 import { reviewStep, type ReviewVerdict } from "./reviewer.js";
 import { buildSessionSkillContext } from "./session-skill-context.js";
 import { PRIORITY_SPECIFY, type AgentSemaphore } from "./concurrency.js";
 import { AgentLogger } from "./agent-logger.js";
 import {
   resolveAgentInstructions,
+  resolveAgentInstructionsWithRatings,
   buildSystemPromptWithInstructions,
   buildPluginPromptSection,
 } from "./agent-instructions.js";
@@ -47,9 +52,14 @@ import {
   createListAgentsTool,
   createMemoryTools,
   createResearchTools,
+  createWebFetchTool,
   createTaskDocumentReadTool,
   createTaskDocumentWriteTool,
 } from "./agent-tools.js";
+import {
+  getResearchGuidanceForSurface,
+  isResearchToolSurfaceEnabled,
+} from "./tool-availability.js";
 
 export const TRIAGE_SYSTEM_PROMPT = `You are a task specification agent for "fn", an AI-orchestrated task board.
 
@@ -237,10 +247,6 @@ When the planning conversation produces a structured plan, save it as a document
 - Order steps by dependency (foundation before integration, implementation before final validation)
 - Testing & Verification must run before Documentation & Delivery
 - Avoid giant catch-all steps; split outcomes so execution can be verified incrementally
-
-## Research tools
-When spec work needs missing domain context, you may use research tools (\`fn_research_run\`, \`fn_research_list\`, \`fn_research_get\`, \`fn_research_cancel\`). Keep research bounded to the task at hand, prefer concise queries, and write durable findings into task documents when useful.
-If research is unavailable or unconfigured, continue planning with repository context and clearly note assumptions.
 
 ## Guidelines
 - Read the project structure and relevant source files to understand context BEFORE writing
@@ -933,6 +939,10 @@ export class TriageProcessor {
         // Track subtasks created during triage when breakIntoSubtasks was requested.
         const createdSubtasksRef: { current: string[] } = { current: [] };
 
+        const assignedAgent = task.assignedAgentId && this.options.agentStore
+          ? await this.options.agentStore.getAgent(task.assignedAgentId).catch(() => null)
+          : null;
+
         const customTools = [
           ...this.createTriageTools({
             parentTaskId: task.id,
@@ -941,12 +951,23 @@ export class TriageProcessor {
           }),
           createTaskDocumentWriteTool(this.store, task.id),
           createTaskDocumentReadTool(this.store, task.id),
-          ...createResearchTools({
-            store: this.store,
-            rootDir: this.rootDir,
-            getSettings: async () => this.store.getSettings(),
-          }),
-          ...createMemoryTools(this.rootDir, settings),
+          ...(isResearchToolSurfaceEnabled(settings)
+            ? createResearchTools({
+              store: this.store,
+              rootDir: this.rootDir,
+              getSettings: async () => this.store.getSettings(),
+            })
+            : []),
+          ...createMemoryTools(this.rootDir, settings, assignedAgent
+            ? {
+              agentMemory: {
+                agentId: assignedAgent.id,
+                agentName: assignedAgent.name,
+                memory: assignedAgent.memory,
+              },
+            }
+            : undefined),
+          createWebFetchTool(),
           // Agent delegation tools — discover and delegate work to other agents.
           ...(this.options.agentStore ? [
             createListAgentsTool(this.options.agentStore),
@@ -964,19 +985,22 @@ export class TriageProcessor {
           ),
         ];
 
-        const assignedAgent = task.assignedAgentId && this.options.agentStore
-          ? await this.options.agentStore.getAgent(task.assignedAgentId).catch(() => null)
-          : null;
         let triageRuntimeHint = extractRuntimeHint(assignedAgent?.runtimeConfig);
 
-        // Resolve per-agent custom instructions for the triage role
+        // Resolve per-agent custom instructions for the triage role or assigned agent.
         let triageInstructions = "";
-        if (this.options.agentStore) {
+        if (assignedAgent) {
+          triageInstructions = await resolveAgentInstructionsWithRatings(
+            assignedAgent,
+            this.rootDir,
+            this.options.agentStore,
+          );
+        } else if (this.options.agentStore) {
           try {
             const agents = await this.options.agentStore.listAgents({ role: "triage" });
             for (const agent of agents) {
               triageRuntimeHint ??= extractRuntimeHint(agent.runtimeConfig);
-              if (agent.instructionsText || agent.instructionsPath) {
+              if (agent.instructionsText || agent.instructionsPath || agent.soul || agent.memory) {
                 triageInstructions = await resolveAgentInstructions(agent, this.rootDir);
                 break;
               }
@@ -987,10 +1011,19 @@ export class TriageProcessor {
           }
         }
         planLog.log(`${task.id}: planning in ${isFast ? "fast" : "standard"} mode`);
+        const triageIdentitySection = assignedAgent
+          ? `## Identity\n\nYou are ${assignedAgent.name}${assignedAgent.title?.trim() ? `, ${assignedAgent.title.trim()}` : ""} (agent ID: ${assignedAgent.id}, role: ${assignedAgent.role}).`
+          : "";
         const triageSystemPrompt = buildSystemPromptWithInstructions(
           resolveAgentPrompt("triage", settings.agentPrompts)
             || (isFast ? FAST_TRIAGE_SYSTEM_PROMPT : TRIAGE_SYSTEM_PROMPT),
-          triageInstructions,
+          [
+            triageIdentitySection,
+            triageInstructions,
+            isResearchToolSurfaceEnabled(settings)
+              ? getResearchGuidanceForSurface("triage")
+              : "",
+          ].filter((section) => section.trim()).join("\n\n"),
         );
         const triageContributions = this.options.pluginRunner
           ?.getPromptContributionsForSurface("triage")
@@ -1027,30 +1060,16 @@ export class TriageProcessor {
           onThinking: agentLogger.onThinking,
           onToolStart: agentLogger.onToolStart,
           onToolEnd: agentLogger.onToolEnd,
-          // Resolve planning model using canonical lane hierarchy:
-          // 1. Task planning override pair (planningModelProvider + planningModelId)
-          // 2. Project planning lane pair (planningProvider + planningModelId)
-          // 3. Global planning lane pair (planningGlobalProvider + planningGlobalModelId)
-          // 4. Project default override pair (defaultProviderOverride + defaultModelIdOverride)
-          // 5. Global default pair (defaultProvider + defaultModelId)
-          defaultProvider: task.planningModelProvider && task.planningModelId
-            ? task.planningModelProvider
-            : (settings.planningProvider && settings.planningModelId
-                ? settings.planningProvider
-                : (settings.planningGlobalProvider && settings.planningGlobalModelId
-                    ? settings.planningGlobalProvider
-                    : (settings.defaultProviderOverride && settings.defaultModelIdOverride
-                        ? settings.defaultProviderOverride
-                        : settings.defaultProvider))),
-          defaultModelId: task.planningModelProvider && task.planningModelId
-            ? task.planningModelId
-            : (settings.planningProvider && settings.planningModelId
-                ? settings.planningModelId
-                : (settings.planningGlobalProvider && settings.planningGlobalModelId
-                    ? settings.planningGlobalModelId
-                    : (settings.defaultProviderOverride && settings.defaultModelIdOverride
-                        ? settings.defaultModelIdOverride
-                        : settings.defaultModelId))),
+          // Resolve planning model using executor-style precedence:
+          // 1. Assigned durable agent runtime model pair when complete
+          // 2. Task planning override pair
+          // 3. Planning/project/global fallbacks
+          ...resolvePlanningSessionModel(
+            task.planningModelProvider,
+            task.planningModelId,
+            settings,
+            assignedAgent?.runtimeConfig,
+          ),
           fallbackProvider: settings.planningFallbackProvider && settings.planningFallbackModelId
             ? settings.planningFallbackProvider
             : settings.fallbackProvider,

@@ -125,6 +125,12 @@ function OrgChartNode({
   const stateNodeClass = getStateCardClass("org-chart-node-card", agent.state);
   const subtreeLeafCount = getOrgChartLeafCount(node);
   const nodeStyle = { "--org-chart-subtree-leaves": String(subtreeLeafCount) } as CSSProperties;
+  const firstChildLeafCount = children.length > 0 ? getOrgChartLeafCount(children[0]) : 1;
+  const lastChildLeafCount = children.length > 0 ? getOrgChartLeafCount(children[children.length - 1]) : 1;
+  const childrenStyle = {
+    "--org-chart-first-child-leaves": String(firstChildLeafCount),
+    "--org-chart-last-child-leaves": String(lastChildLeafCount),
+  } as CSSProperties;
 
   return (
     <div
@@ -162,7 +168,7 @@ function OrgChartNode({
         </div>
       </div>
       {children.length > 0 && (
-        <div className="org-chart-children" role="group" aria-label={`${agent.name} employees`}>
+        <div className="org-chart-children" style={childrenStyle} role="group" aria-label={`${agent.name} employees`}>
           {children.map((child) => (
             <OrgChartNode
               key={child.agent.id}
@@ -1093,6 +1099,12 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                         <span className="agent-board-icon"><AgentAvatar agent={agent} size={20} /></span>
                         <span className="agent-board-badge badge text-secondary">{getRoleLabel(agent.role)}</span>
                         <span className={`agent-board-badge badge ${stateBadgeClass}`}>{agent.state}</span>
+                        {(agent.pendingApprovalCount ?? 0) > 0 ? (
+                          <span className="agent-board-badge badge agent-approval-badge" title="Pending approvals">
+                            <span className="status-dot status-dot--pending" />
+                            {agent.pendingApprovalCount}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="agent-board-name">{agent.name}</div>
                       <div className="agent-board-id">{agent.id}</div>
@@ -1207,6 +1219,12 @@ export function AgentsView({ addToast, projectId, onOpenTaskLogs, agentOnboardin
                       <span className="badge text-secondary">
                         {getRoleLabel(agent.role)}
                       </span>
+                      {(agent.pendingApprovalCount ?? 0) > 0 ? (
+                        <span className="badge agent-approval-badge" title="Pending approvals">
+                          <span className="status-dot status-dot--pending" />
+                          {agent.pendingApprovalCount}
+                        </span>
+                      ) : null}
                       {/* List view: up to 2 skill badges */}
                       {(() => {
                         const skills = getSkillBadges(agent);

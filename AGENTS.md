@@ -254,6 +254,17 @@ The pi extension provides tools and a `/fn` command for interacting with fn from
 
 The extension has no skills — tool descriptions give the LLM everything it needs.
 
+### WebFetch tool (`fn_web_fetch`)
+
+Use `fn_web_fetch` for lightweight URL reads from agent/chat sessions. It performs an HTTP GET, follows redirects, extracts readable text (including HTML→text and JSON pretty-print), and returns bounded content.
+
+`fn_web_fetch` is a universal baseline capability and is available by default across all agent roles/surfaces (executor, step-session, reviewer, merger, triage, and heartbeat, including engineer/custom direct-report paths routed through heartbeat).
+
+- Default limits: `timeoutMs=30000` and `maxBytes=512000` (500 KB)
+- Security: blocks private/loopback/link-local hosts (including DNS-resolved private addresses) unless explicitly overridden in internal/test contexts
+- Scope: read-only fetch (no JS rendering, no auth flows, no POST/cookie workflows)
+- Use `agent-browser` skill when pages require JavaScript execution, interactive navigation, or richer browser behavior
+
 ## Agent Spawning (`spawn_agent` tool)
 
 The executor agent can spawn child agents that run in parallel. Each spawned agent:
@@ -289,7 +300,15 @@ The executor agent can spawn child agents that run in parallel. Each spawned age
 
 ## Agent Delegation Tools
 
-Four tools enable inter-agent coordination — discovering agents, delegating tasks, and managing direct-report configuration.
+Six tools enable inter-agent coordination — discovering agents, provisioning/decommissioning direct reports, delegating tasks, and managing direct-report configuration.
+
+### `agent_create` Tool
+
+Create a non-ephemeral agent that reports to the caller (or, for CEO-level callers, any `reportsTo` target).
+
+### `agent_delete` Tool
+
+Delete a non-ephemeral direct report. If the target holds a task checkout lease, deletion is blocked unless `force: true`. Assigned tasks can be reassigned via `reassign_to` or released/unassigned.
 
 ### `list_agents` Tool
 
@@ -323,6 +342,7 @@ Create a new task and assign it to a specific agent for execution. The task goes
 | `agent_id` | `string` (required) | The agent ID to delegate work to |
 | `description` | `string` (required) | What needs to be done |
 | `dependencies` | `string[]` (optional) | Task IDs this new task depends on |
+| `override` | `boolean` (optional) | Set true to bypass executor-role assignment policy |
 
 **Example workflow — CEO agent discovers QA agent and delegates testing:**
 
@@ -344,6 +364,7 @@ delegate_task({
 **Error cases:**
 - `"ERROR: Agent {agent_id} not found"` — The agent ID does not exist
 - `"ERROR: Cannot delegate to ephemeral/runtime agent {agent_id}"` — Cannot delegate to runtime task-worker agents (use `spawn_agent` for parallel worktree tasks instead)
+- `"ERROR: Agent {agent_id} has role \"...\"; implementation task <new> requires an \"executor\"-role agent. Pass override=true to bypass."` — Non-executor target blocked unless `override: true`
 
 ### `get_agent_config` Tool
 
@@ -607,8 +628,8 @@ The test config (`vitest.config.ts`) includes `test.css: { include: [/.+/] }` so
 
 These 15 views are lazy-loaded via `React.lazy()` to manage bundle size:
 
-- `AgentsView`, `RoadmapsView`, `NodesView`, `ChatView`, `MemoryView`
-- `DevServerView`, `InsightsView`, `DocumentsView`, `SkillsView`, `ResearchView`, `TodoView`
+- `AgentsView`, `NodesView`, `ChatView`, `MemoryView`
+- `DevServerView`, `InsightsView`, `DocumentsView`, `SkillsView`, `ResearchView`, `EvalsView`, `TodoView`
 - `SetupWizardModal`, `PluginManager`, `PiExtensionsManager`, `AgentDetailView`
 
 They are loaded in `App.tsx` / `AppModals.tsx` / `SettingsModal.tsx` / `AgentsView.tsx` with `<Suspense fallback={null}>`. 
@@ -697,6 +718,7 @@ Semantic status colors:
 | `--color-warning` | Warning amber |
 | `--color-info` | Info blue |
 | `--color-muted` | Muted gray |
+| `--accent-text` | Foreground text/icon color on `--accent` surfaces |
 
 **Rule:** Never use raw hex or `rgba(...)` for colors in component styles. Use `var(--token)` or `color-mix(in srgb, var(--color) X%, transparent)` for translucent backgrounds. The only place hardcoded colors are acceptable is inside `:root` theme blocks defining tokens.
 

@@ -7,6 +7,7 @@ import type { PluginInstallation } from "@fusion/core";
 import type { PluginStore } from "@fusion/core";
 import type { PluginLoader } from "@fusion/core";
 import { createApiRoutes } from "../routes.js";
+import { createPluginRouter } from "../plugin-routes.js";
 import { get as performGet, request as performRequest } from "../test-request.js";
 import * as projectStoreResolver from "../project-store-resolver.js";
 
@@ -56,6 +57,15 @@ function createMockPluginLoader(overrides: Partial<PluginLoader> = {}): PluginLo
     stopAllPlugins: vi.fn().mockResolvedValue(undefined),
     invokeHook: vi.fn().mockResolvedValue(undefined),
     reloadPlugin: vi.fn().mockResolvedValue(undefined),
+    createRouteContext: vi.fn().mockImplementation(async (pluginId: string, ctx: Record<string, unknown>) => ({
+      pluginId,
+      taskStore: ctx.taskStore,
+      settings: ctx.settings ?? {},
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      emitEvent: vi.fn(),
+      createAiSession: (ctx as { createAiSession?: unknown }).createAiSession,
+      resolveProjectTaskStore: ctx.resolveProjectTaskStore,
+    })),
     ...overrides,
   } as unknown as PluginLoader;
 }
@@ -841,6 +851,27 @@ describe("plugin setup routes", () => {
     expect(res.body).toEqual({ hasSetup: false });
   });
 
+  it("GET /plugins/:id/setup-status returns deferred status when plugin is not started", async () => {
+    (pluginStore.getPlugin as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...FAKE_PLUGIN, state: "installed" });
+    pluginRunner.getPluginSetupInfo.mockReturnValueOnce([
+      {
+        pluginId: "test-plugin",
+        manifest: { binaryName: "agent-browser", description: "Binary" },
+        hooks: { checkSetup: vi.fn() },
+      },
+    ]);
+
+    const res = await REQUEST(buildApp(), "GET", "/api/plugins/test-plugin/setup-status");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      hasSetup: true,
+      setupCheckDeferred: true,
+      deferredReason: "plugin-not-started",
+      pluginState: "installed",
+    });
+    expect(pluginRunner.checkPluginSetup).not.toHaveBeenCalled();
+  });
+
   it("GET /plugins/:id/setup-status returns 404 for nonexistent plugin", async () => {
     (pluginStore.getPlugin as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Plugin "missing" not found'));
 
@@ -1155,6 +1186,73 @@ describe("DELETE /plugins/:id", () => {
 
     expect(res.status).toBe(204);
     expect(mockGetOrCreateProjectStore).toHaveBeenCalledWith("proj_123");
+  });
+});
+
+describe("plugin-defined route dispatch", () => {
+  it("registers PATCH routes from plugins", () => {
+    const pluginRunner = {
+      getPluginRoutes: vi.fn().mockReturnValue([
+        { pluginId: "roadmap-planner", route: { method: "PATCH", path: "/roadmaps/x", handler: vi.fn() } },
+      ]),
+    };
+
+    const pluginStore = createMockPluginStore();
+    const router = createPluginRouter(pluginStore, createMockPluginLoader({
+      createRouteContext: vi.fn().mockResolvedValue({
+        pluginId: "roadmap-planner",
+        taskStore: createMockTaskStore(),
+        settings: {},
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        emitEvent: vi.fn(),
+      }),
+      getPlugin: vi.fn().mockReturnValue({ manifest: { id: "roadmap-planner" } }),
+    } as any), pluginRunner as any, createMockTaskStore());
+
+    const stack = (router as any).stack as Array<{ route?: { path: string; methods: Record<string, boolean> } }>;
+    const patchRoute = stack.find((layer) => layer.route?.path === "/roadmap-planner/roadmaps/x");
+    expect(patchRoute?.route?.methods.patch).toBe(true);
+  });
+
+  it("passes scoped taskStore and createAiSession through pluginLoader.createRouteContext", async () => {
+    const routeHandler = vi.fn().mockResolvedValue({ ok: true });
+    const pluginRunner = {
+      getPluginRoutes: vi.fn().mockReturnValue([
+        { pluginId: "roadmap-planner", route: { method: "POST", path: "/ctx-check", handler: routeHandler } },
+      ]),
+    };
+    const scopedPluginStore = createMockPluginStore();
+    const scopedTaskStore = createMockTaskStore({ getPluginStore: vi.fn().mockReturnValue(scopedPluginStore) });
+    mockGetOrCreateProjectStore.mockResolvedValue(scopedTaskStore);
+    const createRouteContext = vi.fn().mockImplementation(async (_pluginId: string, overrides: any) => ({
+      pluginId: "roadmap-planner",
+      taskStore: overrides.taskStore,
+      settings: overrides.settings,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      emitEvent: vi.fn(),
+      createAiSession: vi.fn(),
+      resolveProjectTaskStore: overrides.resolveProjectTaskStore,
+    }));
+    const pluginLoader = createMockPluginLoader({
+      createRouteContext,
+      getPlugin: vi.fn().mockReturnValue({ manifest: { id: "roadmap-planner" } }),
+    } as any);
+    const pluginStore = createMockPluginStore();
+
+    const app = express();
+    app.use(express.json());
+    app.use("/api/plugins", createPluginRouter(pluginStore, pluginLoader, pluginRunner as any, createMockTaskStore()));
+
+    const res = await REQUEST(app, "POST", "/api/plugins/roadmap-planner/ctx-check", { projectId: "proj_123" });
+    expect(res.status).toBe(200);
+    expect(createRouteContext).toHaveBeenCalledWith("roadmap-planner", expect.objectContaining({
+      taskStore: scopedTaskStore,
+      resolveProjectTaskStore: projectStoreResolver.getOrCreateProjectStore,
+    }));
+    expect(routeHandler).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ taskStore: scopedTaskStore, createAiSession: expect.any(Function) }),
+    );
   });
 });
 

@@ -1,18 +1,84 @@
 #!/usr/bin/env node
 
-import { readFileSync, readdirSync, writeFileSync, mkdirSync, renameSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync, mkdirSync, renameSync, mkdtempSync, rmSync, realpathSync, globSync, existsSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { cpus, tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { ensureTestArtifacts } from "./ensure-test-artifacts.mjs";
-import fg from "fast-glob";
-import { parse as parseYaml } from "yaml";
 
 const currentFilePath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(currentFilePath);
 const checkIsolationScript = path.join(scriptDir, "check-test-isolation.mjs");
+const require = createRequire(import.meta.url);
+
+function fastGlobSync(patterns, options) {
+  const patternList = Array.isArray(patterns) ? patterns : [patterns];
+  const matches = new Set();
+
+  for (const pattern of patternList) {
+    if (typeof pattern !== "string" || pattern.length === 0) continue;
+    const isNegated = pattern.startsWith("!");
+    const body = isNegated ? pattern.slice(1) : pattern;
+    const resolved = globSync(body, {
+      cwd: options?.cwd,
+      absolute: options?.absolute,
+      dot: options?.dot,
+      nodir: options?.onlyFiles,
+    });
+
+    for (const entry of resolved) {
+      if (isNegated) {
+        matches.delete(entry);
+      } else {
+        matches.add(entry);
+      }
+    }
+  }
+
+  return [...matches];
+}
+
+let fgSync = fastGlobSync;
+try {
+  const loaded = require("fast-glob");
+  if (typeof loaded?.sync === "function") {
+    fgSync = loaded.sync;
+  }
+} catch {
+  // Fallback to node:fs globSync when fast-glob is not installed.
+}
+
+function parseWorkspacePackagesFromYaml(rawYaml) {
+  const lines = rawYaml.split(/\r?\n/);
+  const packages = [];
+  let inPackages = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!inPackages) {
+      if (trimmed === "packages:") {
+        inPackages = true;
+      }
+      continue;
+    }
+
+    if (!trimmed) continue;
+    if (!trimmed.startsWith("-")) {
+      if (!line.startsWith(" ") && !line.startsWith("\t")) {
+        break;
+      }
+      continue;
+    }
+
+    const value = trimmed.slice(1).trim().replace(/^['"]|['"]$/g, "");
+    if (value) packages.push(value);
+  }
+
+  return packages;
+}
 
 const rootDir = process.env.FUSION_PROJECT_DIR
   ? path.resolve(process.env.FUSION_PROJECT_DIR)
@@ -44,7 +110,16 @@ function run(command, commandArgs, options = {}) {
 function runIsolationCheck(before = false, env = process.env) {
   const args = [checkIsolationScript];
   if (before) args.push("--before");
-  run(process.execPath, args, { env });
+  // Inject the names of every isolated HOME this script created so the check
+  // never reports them as a leak even if the rm-rf in cleanup silently failed
+  // or the baseline file got rotated mid-run. Without this, a transient EBUSY
+  // on /var/folders (SQLite WAL still mmap'd, orphan child holding an fd)
+  // leaks a `fusion-test-home-root-*` dir and trips the guard.
+  const ignoreNames = [...knownIsolatedHomeBasenames].join(",");
+  const checkEnv = ignoreNames
+    ? { ...env, FUSION_TEST_ISOLATION_IGNORE_NAMES: ignoreNames }
+    : env;
+  run(process.execPath, args, { env: checkEnv });
 }
 
 export function shouldRunIsolationGuard(env = process.env) {
@@ -70,8 +145,9 @@ function pruneFusionTestHomes() {
     }
     try {
       rmSync(rawPath, { recursive: true, force: true });
-    } catch {
-      // Best-effort pruning only.
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[test-changed] failed to prune leftover ${rawPath}: ${message}`);
     }
   }
 }
@@ -115,10 +191,7 @@ function getBaseBranch() {
 function readWorkspacePatterns(projectRoot = rootDir) {
   try {
     const workspacePath = path.join(projectRoot, "pnpm-workspace.yaml");
-    const parsed = parseYaml(readFileSync(workspacePath, "utf8"));
-    return Array.isArray(parsed?.packages)
-      ? parsed.packages.filter((pattern) => typeof pattern === "string")
-      : [];
+    return parseWorkspacePackagesFromYaml(readFileSync(workspacePath, "utf8"));
   } catch {
     return ["packages/*"];
   }
@@ -129,7 +202,7 @@ function expandWorkspacePattern(projectRoot, pattern) {
     return [];
   }
 
-  return fg.sync(workspacePatternToPackageJsonGlob(pattern), {
+  return fgSync(workspacePatternToPackageJsonGlob(pattern), {
     absolute: true,
     cwd: projectRoot,
     dot: false,
@@ -143,7 +216,7 @@ function expandWorkspacePatterns(projectRoot, patterns) {
     return patterns.flatMap((pattern) => expandWorkspacePattern(projectRoot, pattern));
   }
 
-  return fg.sync(patterns.map(workspacePatternToPackageJsonGlob), {
+  return fgSync(patterns.map(workspacePatternToPackageJsonGlob), {
     absolute: true,
     cwd: projectRoot,
     dot: false,
@@ -620,14 +693,53 @@ export function defaultTestWorkerBudget(env = process.env) {
 const { totalWorkers, concurrency } = defaultTestWorkerBudget(process.env);
 
 const isolatedHomesToCleanup = new Set();
+// Basenames of every fusion-test-home-root-* dir this process has minted.
+// Passed to check-test-isolation.mjs via env so it allow-lists them
+// unconditionally, even if cleanup's rm silently failed.
+export const knownIsolatedHomeBasenames = new Set();
 
-function cleanupIsolatedHomePath(homePath) {
+let cleanupRmSync = rmSync;
+
+export function __setCleanupRmSyncForTests(nextRmSync) {
+  cleanupRmSync = typeof nextRmSync === "function" ? nextRmSync : rmSync;
+}
+
+function sleepMsSync(ms) {
+  if (ms <= 0) return;
+  spawnSync("sleep", [String(ms / 1000)], { stdio: "ignore" });
+}
+
+/**
+ * Retry isolated HOME cleanup synchronously to absorb transient EBUSY races
+ * (common on macOS when Vitest workers still hold file descriptors briefly).
+ * If cleanup still fails, check-test-isolation gets an allow-list of every
+ * minted fusion-test-home-root-* basename to avoid false leak failures.
+ */
+export function cleanupIsolatedHomePath(homePath, retries = 3, delayMs = 75) {
   try {
-    rmSync(homePath, { recursive: true, force: true });
-  } catch {
-    // Best-effort cleanup only.
+    if (!existsSync(homePath)) return;
+
+    let lastError = null;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        cleanupRmSync(homePath, { recursive: true, force: true });
+        return;
+      } catch (err) {
+        if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+          return;
+        }
+        lastError = err;
+        if (attempt < retries) {
+          sleepMsSync(delayMs);
+        }
+      }
+    }
+
+    const message = lastError instanceof Error ? lastError.message : String(lastError);
+    console.warn(`[test-changed] failed to remove isolated HOME ${homePath} after ${retries} attempts: ${message}`);
+  } finally {
+    isolatedHomesToCleanup.delete(homePath);
   }
-  isolatedHomesToCleanup.delete(homePath);
 }
 
 function cleanupIsolatedHomes() {
@@ -651,6 +763,8 @@ export function createIsolatedHomeEnv(env = process.env) {
   const isolatedHome = realpathSync(rawIsolatedHome);
   isolatedHomesToCleanup.add(rawIsolatedHome);
   isolatedHomesToCleanup.add(isolatedHome);
+  knownIsolatedHomeBasenames.add(path.basename(rawIsolatedHome));
+  knownIsolatedHomeBasenames.add(path.basename(isolatedHome));
 
   const nextEnv = {
     ...env,

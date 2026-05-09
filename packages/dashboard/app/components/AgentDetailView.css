@@ -304,6 +304,13 @@
   color: var(--text-muted);
 }
 
+.agent-detail-approval-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--color-warning);
+}
+
 .dashboard-summary-skills {
   display: inline-flex;
   align-items: center;
@@ -570,6 +577,100 @@
 
 .logs-empty p {
   margin: var(--space-sm) 0 0 0;
+}
+
+/* --- Mail Tab --- */
+.agent-mail-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.agent-mail-tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.agent-mail-tab-header h3 {
+  margin: 0;
+  font-size: calc(var(--space-md) + var(--space-xs) * 0.5);
+}
+
+.agent-mail-tab-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--color-error);
+}
+
+.agent-detail-loading--inline {
+  flex-direction: row;
+  justify-content: flex-start;
+  padding: var(--space-md) 0;
+}
+
+.agent-mail-tab .agent-mail-tab-message {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.agent-mail-tab .agent-mail-tab-message:hover {
+  background: var(--card-hover);
+}
+
+.agent-mail-tab .agent-mail-tab-message:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-strong);
+}
+
+.agent-mail-tab .agent-mail-tab-message--selected {
+  background: color-mix(in srgb, var(--todo) 12%, transparent);
+}
+
+.agent-mail-tab .agent-mail-tab-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.agent-mail-tab .agent-mail-tab-back {
+  align-self: flex-start;
+}
+
+.agent-mail-tab .agent-mail-tab-detail-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.agent-mail-tab .agent-mail-tab-detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+.agent-mail-tab .agent-mail-tab-detail-label {
+  color: var(--text-muted);
+  min-width: calc(var(--space-2xl) * 2);
+}
+
+.agent-mail-tab .agent-mail-tab-reply-context {
+  color: var(--text-muted);
+}
+
+.agent-mail-tab .agent-mail-tab-detail-body {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* --- Runs Tab --- */
@@ -1630,6 +1731,29 @@
   /* Logs Tab mobile */
   .logs-empty {
     padding: var(--space-2xl) var(--space-lg);
+  }
+
+  /* Mail Tab mobile */
+  .agent-mail-tab-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .agent-mail-tab .mailbox-agent-subtabs {
+    width: 100%;
+  }
+
+  .agent-mail-tab .mailbox-agent-subtab {
+    flex: 1;
+  }
+
+  .agent-mail-tab .agent-mail-tab-detail {
+    width: 100%;
+    padding: var(--space-md);
+  }
+
+  .agent-mail-tab .agent-mail-tab-back {
+    min-height: calc(var(--space-lg) * 2 + var(--space-xs));
   }
 
   /* Runs Tab mobile */

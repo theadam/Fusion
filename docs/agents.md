@@ -21,6 +21,7 @@ Every first-class editable agent field has a defined create/edit/import/template
 | `reportsTo` | ✓ | ✓ | ✓ (from manifest) | Parent agent ID |
 | `runtimeConfig` | ✓ | ✓ | ✗ | Heartbeat/budget config |
 | `permissions` | ✓ | ✓ | ✗ | Capability flags |
+| `permissionPolicy` | ✓ | ✓ | ✗ | Runtime action-gating policy for permanent agents (default/fallback: `unrestricted`) |
 | `instructionsPath` | ✓ | ✓ | ✗ | File-backed instructions path |
 | `instructionsText` | ✓ | ✓ | ✓ (from manifest `instructionBody`) | Inline instructions |
 | `soul` | ✓ | ✓ | ✗ | Personality/identity description |
@@ -40,12 +41,85 @@ Every first-class editable agent field has a defined create/edit/import/template
 | `memory` | `memory` | — |
 | `skills` | `metadata.skills` | — |
 
+## Permission Policy Presets (Permanent Agents)
+
+`permissionPolicy` is a first-class persisted policy contract for **runtime action gating**, separate from role/capability authorization and separate from dashboard persona presets.
+
+Built-in preset catalog:
+
+- `unrestricted` (default) — all v1 runtime action categories are `allow`
+- `approval-required` — all v1 runtime action categories are `require-approval`
+- `locked-down` — all v1 runtime action categories are `block`
+
+V1 runtime action categories:
+
+- `git_write`
+- `file_write_delete`
+- `command_execution`
+- `network_api`
+- `task_agent_mutation`
+- `none` (classifier-only read-only result; never stored as a policy rule key)
+
+`permissionPolicy` uses only the five sensitive categories above (everything except `none`) and the FN-3545 disposition contract:
+
+- `allow`
+- `block`
+- `require-approval`
+
+### Runtime gate v1 mapping (per tool invocation, permanent agents only)
+
+The engine classifies tool calls by behavior (not namespace alone):
+
+- `file_write_delete`: built-in `write` / `edit`, plus persistent write helpers like `fn_task_document_write`, `fn_memory_append`, `fn_task_attach`
+- `command_execution`: built-in `bash` when not classified as mutating git
+- `git_write`: mutating git shell commands run via `bash`
+- `network_api`: external/network-facing tools (for example `fn_research_run`, `fn_research_cancel`, `fn_research_retry`)
+- `task_agent_mutation`: task/agent mutation tools (for example `fn_task_create`, `fn_delegate_task`, `fn_update_agent_config`, `fn_update_identity`)
+- `none`: positively recognized read-only tools (`read`, `grep`, `find`, `ls`, list/show/get-style `fn_*` tools)
+
+`bash` git-write heuristic in v1:
+
+- Mutating git operations include: `git add`, `commit`, `merge`, `rebase`, `cherry-pick`, `am`, `apply`, `stash`, `tag`, `push`, `reset`, `rm`, `mv`, `clean`, `worktree add/remove`, `checkout -b`, `switch -c`, `pull --rebase`, `restore --staged`, and branch/remote mutation forms.
+- Read-only git operations include: `git status`, `diff`, `log`, `show`, `rev-parse`, `branch --show-current`, `branch` listing, and `remote -v`.
+
+Unknown/unclassified tool fallback:
+
+- In permanent-agent sessions, unknown tools default to `require-approval` (fail-safe).
+- Category `none` only yields `allow` when the tool is positively recognized as read-only.
+- Internal Fusion runtime coordination tools (heartbeat completion, task/agent coordination, messaging, evaluations, identity reflection, memory bookkeeping) are exempt by design and always allowed so permanent-agent heartbeats can complete.
+- Operators can reload the in-memory exempt-tool registry at runtime via `POST /api/action-gate/reload` (optional body `{ "tools": string[] }`) to apply exemption-list updates without restarting the engine process.
+- Canonical tool classification/exemption sets live in `packages/engine/src/gating-classifications.ts` and are shared by both action-gate paths.
+
+Approval pause/resume lifecycle (FN-3548):
+
+- Permanent-agent gating short-circuits `block` and `require-approval` actions before tool execution and returns structured non-success tool results.
+- For `require-approval`, the engine creates/reuses a durable approval request and pauses execution with canonical `pauseReason: "awaiting-approval"`.
+- If task-backed, the owning task is paused (`Task.paused=true`, `pausedByAgentId=<requester>`); the requesting agent is paused (`state="paused"`, `pauseReason="awaiting-approval"`).
+- Dedupe semantics by `approvalDedupeKey`: `pending` reuses the same request, `approved` allows exactly one execution and then marks request `completed`, `denied` stays blocked, `completed` requires a fresh request.
+- HTTP decision endpoint resumes best-effort: `POST /api/approvals/:id/decision` with `{ decision: "approve" | "deny", comment? }` unpauses matching task/agent when they are paused for `awaiting-approval`.
+- Approval API surface: `GET /api/approvals` (supports status/limit/offset and returns `{ requests, total, pendingCount }`), `GET /api/approvals/:id` (includes request context + audit/history), `POST /api/approvals/:id/decision`.
+- Dashboard mailbox is the primary v1 resolution surface: approvals appear in the mailbox **Approvals** tab with pending/history views and inline approve/deny controls for pending requests.
+- Dashboard mailbox entry points (Header/Mobile nav) display pending-approval indicators so waiting approvals are visible before opening Mailbox.
+- Agents list/board cards and Agent Detail summary display per-agent `pendingApprovalCount` badges to show which agents are blocked by waiting approvals.
+
+Default and legacy fallback behavior:
+
+- New **non-ephemeral/permanent** agents persist a normalized `permissionPolicy` using preset `unrestricted` when not explicitly provided.
+- Legacy permanent-agent rows missing `permissionPolicy` resolve to the same effective `unrestricted` policy at read time (no eager migration required).
+- Ephemeral/runtime task-worker agents are intentionally left unchanged and are not backfilled with a default `permissionPolicy`.
+
+Separation of concerns:
+
+- `permissions` capability flags (plus role defaults) determine what an agent is conceptually authorized to do (for example, `tasks:assign`, `agents:create`).
+- `permissionPolicy` determines how sensitive runtime actions are gated (`allow`, `block`, `require-approval`) once the capability path is in play.
+- Dashboard persona presets (`packages/dashboard/app/components/agent-presets/`) are UI templates for identity/behavior and are **not** the source of truth for permission-policy enforcement.
+
 ### System-Managed Fields (Not User-Editable)
 
 These fields are managed by the engine and cannot be directly edited:
 
 - `id` — Auto-generated unique identifier
-- `state` — Agent lifecycle state (managed by engine)
+- `state` — Agent lifecycle state (managed by engine). Non-ephemeral agents default to `active` on creation; ephemeral/task-worker agents default to `idle`.
 - `taskId` — Current working task (managed by scheduler)
 - `totalInputTokens` / `totalOutputTokens` — Token usage totals (managed by engine)
 - `createdAt` / `updatedAt` / `lastHeartbeatAt` — Timestamps (managed by system)
@@ -110,6 +184,17 @@ Executor precedence for task runs:
 
 If the assigned agent runtime model is missing or incomplete, Fusion falls back to the normal task/settings execution hierarchy.
 
+### Assigned-agent identity + planning model precedence for task triage
+
+When a triage/specification run targets a task with `assignedAgentId` and that agent is durable, planning now inherits the assigned agent context instead of only generic triage-role defaults.
+
+Triage inheritance behavior:
+1. The triage system prompt includes assigned-agent identity context and resolves instructions/soul/memory from that agent (including existing rating-aware instruction composition)
+2. Triage memory tools are created with assigned-agent memory context (`createMemoryTools(..., { agentMemory })`), so `fn_memory_search` / `fn_memory_get` can access `.fusion/agent-memory/{agentId}/...` during planning
+3. Planning model resolution prefers a complete assigned-agent runtime model pair first, then task planning overrides, then normal planning/project/global fallbacks
+
+As with execution, incomplete assigned-agent model configuration falls through cleanly to the existing planning hierarchy.
+
 ### Task Detail Agent Log model provenance
 
 The Task Detail → Agent Log model header prefers runtime provenance markers written during execution/review:
@@ -141,6 +226,7 @@ The agents surface provides:
 - A compact **Controls** popup for secondary actions (state filter, Show system agents toggle, Import, and global Heartbeat Speed)
 - Agent import can also be launched from the selected **Agent Detail** header; this entry opens the import modal directly in the companies.sh browse flow so operators can discover and import packages without leaving the detail context
 - Detail/config panels
+- Agent Detail includes a **Mail** tab for inspecting that agent’s inbox/outbox; selecting a message opens full details, and selecting an unread inbox message marks it read
 - Split-view synchronization: successful saves and lifecycle actions from the right-side Agent Detail pane immediately refresh the left-side list/selection state (no wait for background polling)
 - A per-agent **Token Usage** panel that summarizes cumulative token consumption for the currently displayed agents
 - Run history
@@ -197,13 +283,17 @@ Runtime behavior:
   - `.fusion/agent-memory/{agentId}/DREAMS.md` (synthesized patterns)
   - `.fusion/agent-memory/{agentId}/YYYY-MM-DD.md` (daily notes)
 - `fn_memory_get` is intentionally bounded to those same files only.
-- Empty inline `agent.memory` does **not** disable search/read of existing dreams/daily files once the agent-memory workspace exists.
+- Agent memory resolution order is:
+  1. Inline `agent.memory` (highest priority)
+  2. `.fusion/agent-memory/{agentId}/MEMORY.md` (fallback when inline is empty, and supplemental long-term section when inline is present)
+  3. Additional `.fusion/agent-memory/{agentId}/DREAMS.md` and daily files surfaced via `fn_memory_search`/`fn_memory_get`
+- Empty inline `agent.memory` does **not** disable search/read of existing workspace files once the agent-memory workspace exists.
 
 This layered behavior is shared by heartbeat agents and task-scoped sessions that inherit agent identity.
 
 ## Research Tools in Planning/Execution Sessions
 
-Triage and executor runtime sessions now include a bounded research tool surface:
+Triage and executor runtime sessions include a bounded research tool surface only when `experimentalFeatures.researchView` is enabled for the project:
 
 - `fn_research_run` — create/start a bounded research run for a focused query
 - `fn_research_list` — list recent runs and statuses
@@ -216,7 +306,8 @@ Expected behavior and boundaries:
 
 - Agents should use research only when repository/local context is insufficient
 - Queries should stay narrow and task-scoped; avoid open-ended exploration
-- If research is disabled or provider setup is incomplete, tools return actionable `setup` responses instead of crashing
+- When `experimentalFeatures.researchView` is disabled, sessions do not register `fn_research_*` tools and prompts do not advertise research capabilities
+- If the research surface is enabled but provider setup is incomplete, tools return actionable `setup` responses instead of crashing
 - Durable conclusions should be persisted with `fn_task_document_write` (for example, `key="research"`)
 - Research runs require the project engine to be running for processing; `fn_research_run` creates the run but does not block for completion unless `wait_for_completion` is set
 
@@ -401,9 +492,10 @@ When **Settings → Experimental Features → Planning-style Agent Onboarding** 
 - Step 0 of the **New Agent** dialog includes an **AI Interview** entry point for create mode.
 - **Agent detail → Settings** includes an **AI Interview** action for edit mode on existing agents.
 - The interview flow asks clarifying questions using repo-aware context (existing agents + preset/template options for create mode, plus current agent configuration for edit mode).
-- It generates a **draft** configuration summary for review.
-- In create mode, **Continue to agent form** prefills `NewAgentDialog`; in edit mode, **Apply draft to settings** updates local editable fields in the settings UI.
-- The interview flow does **not** auto-create or auto-save agents directly.
+- It generates a **draft** configuration summary for review, including identity fields, `soul`, starter `instructionsText`, starter `memory`, heartbeat guidance (`heartbeatProcedurePath`, `heartbeatIntervalMs`, `heartbeatEnabled`), and draft-only runtime/model suggestions (`runtimeHint`, `modelHint`).
+- In create mode, confirming the summary (**Apply draft to agent form**) applies the generated draft into `NewAgentDialog`'s existing editable form fields (step 1 / custom flow) for manual review and edits before save.
+- In edit mode, **Apply draft to settings form** updates local editable fields in the settings UI.
+- The interview flow does **not** auto-create or auto-save agents directly; final persistence still happens only through the standard manual Create/Save action.
 
 When `experimentalFeatures.agentOnboarding` is disabled, the New Agent dialog still opens normally but the **AI Interview** entry point is hidden.
 
@@ -534,6 +626,8 @@ To clear a specific override, click the **Reset** button in the UI. This sends `
 
 Messaging is available in dashboard mailbox UI and CLI.
 
+Agent-backed dashboard chat sessions (including plugin-runtime agents such as Hermes/OpenClaw/Paperclip) also expose mailbox tools (`fn_send_message`, `fn_read_messages`) when a `MessageStore` is wired for that project. Model-only chats without an attached agent do not expose these tools.
+
 ```bash
 fn message inbox
 fn message outbox
@@ -558,10 +652,10 @@ Heartbeat runs are composed from multiple prompt layers so each wake has full id
    - Inline instructions (`instructionsText`)
    - File-backed instructions (`instructionsPath`)
    - Soul/personality (`soul`)
-   - Agent memory (`memory`)
+   - Agent memory resolved from inline `agent.memory` first, then `.fusion/agent-memory/{agentId}/MEMORY.md` as fallback/supplement
    - Optional project memory guidance (when memory is enabled)
 3. **Execution prompt framing**
-   - `Identity Snapshot` block (agent ID/role + loaded soul/instructions/memory preview)
+   - `Identity Snapshot` block (agent ID/role + loaded soul/instructions/memory preview; `memory: loaded` when either inline memory or workspace `MEMORY.md` is present)
    - `Wake Delta` block (source, trigger detail, wake reason, assignment/comments/messages)
    - Heartbeat procedure block (task-scoped or no-task variant, plus optional per-agent procedure override file)
 
@@ -639,7 +733,18 @@ The `messageResponseMode` runtime configuration controls when agents are trigger
 | `immediate` | Agent wakes immediately when a message arrives (via hook callback) |
 | `on-heartbeat` | Agent processes messages during normal heartbeat runs only |
 
+In the dashboard **Agent Settings** UI, this is surfaced as **Message Response Mode** with matching help text.
+
 **Important**: Both modes include messages in the execution prompt. The `immediate` mode additionally triggers an immediate heartbeat run when a message arrives, while `on-heartbeat` relies on the agent's next scheduled heartbeat.
+
+### One-off send-time immediate wake override
+
+When sending a message to an agent from the dashboard mailbox composer, users can optionally enable **Wake agent immediately** for that send.
+
+- The checkbox is shown only for agent recipients.
+- If the target agent already uses `messageResponseMode: "immediate"`, the checkbox is shown as checked/locked to reflect that wake behavior is already always-on.
+- The send-time `wakeImmediately` flag is transport-level only; it does **not** change the agent's saved `runtimeConfig.messageResponseMode`.
+- On successful send with `wakeImmediately: true`, the API best-effort invokes an on-demand heartbeat (`triggerDetail: "wake-on-message"`) in the correct project scope.
 
 ### Message Visibility
 
@@ -665,12 +770,83 @@ Behavior:
 
 ## Agent Delegation
 
-Executor and heartbeat agents can discover and delegate work to other agents using two built-in tools:
-
-- **`list_agents`** — List available agents with optional filters (role, state, includeEphemeral)
-- **`delegate_task`** — Create a task and assign it to a specific agent; the task enters `todo` and the agent picks it up on their next heartbeat
+Executor and heartbeat agents can coordinate through six built-in tools: `list_agents`, `delegate_task`, `agent_create`, `agent_delete`, `get_agent_config`, and `update_agent_config`.
 
 Delegation is designed for cross-agent handoff (e.g., an executor handing off to a QA agent). For parallel worktree-based parallelization, use `spawn_agent` instead.
+
+### `list_agents`
+
+List all available agents in the system. Shows each agent's name, role, state, personality (`soul`), and current assignment.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `role` | `string` (optional) | Filter by agent role/capability (e.g., `"executor"`, `"reviewer"`) |
+| `state` | `string` (optional) | Filter by agent state (e.g., `"idle"`, `"active"`, `"running"`) |
+| `includeEphemeral` | `boolean` (optional) | Include ephemeral/runtime agents (default: `false`) |
+
+### `delegate_task`
+
+Create a new task and assign it to a specific agent for execution. The task goes to `todo` and will be picked up by the target agent on their next heartbeat cycle.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `agent_id` | `string` (required) | The agent ID to delegate work to |
+| `description` | `string` (required) | What needs to be done |
+| `dependencies` | `string[]` (optional) | Task IDs this new task depends on |
+| `override` | `boolean` (optional) | Set true to bypass executor-role assignment policy |
+
+**Error cases:**
+- `"ERROR: Agent {agent_id} not found"`
+- `"ERROR: Cannot delegate to ephemeral/runtime agent {agent_id}"`
+- `"ERROR: Agent {agent_id} has role \"...\"; implementation task <new> requires an \"executor\"-role agent. Pass override=true to bypass."`
+
+### `agent_create`
+
+Create a new non-ephemeral direct-report agent. By default, the created agent reports to the caller; privileged (CEO-level) callers can set `reportsTo` to another manager.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `string` (required) | Name for the new agent |
+| `role` | `"triage" \| "executor" \| "reviewer" \| "merger" \| "engineer" \| "custom"` (required) | Agent role/capability |
+| `soul` | `string` (optional) | Agent personality/identity text |
+| `instructions_text` | `string` (optional) | Inline custom instructions |
+| `instructions_path` | `string` (optional) | Path to instructions markdown file |
+| `reportsTo` | `string` (optional) | Manager agent ID. Defaults to the calling agent |
+| `heartbeat_interval_ms` | `number` (optional, min `1000`) | Heartbeat polling interval in milliseconds |
+| `heartbeat_timeout_ms` | `number` (optional, min `5000`) | Heartbeat timeout in milliseconds |
+| `max_concurrent_runs` | `number` (optional, min `1`) | Maximum concurrent heartbeat runs |
+| `message_response_mode` | `"immediate" \| "on-heartbeat"` (optional) | How the agent responds to messages |
+
+**Authorization rule:** Non-privileged callers may only create agents that report to themselves; privileged callers may set any `reportsTo` target.
+
+**Error case:**
+- `"ERROR: You can only create agents that report to you"`
+
+### `agent_delete`
+
+Delete a non-ephemeral direct-report agent. Deletion is blocked when the target holds a checkout lease unless `force: true` is provided, and assigned tasks can be reassigned during deletion via `reassign_to`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `agent_id` | `string` (required) | Agent ID to delete |
+| `force` | `boolean` (optional) | Force delete even if the agent currently holds a checkout lease |
+| `reassign_to` | `string` (optional) | Replacement agent ID for tasks currently assigned to the deleted agent |
+
+**Authorization rule:** Callers can delete agents where `target.reportsTo === caller.id`; privileged callers may delete any non-ephemeral agent.
+
+**Error cases:**
+- `"ERROR: Agent {agent_id} not found"`
+- `"ERROR: You can only delete agents that report to you"`
+- `"ERROR: Cannot delete ephemeral/runtime agent {agent_id}"`
+- Underlying store errors (for example, an active checkout lease) are returned as `"ERROR: {message}"`; provide `force: true` to bypass lease-related blocking.
+
+### Role-based assignment policy
+
+Implementation tasks require an agent with `role: "executor"`.
+
+- Heartbeat inbox and auto-claim paths filter out role-incompatible implementation tasks.
+- `PATCH /api/tasks/:id/assign` returns `409` for non-executor assignment attempts unless `override: true` is provided in the request body.
+- `fn_delegate_task` enforces the same policy and supports `override: true` when intentional.
 
 ## Heartbeat Monitoring and Trigger Scheduling
 

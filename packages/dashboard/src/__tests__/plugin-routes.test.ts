@@ -13,9 +13,14 @@
 
 // @vitest-environment node
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import express from "express";
-import type { TaskStore, PluginStore, PluginLoader, PluginInstallation } from "@fusion/core";
+import { mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { Database, CentralDatabase, type TaskStore, type PluginStore, type PluginLoader, type PluginInstallation } from "@fusion/core";
+import * as fusionCore from "@fusion/core";
 import { createApiRoutes } from "../routes.js";
 import { createPluginRouter } from "../plugin-routes.js";
 import { get as performGet, request as performRequest } from "../test-request.js";
@@ -96,10 +101,33 @@ function createMockPluginLoader(overrides: Partial<PluginLoader> = {}): PluginLo
     getPluginUiContributions: vi.fn().mockReturnValue([]),
     getPluginRuntimes: vi.fn().mockReturnValue([]),
     getPluginDashboardViews: vi.fn().mockReturnValue([]),
+    createRouteContext: vi.fn(async (pluginId: string, overrides?: { taskStore?: TaskStore; settings?: Record<string, unknown>; resolveProjectTaskStore?: (projectId: string) => Promise<TaskStore> }) => ({
+      pluginId,
+      taskStore: overrides?.taskStore ?? createMockTaskStore(),
+      settings: overrides?.settings ?? {},
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      emitEvent: vi.fn(),
+      createAiSession: await fusionCore.getCreateAiSessionFactory(),
+      resolveProjectTaskStore: overrides?.resolveProjectTaskStore,
+    })),
     loadAllPlugins: vi.fn().mockResolvedValue({ loaded: 0, errors: 0 }),
     stopAllPlugins: vi.fn().mockResolvedValue(undefined),
     invokeHook: vi.fn().mockResolvedValue(undefined),
     reloadPlugin: vi.fn().mockResolvedValue(undefined),
+    createRouteContext: vi.fn().mockImplementation(async (pluginId: string, ctx: Record<string, unknown>) => ({
+      pluginId,
+      taskStore: ctx.taskStore,
+      settings: ctx.settings ?? {},
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      emitEvent: vi.fn(),
+      createAiSession: await fusionCore.getCreateAiSessionFactory(),
+      resolveProjectTaskStore: ctx.resolveProjectTaskStore,
+    })),
     ...overrides,
   } as unknown as PluginLoader;
 }
@@ -342,6 +370,109 @@ describe("POST /api/plugins mode:install — package root path", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════
+describe("POST /api/plugins central persistence integration", () => {
+  let projectDir: string;
+  let centralDir: string;
+
+  beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), "plugin-route-project-"));
+    centralDir = mkdtempSync(join(tmpdir(), "plugin-route-central-"));
+  });
+
+  afterEach(async () => {
+    await rm(projectDir, { recursive: true, force: true });
+    await rm(centralDir, { recursive: true, force: true });
+  });
+
+  function buildRealApp(pluginStore: PluginStore) {
+    const pluginLoader = createMockPluginLoader();
+    const store = createMockTaskStore({
+      getRootDir: vi.fn().mockReturnValue(projectDir),
+      getPluginStore: vi.fn().mockReturnValue(pluginStore),
+    });
+    const app = express();
+    app.use(express.json());
+    app.use("/api", createApiRoutes(store, { pluginStore, pluginLoader }));
+    return app;
+  }
+
+  it("writes register mode installs to central tables and not project-local plugins", async () => {
+    const pluginStore = new fusionCore.PluginStore(projectDir, { centralGlobalDir: centralDir });
+    await pluginStore.init();
+
+    const app = buildRealApp(pluginStore);
+    const res = await REQUEST(app, "POST", "/api/plugins", {
+      mode: "register",
+      id: "central-register",
+      name: "Central Register",
+      version: "1.0.0",
+      path: "/tmp/central-register.js",
+    });
+
+    expect(res.status).toBe(201);
+
+    const centralDb = new CentralDatabase(centralDir);
+    centralDb.init();
+    const installCount = centralDb
+      .prepare("SELECT COUNT(*) as count FROM plugin_installs WHERE id = ?")
+      .get("central-register") as { count: number };
+    const stateCount = centralDb
+      .prepare("SELECT COUNT(*) as count FROM project_plugin_states WHERE pluginId = ?")
+      .get("central-register") as { count: number };
+
+    const localDb = new Database(join(projectDir, ".fusion"));
+    localDb.init();
+    const legacyCount = localDb
+      .prepare("SELECT COUNT(*) as count FROM plugins WHERE id = ?")
+      .get("central-register") as { count: number };
+
+    expect(installCount.count).toBe(1);
+    expect(stateCount.count).toBe(1);
+    expect(legacyCount.count).toBe(0);
+
+    centralDb.close();
+    localDb.close();
+  });
+
+  it("writes install mode installs to central tables and not project-local plugins", async () => {
+    const pluginStore = new fusionCore.PluginStore(projectDir, { centralGlobalDir: centralDir });
+    await pluginStore.init();
+
+    const pluginPath = "/tmp/my-plugin";
+    mockAccess.mockImplementation((p: string) => {
+      if (p === pluginPath || p === `${pluginPath}/manifest.json`) return Promise.resolve();
+      return Promise.reject(new Error("not found"));
+    });
+    mockReadFile.mockResolvedValueOnce(JSON.stringify(VALID_MANIFEST));
+
+    const app = buildRealApp(pluginStore);
+    const res = await REQUEST(app, "POST", "/api/plugins", {
+      mode: "install",
+      path: pluginPath,
+    });
+
+    expect(res.status).toBe(201);
+
+    const centralDb = new CentralDatabase(centralDir);
+    centralDb.init();
+    const installCount = centralDb
+      .prepare("SELECT COUNT(*) as count FROM plugin_installs WHERE id = ?")
+      .get("my-plugin") as { count: number };
+
+    const localDb = new Database(join(projectDir, ".fusion"));
+    localDb.init();
+    const legacyCount = localDb
+      .prepare("SELECT COUNT(*) as count FROM plugins WHERE id = ?")
+      .get("my-plugin") as { count: number };
+
+    expect(installCount.count).toBe(1);
+    expect(legacyCount.count).toBe(0);
+
+    centralDb.close();
+    localDb.close();
+  });
+});
+
 describe("POST /api/plugins mode:install — negative paths", () => {
   let pluginStore: PluginStore;
   let pluginLoader: PluginLoader;
@@ -818,6 +949,39 @@ describe("GET /api/plugins/dashboard-views", () => {
       view: { viewId: "graph", label: "Graph", componentPath: "./Graph.js" },
     });
   });
+
+  it("keeps dashboard-views payload separate from ui-slots payload", async () => {
+    (pluginLoader.getPluginDashboardViews as ReturnType<typeof vi.fn>).mockReturnValue([
+      {
+        pluginId: "roadmap-planner",
+        view: {
+          viewId: "roadmaps",
+          label: "Roadmaps",
+          componentPath: "./dashboard-view",
+        },
+      },
+    ]);
+    (pluginLoader.getPluginUiSlots as ReturnType<typeof vi.fn>).mockReturnValue([
+      {
+        pluginId: "roadmap-planner",
+        slot: {
+          slotId: "task-detail-tab",
+          label: "Roadmap Details",
+          componentPath: "./task-detail.js",
+        },
+      },
+    ]);
+
+    const viewsRes = await performGet(buildApp(), "/api/plugins/dashboard-views");
+    const slotsRes = await performGet(buildApp(), "/api/plugins/ui-slots");
+
+    expect(viewsRes.status).toBe(200);
+    expect(slotsRes.status).toBe(200);
+    expect(viewsRes.body[0]).toHaveProperty("view");
+    expect(viewsRes.body[0]).not.toHaveProperty("slot");
+    expect(slotsRes.body[0]).toHaveProperty("slot");
+    expect(slotsRes.body[0]).not.toHaveProperty("view");
+  });
 });
 
 describe("GET /api/plugins/ui-slots", () => {
@@ -1102,7 +1266,7 @@ describe("createPluginRouter plugin setup routes", () => {
     expect(res.body).toEqual({ hasSetup: false });
   });
 
-  it("returns plugin not loaded status when setup metadata exists but plugin is stopped", async () => {
+  it("returns deferred setup status when setup metadata exists but plugin is not started", async () => {
     (pluginStore.getPlugin as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...INSTALLED_PLUGIN, state: "installed" });
     pluginRunner.getPluginSetupInfo.mockReturnValueOnce([
       {
@@ -1116,9 +1280,12 @@ describe("createPluginRouter plugin setup routes", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      hasSetup: false,
-      status: { status: "error", error: "Plugin not loaded" },
+      hasSetup: true,
+      setupCheckDeferred: true,
+      deferredReason: "plugin-not-started",
+      pluginState: "installed",
     });
+    expect(pluginRunner.checkPluginSetup).not.toHaveBeenCalled();
   });
 
   it("returns setup status when setup metadata exists and plugin is started", async () => {
@@ -1172,12 +1339,25 @@ describe("createPluginRouter plugin setup routes", () => {
 });
 
 describe("createPluginRouter plugin-defined route responses", () => {
-  it("injects request-scoped taskStore and supports explicit status/body responses", async () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(fusionCore, "getCreateAiSessionFactory").mockResolvedValue(undefined);
+  });
+
+  it("injects request-scoped taskStore and scoped plugin settings", async () => {
     const defaultTaskStore = createMockTaskStore();
-    const scopedTaskStore = createMockTaskStore({ getRootDir: vi.fn().mockReturnValue("/scoped") });
+    const scopedPluginStore = createMockPluginStore({
+      getPlugin: vi.fn().mockResolvedValue({ ...INSTALLED_PLUGIN, id: "demo", settings: { mode: "scoped" } }),
+    });
+    const scopedTaskStore = createMockTaskStore({
+      getRootDir: vi.fn().mockReturnValue("/scoped"),
+      getPluginStore: vi.fn().mockReturnValue(scopedPluginStore),
+    });
     mockGetOrCreateProjectStore.mockResolvedValue(scopedTaskStore);
 
-    const pluginStore = createMockPluginStore();
+    const pluginStore = createMockPluginStore({
+      getPlugin: vi.fn().mockResolvedValue({ ...INSTALLED_PLUGIN, id: "demo", settings: { mode: "global" } }),
+    });
     const pluginLoader = createMockPluginLoader({
       getPlugin: vi.fn().mockReturnValue({ manifest: { id: "demo" } }),
     });
@@ -1190,7 +1370,7 @@ describe("createPluginRouter plugin-defined route responses", () => {
             path: "/status",
             handler: vi.fn(async (_req: unknown, ctx: import("@fusion/core").PluginContext) => ({
               status: 201,
-              body: { scoped: ctx.taskStore.getRootDir() },
+              body: { scoped: ctx.taskStore.getRootDir(), mode: ctx.settings.mode },
             })),
           },
         },
@@ -1203,7 +1383,103 @@ describe("createPluginRouter plugin-defined route responses", () => {
 
     const res = await REQUEST(app, "POST", "/plugins/demo/status?projectId=p1", { projectId: "p1" });
     expect(res.status).toBe(201);
-    expect(res.body).toEqual({ scoped: "/scoped" });
+    expect(res.body).toEqual({ scoped: "/scoped", mode: "scoped" });
+  });
+
+  it("falls back to global plugin settings when scoped plugin record is unavailable", async () => {
+    const scopedPluginStore = createMockPluginStore({
+      getPlugin: vi.fn().mockRejectedValue(new Error("missing")),
+    });
+    const scopedTaskStore = createMockTaskStore({
+      getPluginStore: vi.fn().mockReturnValue(scopedPluginStore),
+    });
+    mockGetOrCreateProjectStore.mockResolvedValue(scopedTaskStore);
+
+    const pluginStore = createMockPluginStore({
+      getPlugin: vi.fn().mockResolvedValue({ ...INSTALLED_PLUGIN, id: "demo", settings: { mode: "global" } }),
+    });
+    const pluginLoader = createMockPluginLoader({
+      getPlugin: vi.fn().mockReturnValue({ manifest: { id: "demo" } }),
+    });
+    const pluginRunner = {
+      getPluginRoutes: vi.fn().mockReturnValue([
+        {
+          pluginId: "demo",
+          route: {
+            method: "GET",
+            path: "/settings",
+            handler: vi.fn(async (_req: unknown, ctx: import("@fusion/core").PluginContext) => ({ mode: ctx.settings.mode })),
+          },
+        },
+      ]),
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use("/plugins", createPluginRouter(pluginStore, pluginLoader, pluginRunner));
+
+    const res = await REQUEST(app, "GET", "/plugins/demo/settings?projectId=p1");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ mode: "global" });
+  });
+
+  it("includes createAiSession in plugin route context when engine has registered a factory", async () => {
+    const createAiSession = vi.fn();
+    vi.spyOn(fusionCore, "getCreateAiSessionFactory").mockResolvedValue(createAiSession as unknown as import("@fusion/core").CreateAiSessionFactory);
+
+    const pluginStore = createMockPluginStore();
+    const pluginLoader = createMockPluginLoader({
+      getPlugin: vi.fn().mockReturnValue({ manifest: { id: "demo" } }),
+    });
+    const pluginRunner = {
+      getPluginRoutes: vi.fn().mockReturnValue([
+        {
+          pluginId: "demo",
+          route: {
+            method: "GET",
+            path: "/ai",
+            handler: vi.fn(async (_req: unknown, ctx: import("@fusion/core").PluginContext) => ({ hasFactory: Boolean(ctx.createAiSession) })),
+          },
+        },
+      ]),
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use("/plugins", createPluginRouter(pluginStore, pluginLoader, pluginRunner));
+
+    const res = await REQUEST(app, "GET", "/plugins/demo/ai");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ hasFactory: true });
+  });
+
+  it("leaves createAiSession undefined when engine factory is unavailable", async () => {
+    vi.spyOn(fusionCore, "getCreateAiSessionFactory").mockResolvedValue(undefined);
+
+    const pluginStore = createMockPluginStore();
+    const pluginLoader = createMockPluginLoader({
+      getPlugin: vi.fn().mockReturnValue({ manifest: { id: "demo" } }),
+    });
+    const pluginRunner = {
+      getPluginRoutes: vi.fn().mockReturnValue([
+        {
+          pluginId: "demo",
+          route: {
+            method: "GET",
+            path: "/ai-none",
+            handler: vi.fn(async (_req: unknown, ctx: import("@fusion/core").PluginContext) => ({ hasFactory: Boolean(ctx.createAiSession) })),
+          },
+        },
+      ]),
+    };
+
+    const app = express();
+    app.use(express.json());
+    app.use("/plugins", createPluginRouter(pluginStore, pluginLoader, pluginRunner));
+
+    const res = await REQUEST(app, "GET", "/plugins/demo/ai-none");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ hasFactory: false });
   });
 
   it("maps plugin-defined non-2xx status responses", async () => {

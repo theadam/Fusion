@@ -18,6 +18,7 @@ These tools are **not** part of the user-invokable extension surface. They are i
 | `fn_memory_search` | triage, executor, heartbeat | Search project memory plus per-agent layered memory snippets | `query` (string), `limit?` (number) |
 | `fn_memory_get` | triage, executor, heartbeat | Read a bounded memory file window (including bounded per-agent layered paths) | `path` (string), `startLine?` (number), `lineCount?` (number) |
 | `fn_memory_append` | executor, heartbeat (when writable backend enabled) | Append memory notes with explicit scope: `scope="agent"` for private operating context, `scope="project"` for workspace-wide durable knowledge | `scope?` (`project` \| `agent`), `layer` (`long-term` \| `daily`), `content` (string) |
+| `fn_web_fetch` | executor, step-session, reviewer, merger, triage, heartbeat | Lightweight HTTP fetch with HTML→text extraction, timeout/size caps, and SSRF guard (no JS rendering) | `url` (string), `prompt?` (string), `timeoutMs?` (number), `maxBytes?` (number) |
 | `fn_research_run` | triage, executor | Start a bounded research run (optionally wait for completion) and return structured findings metadata | `query` (string), `wait_for_completion?` (boolean), `max_wait_ms?` (number) |
 | `fn_research_list` | triage, executor | List recent research runs with status/summary metadata | `status?` (`pending` \| `running` \| `completed` \| `failed` \| `cancelled`), `limit?` (number) |
 | `fn_research_get` | triage, executor | Read one research run's structured findings/citations payload | `id` (string) |
@@ -29,6 +30,8 @@ These tools are **not** part of the user-invokable extension surface. They are i
 | `fn_delegate_task` | triage, executor, heartbeat | Create and assign a new task to a specific agent | `agent_id` (string), `description` (string), `dependencies?` (string[]) |
 | `fn_get_agent_config` | executor, heartbeat | Read full config for a direct-report agent | `agent_id` (string) |
 | `fn_update_agent_config` | executor, heartbeat | Update config fields for a direct-report, non-ephemeral agent | `agent_id` (string), optional: `soul`, `instructions_text`, `instructions_path`, `heartbeat_procedure_path`, `heartbeat_interval_ms`, `heartbeat_timeout_ms`, `max_concurrent_runs`, `message_response_mode` |
+| `fn_agent_create` | executor, heartbeat | Create a non-ephemeral direct-report agent | `name` (string), `role` (string), optional: `soul`, `instructions_text`, `instructions_path`, `reportsTo`, `heartbeat_interval_ms`, `heartbeat_timeout_ms`, `max_concurrent_runs`, `message_response_mode` |
+| `fn_agent_delete` | executor, heartbeat | Delete a non-ephemeral direct-report agent | `agent_id` (string), optional: `force` (boolean), `reassign_to` (string) |
 | `fn_send_message` | executor, step-session, heartbeat | Send inbox messages to agents/users | `to_id` (string), `content` (string), `type?` (`agent-to-agent` \| `agent-to-user`), `reply_to_message_id?` (string) |
 | `fn_read_messages` | executor, step-session, heartbeat | Read inbox messages | `unread_only?` (boolean), `limit?` (number) |
 

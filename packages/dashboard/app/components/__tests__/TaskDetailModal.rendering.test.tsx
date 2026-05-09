@@ -16,6 +16,7 @@ import {
   setupTaskDetailModalHooks,
 } from "./TaskDetailModal.test-helpers";
 import { TaskDetailModal, TaskDetailContent } from "../TaskDetailModal";
+import * as dashboardApi from "../../api";
 
 setupTaskDetailModalHooks();
 
@@ -139,6 +140,27 @@ describe("TaskDetailModal", () => {
       );
 
       expect(screen.queryByText(/Created via/)).not.toBeInTheDocument();
+    });
+
+    it("FN-3755 renders provenance before created-updated timestamps", () => {
+      const { container } = render(
+        <TaskDetailModal
+          task={makeTask({ sourceType: "dashboard_ui" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      const provenance = screen.getByText("Created via Dashboard").closest(".detail-provenance");
+      const timestamps = container.querySelector(".detail-timestamps");
+
+      expect(provenance).toBeTruthy();
+      expect(timestamps).toBeTruthy();
+      expect(provenance?.compareDocumentPosition(timestamps as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
   });
 
@@ -290,7 +312,7 @@ describe("TaskDetailModal", () => {
     expect(screen.queryByText("PROMPT.md")).toBeNull();
   });
 
-  it("renders Comments tab", () => {
+  it("renders Review and Comments tabs", () => {
     render(
       <TaskDetailModal
         task={makeTask()}
@@ -303,7 +325,163 @@ describe("TaskDetailModal", () => {
       />,
     );
 
+    expect(screen.getByText("Review")).toBeTruthy();
     expect(screen.getByText("Comments")).toBeTruthy();
+  });
+
+  it("shows non-PR review shell message in Review tab", async () => {
+    render(
+      <TaskDetailModal
+        task={makeTask({ reviewState: { source: "reviewer-agent", items: [], addressing: [] } })}
+        onClose={noop}
+        onMoveTask={noopMove}
+        onDeleteTask={noopDelete}
+        onMergeTask={noopMerge}
+        onOpenDetail={noopOpenDetail}
+        addToast={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(await screen.findByText("No reviewer feedback yet — this task has not produced reviewer-agent feedback in direct mode.")).toBeTruthy();
+  });
+
+  it("keeps Comments tab available after Review refresh", async () => {
+    vi.mocked(dashboardApi.fetchTaskReview).mockResolvedValueOnce({
+      reviewState: {
+        source: "pull-request",
+        summary: {
+          reviewDecision: "REVIEW_REQUIRED",
+          reviewers: [],
+          blockingReasons: [],
+          checks: [],
+        },
+        items: [],
+        addressing: [],
+      },
+      automationStatus: null,
+      emptyMessage: null,
+    });
+    vi.mocked(dashboardApi.refreshTaskReview).mockResolvedValueOnce({
+      reviewState: {
+        source: "pull-request",
+        summary: {
+          reviewDecision: "APPROVED",
+          reviewers: [{ login: "octocat", state: "APPROVED" }],
+          blockingReasons: [],
+          checks: [],
+        },
+        items: [],
+        addressing: [],
+        refreshStatus: "ready",
+      },
+      automationStatus: null,
+    });
+
+    render(
+      <TaskDetailModal
+        task={makeTask({ reviewState: { source: "pull-request", summary: { reviewDecision: "REVIEW_REQUIRED", reviewers: [], blockingReasons: [], checks: [] }, items: [], addressing: [] } })}
+        onClose={noop}
+        onMoveTask={noopMove}
+        onDeleteTask={noopDelete}
+        onMergeTask={noopMerge}
+        onOpenDetail={noopOpenDetail}
+        addToast={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("APPROVED")).toBeTruthy();
+
+    const commentsTab = screen.getByRole("button", { name: "Comments" });
+    expect(commentsTab).toBeInTheDocument();
+    fireEvent.click(commentsTab);
+    expect(screen.getByRole("heading", { name: "Comments" })).toBeInTheDocument();
+  });
+
+  it("shows PR review decision details in Review tab", async () => {
+    vi.mocked(dashboardApi.fetchTaskReview).mockResolvedValueOnce({
+      reviewState: {
+        source: "pull-request",
+        summary: {
+          reviewDecision: "CHANGES_REQUESTED",
+          reviewers: [{ login: "octocat", state: "CHANGES_REQUESTED" }],
+          blockingReasons: ["changes requested review is active"],
+          checks: [],
+        },
+        items: [],
+        addressing: [],
+      },
+      automationStatus: null,
+      emptyMessage: null,
+    });
+    render(
+      <TaskDetailModal
+        task={makeTask({ reviewState: { source: "pull-request", summary: { reviewDecision: "CHANGES_REQUESTED", reviewers: [{ login: "octocat", state: "CHANGES_REQUESTED" }], blockingReasons: ["changes requested review is active"], checks: [] }, items: [], addressing: [] } })}
+        onClose={noop}
+        onMoveTask={noopMove}
+        onDeleteTask={noopDelete}
+        onMergeTask={noopMerge}
+        onOpenDetail={noopOpenDetail}
+        addToast={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(await screen.findByText("CHANGES_REQUESTED")).toBeTruthy();
+    expect(screen.getByText("changes requested review is active")).toBeTruthy();
+  });
+
+  describe("inline execution mode toggle", () => {
+    it("renders standard mode as an unpressed toggle", () => {
+      render(
+        <TaskDetailModal
+          task={makeTask({ column: "triage", executionMode: "standard" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      const toggle = screen.getByRole("button", { name: "Execution mode: standard" });
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+      expect(toggle).toHaveTextContent("Standard");
+      expect(toggle).not.toHaveClass("detail-execution-mode-toggle--fast");
+    });
+
+    it("renders fast mode as a pressed toggle", () => {
+      render(
+        <TaskDetailModal
+          task={makeTask({ column: "todo", executionMode: "fast" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      const toggle = screen.getByRole("button", { name: "Execution mode: fast" });
+      expect(toggle).toHaveAttribute("aria-pressed", "true");
+      expect(toggle).toHaveTextContent("Fast");
+      expect(toggle).toHaveClass("detail-execution-mode-toggle--fast");
+    });
+  });
+
+  it("defines fast execution mode svg highlight styles with warning tokens", () => {
+    const css = readDashboardStylesSource();
+
+    expectBaseRule(css, ".detail-execution-mode-toggle--fast svg", "color: var(--color-warning);");
+    expectBaseRule(
+      css,
+      ".detail-execution-mode-toggle--fast svg",
+      "background: color-mix(in srgb, var(--color-warning) 20%, transparent);",
+    );
   });
 
   it("appends daemon token query to attachment href/src URLs for direct browser loads", () => {
@@ -1207,7 +1385,7 @@ describe("TaskDetailModal", () => {
       expect(screen.getByText("Execution Timing")).toBeInTheDocument();
       expect(screen.getByText("Execution Details")).toBeInTheDocument();
       expect(screen.getByText("Loading token statistics…")).toBeDefined();
-      expect(screen.getByText("Fast")).toBeInTheDocument();
+      expect(screen.getAllByText("Fast").length).toBeGreaterThan(0);
       expect(screen.getByText("executing")).toBeInTheDocument();
     });
 
@@ -1295,7 +1473,7 @@ describe("TaskDetailModal", () => {
       expect(screen.getByText("Workflow runtime")).toBeInTheDocument();
       expect(screen.getByText("Execution mode")).toBeInTheDocument();
       expect(screen.getByText("Runtime status")).toBeInTheDocument();
-      expect(screen.getByText("Fast")).toBeInTheDocument();
+      expect(screen.getAllByText("Fast").length).toBeGreaterThan(0);
       expect(screen.getByText("executing")).toBeInTheDocument();
       expect(screen.getByText((1200).toLocaleString())).toBeInTheDocument();
       expect(screen.getByText((450).toLocaleString())).toBeInTheDocument();

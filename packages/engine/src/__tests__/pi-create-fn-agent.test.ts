@@ -385,6 +385,350 @@ describe("worktree path boundary helpers", () => {
   });
 });
 
+describe("wrapToolsWithPermanentAgentGating", () => {
+  it("blocks policy-blocked actions and skips underlying tool", async () => {
+    const tool = { name: "write", label: "Write", description: "", parameters: {}, execute: vi.fn() };
+    const { wrapToolsWithPermanentAgentGating } = await import("../pi.js");
+    const wrapped = wrapToolsWithPermanentAgentGating([tool as any], {
+      permissionPolicy: {
+        presetId: "locked-down",
+        rules: { file_write_delete: "block" },
+      },
+    });
+
+    const result = await (wrapped[0] as any).execute("t1", { path: "a.ts" });
+    expect((result as any).isError).toBe(true);
+    expect((result as any).details).toEqual(expect.objectContaining({
+      disposition: "block",
+      category: "file_write_delete",
+      toolName: "write",
+    }));
+    expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it("requires approval for unknown tools and skips underlying tool", async () => {
+    const tool = { name: "plugin_custom", label: "Plugin", description: "", parameters: {}, execute: vi.fn() };
+    const createApprovalRequest = vi.fn().mockResolvedValue({ id: "apr-1" });
+    const findPendingApprovalRequest = vi.fn().mockResolvedValue(null);
+    const { wrapToolsWithPermanentAgentGating } = await import("../pi.js");
+    const wrapped = wrapToolsWithPermanentAgentGating([tool as any], {
+      requester: { actorId: "agent-1", actorType: "agent", actorName: "Perm" },
+      taskId: "FN-1",
+      permissionPolicy: {
+        presetId: "unrestricted",
+        rules: {
+          git_write: "allow",
+          file_write_delete: "allow",
+          command_execution: "allow",
+          network_api: "allow",
+          task_agent_mutation: "allow",
+        },
+      },
+      createApprovalRequest,
+      findPendingApprovalRequest,
+    });
+
+    const result = await (wrapped[0] as any).execute("t1", { value: 1 });
+    expect((result as any).isError).toBe(true);
+    expect((result as any).details).toEqual(expect.objectContaining({
+      disposition: "require-approval",
+      category: "none",
+      toolName: "plugin_custom",
+      requiresApproval: true,
+      approvalRequestId: "apr-1",
+    }));
+    expect(findPendingApprovalRequest).toHaveBeenCalledTimes(1);
+    expect(createApprovalRequest).toHaveBeenCalledWith(expect.objectContaining({
+      category: "command_execution",
+      toolName: "plugin_custom",
+    }));
+    expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it("allows exempt internal coordination fn_* tools without approval", async () => {
+    const tool = { name: "fn_task_create", label: "Task Create", description: "", parameters: {}, execute: vi.fn().mockResolvedValue({ ok: true }) };
+    const createApprovalRequest = vi.fn().mockResolvedValue({ id: "apr-fn-1" });
+    const { wrapToolsWithPermanentAgentGating } = await import("../pi.js");
+    const wrapped = wrapToolsWithPermanentAgentGating([tool as any], {
+      requester: { actorId: "agent-1", actorType: "agent", actorName: "Perm" },
+      taskId: "FN-1",
+      permissionPolicy: {
+        presetId: "approval-required",
+        rules: {
+          git_write: "require-approval",
+          file_write_delete: "require-approval",
+          command_execution: "require-approval",
+          network_api: "require-approval",
+          task_agent_mutation: "require-approval",
+        },
+      },
+      createApprovalRequest,
+      findPendingApprovalRequest: vi.fn().mockResolvedValue(null),
+    });
+
+    const result = await (wrapped[0] as any).execute("t1", { description: "create" });
+    expect(result).toEqual({ ok: true });
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(tool.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps read-only tools allowed without approval-request creation", async () => {
+    const tool = { name: "read", label: "Read", description: "", parameters: {}, execute: vi.fn().mockResolvedValue({ ok: true }) };
+    const createApprovalRequest = vi.fn();
+    const { wrapToolsWithPermanentAgentGating } = await import("../pi.js");
+    const wrapped = wrapToolsWithPermanentAgentGating([tool as any], {
+      permissionPolicy: {
+        presetId: "approval-required",
+        rules: {
+          git_write: "require-approval",
+          file_write_delete: "require-approval",
+          command_execution: "require-approval",
+          network_api: "require-approval",
+          task_agent_mutation: "require-approval",
+        },
+      },
+      createApprovalRequest,
+    });
+
+    await (wrapped[0] as any).execute("t1", { path: "a.ts" });
+    expect(tool.execute).toHaveBeenCalledTimes(1);
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not create approval requests for policy-block outcomes", async () => {
+    const tool = { name: "write", label: "Write", description: "", parameters: {}, execute: vi.fn() };
+    const createApprovalRequest = vi.fn();
+    const { wrapToolsWithPermanentAgentGating } = await import("../pi.js");
+    const wrapped = wrapToolsWithPermanentAgentGating([tool as any], {
+      permissionPolicy: {
+        presetId: "locked-down",
+        rules: { file_write_delete: "block" },
+      },
+      createApprovalRequest,
+    });
+
+    await (wrapped[0] as any).execute("t1", { path: "a.ts" });
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it("lets boundary rejections fire before permanent-agent gating", async () => {
+    const tool = { name: "write", label: "Write", description: "", parameters: {}, execute: vi.fn() };
+    const { wrapToolsWithPermanentAgentGating, wrapToolsWithBoundary } = await import("../pi.js");
+    const gated = wrapToolsWithPermanentAgentGating([tool as any], {
+      permissionPolicy: {
+        presetId: "locked-down",
+        rules: { file_write_delete: "block" },
+      },
+    });
+    const wrapped = wrapToolsWithBoundary(gated as any, "/project/.worktrees/fn-001", "/project");
+
+    const result = await (wrapped[0] as any).execute("t1", { path: "/project/README.md" });
+    expect((result as any).isError).toBe(true);
+    expect((result as any).error).toContain("outside the worktree boundary");
+    expect((result as any).details).toBeUndefined();
+    expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it("bypasses wrapping for fn_heartbeat_done under locked-down policy", async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, terminal: true });
+    const tool = { name: "fn_heartbeat_done", label: "Heartbeat Done", description: "", parameters: {}, execute };
+    const createApprovalRequest = vi.fn();
+    const findPendingApprovalRequest = vi.fn();
+    const { wrapToolsWithPermanentAgentGating } = await import("../pi.js");
+    const wrapped = wrapToolsWithPermanentAgentGating([tool as any], {
+      permissionPolicy: {
+        presetId: "locked-down",
+        rules: {
+          git_write: "block",
+          file_write_delete: "block",
+          command_execution: "block",
+          network_api: "block",
+          task_agent_mutation: "block",
+        },
+      },
+      createApprovalRequest,
+      findPendingApprovalRequest,
+    });
+
+    expect(wrapped[0]).toBe(tool);
+    await expect((wrapped[0] as any).execute("t1", {})).resolves.toEqual({ ok: true, terminal: true });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(findPendingApprovalRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("wrapToolsWithActionGate", () => {
+  const lockedDownRules = {
+    "git_write": "block",
+    "file_write_delete": "block",
+    "command_execution": "block",
+    "network_api": "block",
+    "task_agent_mutation": "block",
+  } as const;
+
+  const approvalRules = {
+    "git_write": "require-approval",
+    "file_write_delete": "require-approval",
+    "command_execution": "require-approval",
+    "network_api": "require-approval",
+    "task_agent_mutation": "require-approval",
+  } as const;
+
+  it("blocks disallowed actions and skips underlying tool", async () => {
+    const tool = { name: "write", label: "Write", description: "", parameters: {}, execute: vi.fn() };
+    const { wrapToolsWithActionGate } = await import("../pi.js");
+    const wrapped = wrapToolsWithActionGate([tool as any], {
+      agentId: "agent-1",
+      agentName: "Agent",
+      isEphemeral: false,
+      taskId: "FN-1",
+      permissionPolicy: { presetId: "locked-down", rules: lockedDownRules },
+      createApprovalRequest: vi.fn(),
+      findApprovalByDedupeKey: vi.fn(),
+    });
+
+    const result = await (wrapped[0] as any).execute("t1", { path: "a.ts" });
+    expect((result as any).isError).toBe(true);
+    expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it("skips gating wrapper for ephemeral contexts", async () => {
+    const tool = { name: "write", label: "Write", description: "", parameters: {}, execute: vi.fn().mockResolvedValue({ ok: true }) };
+    const { wrapToolsWithActionGate } = await import("../pi.js");
+    const wrapped = wrapToolsWithActionGate([tool as any], {
+      agentId: "agent-1",
+      agentName: "Agent",
+      isEphemeral: true,
+      permissionPolicy: { presetId: "locked-down", rules: lockedDownRules },
+      createApprovalRequest: vi.fn(),
+      findApprovalByDedupeKey: vi.fn(),
+    });
+
+    await (wrapped[0] as any).execute("t1", { path: "a.ts" });
+    expect(tool.execute).toHaveBeenCalled();
+  });
+
+  it("creates request once and pauses once while pending", async () => {
+    const tool = { name: "write", label: "Write", description: "", parameters: {}, execute: vi.fn() };
+    const createApprovalRequest = vi.fn().mockResolvedValue({ id: "apr-1" });
+    const pauseForApproval = vi.fn();
+    const findApprovalByDedupeKey = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: "apr-1", status: "pending" });
+    const { wrapToolsWithActionGate } = await import("../pi.js");
+    const wrapped = wrapToolsWithActionGate([tool as any], {
+      agentId: "agent-1",
+      agentName: "Agent",
+      isEphemeral: false,
+      taskId: "FN-1",
+      permissionPolicy: { presetId: "approval-required", rules: approvalRules },
+      createApprovalRequest,
+      findApprovalByDedupeKey,
+      pauseForApproval,
+    });
+
+    const first = await (wrapped[0] as any).execute("t1", { path: "a.ts" });
+    const second = await (wrapped[0] as any).execute("t2", { path: "a.ts" });
+
+    expect((first as any).decision.metadata.approvalRequestId).toBe("apr-1");
+    expect((second as any).decision.metadata.approvalRequestId).toBe("apr-1");
+    expect(createApprovalRequest).toHaveBeenCalledTimes(1);
+    expect(pauseForApproval).toHaveBeenCalledTimes(1);
+    expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it("executes once and marks completed for approved retry", async () => {
+    const tool = { name: "write", label: "Write", description: "", parameters: {}, execute: vi.fn().mockResolvedValue({ ok: true }) };
+    const markApprovalCompleted = vi.fn();
+    const { wrapToolsWithActionGate } = await import("../pi.js");
+    const wrapped = wrapToolsWithActionGate([tool as any], {
+      agentId: "agent-1",
+      agentName: "Agent",
+      isEphemeral: false,
+      taskId: "FN-1",
+      permissionPolicy: { presetId: "approval-required", rules: approvalRules },
+      createApprovalRequest: vi.fn(),
+      findApprovalByDedupeKey: vi.fn().mockResolvedValue({ id: "apr-2", status: "approved" }),
+      markApprovalCompleted,
+    });
+
+    await (wrapped[0] as any).execute("t1", { path: "a.ts" });
+    expect(tool.execute).toHaveBeenCalledTimes(1);
+    expect(markApprovalCompleted).toHaveBeenCalledWith("apr-2");
+  });
+
+  it("does not mark completed when approved execution throws", async () => {
+    const error = new Error("write failed");
+    const tool = { name: "write", label: "Write", description: "", parameters: {}, execute: vi.fn().mockRejectedValue(error) };
+    const markApprovalCompleted = vi.fn();
+    const { wrapToolsWithActionGate } = await import("../pi.js");
+    const wrapped = wrapToolsWithActionGate([tool as any], {
+      agentId: "agent-1",
+      agentName: "Agent",
+      isEphemeral: false,
+      taskId: "FN-1",
+      permissionPolicy: { presetId: "approval-required", rules: approvalRules },
+      createApprovalRequest: vi.fn(),
+      findApprovalByDedupeKey: vi.fn().mockResolvedValue({ id: "apr-2", status: "approved" }),
+      markApprovalCompleted,
+    });
+
+    await expect((wrapped[0] as any).execute("t1", { path: "a.ts" })).rejects.toThrow("write failed");
+    expect(markApprovalCompleted).not.toHaveBeenCalled();
+  });
+
+  it("returns rejection and never executes when latest decision is denied", async () => {
+    const tool = { name: "write", label: "Write", description: "", parameters: {}, execute: vi.fn() };
+    const { wrapToolsWithActionGate } = await import("../pi.js");
+    const wrapped = wrapToolsWithActionGate([tool as any], {
+      agentId: "agent-1",
+      agentName: "Agent",
+      isEphemeral: false,
+      taskId: "FN-1",
+      permissionPolicy: { presetId: "approval-required", rules: approvalRules },
+      createApprovalRequest: vi.fn(),
+      findApprovalByDedupeKey: vi.fn().mockResolvedValue({ id: "apr-3", status: "denied" }),
+    });
+
+    const result = await (wrapped[0] as any).execute("t1", { path: "a.ts" });
+    expect((result as any).isError).toBe(true);
+    expect((result as any).error).toContain("denied by approver");
+    expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it.each<[
+    "locked-down" | "approval-required",
+    typeof lockedDownRules | typeof approvalRules
+  ]>([
+    ["locked-down", lockedDownRules],
+    ["approval-required", approvalRules],
+  ])("bypasses wrapping for fn_heartbeat_done under %s policy", async (presetId, rules) => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, terminal: true });
+    const tool = { name: "fn_heartbeat_done", label: "Heartbeat Done", description: "", parameters: {}, execute };
+    const createApprovalRequest = vi.fn();
+    const pauseForApproval = vi.fn();
+    const { wrapToolsWithActionGate } = await import("../pi.js");
+    const wrapped = wrapToolsWithActionGate([tool as any], {
+      agentId: "agent-1",
+      agentName: "Agent",
+      isEphemeral: false,
+      taskId: "FN-1",
+      permissionPolicy: { presetId, rules },
+      createApprovalRequest,
+      findApprovalByDedupeKey: vi.fn(),
+      pauseForApproval,
+    });
+
+    expect(wrapped[0]).toBe(tool);
+    await expect((wrapped[0] as any).execute("t1", {})).resolves.toEqual({ ok: true, terminal: true });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(pauseForApproval).not.toHaveBeenCalled();
+  });
+});
+
 describe("createFnAgent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -692,6 +1036,40 @@ describe("createFnAgent", () => {
 
     const createSessionArgs = createAgentSessionMock.mock.calls[0]?.[0] as { customTools: Array<{ name: string }> };
     expect(createSessionArgs.customTools.map((tool) => tool.name)).toContain("fn_list_agents");
+  });
+
+  it("does not allow extra builtin tools in readonly sessions by default", async () => {
+    const { createFnAgent } = await import("../pi.js");
+
+    await createFnAgent({
+      cwd: "/tmp",
+      systemPrompt: "test",
+      tools: "readonly",
+    });
+
+    const createSessionArgs = createAgentSessionMock.mock.calls[0]?.[0] as { tools?: string[] };
+    expect(createSessionArgs.tools).toBeUndefined();
+  });
+
+  it("passes opt-in builtin web tool allowlist to createAgentSession", async () => {
+    const { createFnAgent } = await import("../pi.js");
+
+    await createFnAgent({
+      cwd: "/tmp",
+      systemPrompt: "test",
+      tools: "readonly",
+      builtinToolsAllowlist: ["WebSearch", "WebFetch"],
+    });
+
+    const createSessionArgs = createAgentSessionMock.mock.calls[0]?.[0] as { tools?: string[] };
+    expect(createSessionArgs.tools).toEqual(expect.arrayContaining([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "WebSearch",
+      "WebFetch",
+    ]));
   });
 
   it("keeps caller customTools in coding sessions", async () => {

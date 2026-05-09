@@ -22,6 +22,8 @@ Use the 💡 button to open planning mode:
 - AI reasoning (thinking output) is preserved and visible throughout the session — expand the reasoning toggle to review the model's analysis before answering each question or accepting the summary
 - Produces summary + key deliverables
 - Create one task or **Break into Tasks** (multi-task generation with dependencies)
+- Summary view includes a **Priority** selector (`low`, `normal`, `high`, `urgent`) so single-task creation can set priority before task creation
+- Break-into-tasks mode includes per-subtask **Priority** selectors (`low`, `normal`, `high`, `urgent`) so each generated task can be prioritized before creation
 - Break-into-tasks descriptions are structured with subtask-specific guidance first, then a separate larger-plan context section (plus `## Planning Interview Context` when interview history exists)
 - Sessions persist when the modal is closed — resume from the sidebar list at any time; reasoning context is restored automatically
 - Back navigation rewinds the server-side planning session to the previous answered question so you can revise earlier answers and continue from the corrected turn
@@ -47,6 +49,7 @@ Use the 🌳 button:
 - Generate 2–5 candidate subtasks
 - Drag to reorder
 - Add dependencies only on earlier items
+- Set each subtask's **Priority** (`low`, `normal`, `high`, `urgent`) before create
 - Create tasks in one action
 
 ### 5) Expanded Controls
@@ -185,6 +188,7 @@ Execution mode can be set during task creation or editing:
 
 - **Via API**: Include `executionMode` field in task create/update payload
 - **Via dashboard**: Select execution mode in the task creation dialog or task detail modal
+- **Task detail quick toggle**: In read mode, use the inline lightning-bolt control in task metadata to switch between **Standard** and **Fast** without entering full edit mode
 - **Values**: `"standard"` (default) or `"fast"`
 
 Example API payload:
@@ -215,6 +219,8 @@ Research document content appears in the existing **Documents** tab in Task Deta
 
 The task detail modal exposes multiple tabs.
 
+In read mode, task metadata includes lightweight inline controls: priority can be changed from the priority chip, and execution mode can be toggled with a one-click lightning-bolt fast-mode button (Fast ↔ Standard) without opening full edit mode.
+
 Task settings edited from the modal now auto-save as you edit (change/blur with debounce for text-like fields). This includes title, description, dependencies, working/base branch (`branch`/`baseBranch`), workflow-step selection, model overrides in the edit form, and source issue metadata. The footer Save button remains available, but normal field edits no longer depend on a manual save click.
 
 The edit footer shows inline autosave state (saving/saved/error), and successful saves propagate the returned task through `onTaskUpdated` so open detail/list state stays fresh.
@@ -226,6 +232,7 @@ The task detail modal exposes multiple tabs:
 - **Log** — task event history
 - **Changes** — merge diff/change summary
 - **Workflow** — workflow step results (pass/fail/skip)
+- **Review** — actionable feedback surface (PR reviews/threads or reviewer-agent findings), manual refresh controls, and same-task revision actions for selected items
 - **Stats** — execution timing + token usage breakdown
   - `Total execution time` prefers durable wall-clock execution window (`executionStartedAt` → `executionCompletedAt`)
   - Fallback order for legacy tasks: `timedExecutionMs` when present, otherwise `[timing]` log sum + workflow runtime
@@ -251,9 +258,27 @@ This file is the contract for execution and review.
 ## Task Comments vs Steering Comments
 
 - **Task comments** (`fn task comment`) are general collaboration notes.
+- **Review tab feedback** is dedicated actionable review input (PR review data in pull-request mode, reviewer-agent findings in direct/non-PR mode) used to request same-task revisions.
+- Review data is served from task-scoped API endpoints: `GET /api/tasks/:id/review` and `POST /api/tasks/:id/review/refresh`.
+- Both endpoints return one normalized contract (`TaskReviewData`) with stable per-item `itemId` values and `sourceMode` (`pull-request` or `reviewer-agent`) so Review UI and per-item progress can share one read model.
+- The Review tab supports **manual refresh** without closing/reopening Task Detail:
+  - Pull-request mode refreshes live GitHub-backed review decision/thread/comment state and updates PR metadata freshness.
+  - Direct/non-PR mode refreshes normalized reviewer-agent feedback from persisted task review artifacts and does not call GitHub.
+- In direct/non-PR auto-merge mode, the Review tab shows parsed reviewer-agent feedback with explicit loading/error/empty states instead of sending users to raw comments or agent logs.
+- **Comments remains the general discussion surface**; Review remains the actionable review surface.
 - **Steering comments** (`fn task steer`) are execution guidance for the running agent.
 
 Steering comments can be injected mid-run into active executor sessions.
+
+When users select review items and trigger **Request revision** from the Review tab, Fusion starts an in-place same-task AI revision pass (no refinement child task):
+
+- Review addressing progress is persisted per selected item in task state, including a durable snapshot and lifecycle timestamps.
+- Each selected item transitions through `queued` → `in-progress` → `addressed`/`failed`, so Review progress survives refreshes and reloads even if upstream review data changes.
+- Persisted snapshots are rendered in the Review tab when the original source item is no longer present, while Comments remains dedicated to general discussion.
+
+- `in-progress` tasks receive compact steering guidance from the selected review items and continue on the same task/branch/worktree context.
+- `in-review` tasks are resumed back to `in-progress`, reopen the last completed step, and keep same-task branch/worktree context for the revision pass.
+- Assigned immediate-response agents are woken on-demand only when there is no active session; otherwise guidance is injected without forcing a new wake.
 
 ### User comments and triage re-consideration
 

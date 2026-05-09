@@ -169,6 +169,37 @@ describe("CLI bundle output", () => {
     expect(manifest.name?.length).toBeGreaterThan(0);
   });
 
+  it("dist/plugins/fusion-plugin-whatsapp-chat/ is staged with a valid manifest", () => {
+    const stagedRoot = join(cliRoot, "dist", "plugins", "fusion-plugin-whatsapp-chat");
+    const manifestPath = join(stagedRoot, "manifest.json");
+
+    expect(existsSync(manifestPath)).toBe(true);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { id?: string; name?: string };
+    expect(manifest.id).toBe("fusion-plugin-whatsapp-chat");
+    expect(typeof manifest.name).toBe("string");
+    expect(manifest.name?.length).toBeGreaterThan(0);
+  });
+
+  it("dist/plugins/fusion-plugin-openclaw-runtime/ is staged with required bridge assets", () => {
+    const stagedRoot = join(cliRoot, "dist", "plugins", "fusion-plugin-openclaw-runtime");
+    const manifestPath = join(stagedRoot, "manifest.json");
+
+    expect(existsSync(manifestPath)).toBe(true);
+    expect(existsSync(join(stagedRoot, "bundled.js"))).toBe(true);
+    expect(existsSync(join(stagedRoot, "mcp-schema-server.cjs"))).toBe(true);
+  });
+
+  it("dist/plugins/fusion-plugin-droid-runtime/ is staged with required bridge assets", () => {
+    const stagedRoot = join(cliRoot, "dist", "plugins", "fusion-plugin-droid-runtime");
+    const manifestPath = join(stagedRoot, "manifest.json");
+
+    expect(existsSync(manifestPath)).toBe(true);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { id?: string };
+    expect(manifest.id).toBe("fusion-plugin-droid-runtime");
+    expect(existsSync(join(stagedRoot, "bundled.js"))).toBe(true);
+    expect(existsSync(join(stagedRoot, "mcp-schema-server.cjs"))).toBe(true);
+  });
+
   it("dist/plugins/fusion-plugin-cursor-runtime/ is staged with a valid manifest", () => {
     const stagedRoot = join(cliRoot, "dist", "plugins", "fusion-plugin-cursor-runtime");
     const manifestPath = join(stagedRoot, "manifest.json");

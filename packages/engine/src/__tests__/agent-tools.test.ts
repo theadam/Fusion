@@ -14,11 +14,13 @@ import {
   createReadMessagesTool,
   createResearchTools,
   qmdAgentMemoryCollectionName,
+  readAgentMemoryWorkspaceLongTerm,
   sendMessageParams,
   readMessagesParams,
 } from "../agent-tools.js";
 import * as core from "@fusion/core";
 import type { MessageStore, Message } from "@fusion/core";
+import { getEnabledPluginTools, getResearchToolSurfaceStatus } from "../tool-availability.js";
 
 const loggerSpies = vi.hoisted(() => ({
   log: vi.fn(),
@@ -58,6 +60,30 @@ vi.mock("node:child_process", async () => {
     ...actual,
     execFile: execFileMock,
   };
+});
+
+describe("tool availability helpers", () => {
+  it("treats research surface as disabled when researchView experimental flag is off", () => {
+    expect(getResearchToolSurfaceStatus({ experimentalFeatures: { researchView: false } } as any)).toEqual({
+      enabled: false,
+      reason: "experimental-disabled",
+    });
+  });
+
+  it("treats research surface as enabled when researchView experimental flag is on", () => {
+    expect(getResearchToolSurfaceStatus({ experimentalFeatures: { researchView: true } } as any)).toEqual({
+      enabled: true,
+      reason: "enabled",
+    });
+  });
+
+  it("resolves legacy experimental feature aliases through core helper", () => {
+    expect(core.isExperimentalFeatureEnabled({ experimentalFeatures: { devServer: true } } as any, "devServerView")).toBe(true);
+  });
+
+  it("returns no plugin tools when plugin runner is absent", () => {
+    expect(getEnabledPluginTools(undefined)).toEqual([]);
+  });
 });
 
 describe("createTaskCreateTool", () => {
@@ -393,6 +419,45 @@ describe("createMemoryTools", () => {
     ]);
   });
 
+  it("readAgentMemoryWorkspaceLongTerm returns empty string when MEMORY.md is missing", async () => {
+    await expect(readAgentMemoryWorkspaceLongTerm(tempDir, "ceo-agent")).resolves.toBe("");
+  });
+
+  it("readAgentMemoryWorkspaceLongTerm returns trimmed MEMORY.md contents", async () => {
+    const tools = createMemoryTools(tempDir, { memoryBackendType: "file" }, {
+      agentMemory: {
+        agentId: "ceo-agent",
+        agentName: "CEO",
+        memory: "",
+      },
+    });
+    const appendTool = tools.find((tool) => tool.name === "fn_memory_append")!;
+    await (appendTool as any).execute("call-1", {
+      scope: "agent",
+      layer: "long-term",
+      content: "  durable memory content  ",
+    }, undefined, undefined, undefined);
+
+    await expect(readAgentMemoryWorkspaceLongTerm(tempDir, "ceo-agent")).resolves.toContain("durable memory content");
+  });
+
+  it("readAgentMemoryWorkspaceLongTerm reads sanitized agent ids", async () => {
+    const tools = createMemoryTools(tempDir, { memoryBackendType: "file" }, {
+      agentMemory: {
+        agentId: "Agent X/1",
+        agentName: "CEO",
+        memory: "",
+      },
+    });
+    const appendTool = tools.find((tool) => tool.name === "fn_memory_append")!;
+    await (appendTool as any).execute("call-1", {
+      scope: "agent",
+      layer: "long-term",
+      content: "- sanitized id memory",
+    }, undefined, undefined, undefined);
+
+    await expect(readAgentMemoryWorkspaceLongTerm(tempDir, "Agent X/1")).resolves.toContain("sanitized id memory");
+  });
 
   it("logs a warning and continues when agent memory directory read fails", async () => {
     readdirMock.mockRejectedValueOnce(new Error("EACCES"));

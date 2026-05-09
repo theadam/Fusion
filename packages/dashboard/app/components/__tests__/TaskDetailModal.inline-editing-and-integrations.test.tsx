@@ -941,6 +941,124 @@ describe("TaskDetailModal", () => {
       expect(addToast).toHaveBeenCalledWith("Failed to update FN-001: Request failed", "error");
     });
 
+    it("toggles inline execution mode from standard to fast", async () => {
+      const { updateTask } = await import("../../api");
+      const mockUpdate = vi.mocked(updateTask);
+      const addToast = vi.fn();
+      const onTaskUpdated = vi.fn();
+      const updatedTask = makeTask({ id: "FN-001", column: "todo", executionMode: "fast" });
+      mockUpdate.mockResolvedValueOnce(updatedTask as Task);
+
+      render(
+        <TaskDetailModal
+          task={makeTask({ id: "FN-001", column: "todo", executionMode: "standard" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          onTaskUpdated={onTaskUpdated}
+          addToast={addToast}
+        />,
+      );
+
+      const toggle = screen.getByRole("button", { name: "Execution mode: standard" });
+      fireEvent.click(toggle);
+
+      await waitFor(() => {
+        expect(mockUpdate).toHaveBeenCalledWith("FN-001", { executionMode: "fast" }, undefined);
+      });
+      expect(onTaskUpdated).toHaveBeenCalledWith(updatedTask);
+      expect(addToast).toHaveBeenCalledWith("Execution mode updated to fast", "success");
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Execution mode: fast" })).toHaveAttribute("aria-pressed", "true");
+      });
+    });
+
+    it("toggles inline execution mode from fast to standard", async () => {
+      const { updateTask } = await import("../../api");
+      const mockUpdate = vi.mocked(updateTask);
+      mockUpdate.mockResolvedValueOnce(makeTask({ id: "FN-001", column: "todo", executionMode: null }) as Task);
+
+      render(
+        <TaskDetailModal
+          task={makeTask({ id: "FN-001", column: "todo", executionMode: "fast" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Execution mode: fast" }));
+
+      await waitFor(() => {
+        expect(mockUpdate).toHaveBeenCalledWith("FN-001", { executionMode: null }, undefined);
+      });
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Execution mode: standard" })).toHaveAttribute("aria-pressed", "false");
+      });
+    });
+
+    it("reverts inline execution mode when save fails", async () => {
+      const { updateTask } = await import("../../api");
+      const mockUpdate = vi.mocked(updateTask);
+      const addToast = vi.fn();
+      mockUpdate.mockRejectedValueOnce(new Error("Request failed"));
+
+      render(
+        <TaskDetailModal
+          task={makeTask({ id: "FN-001", column: "todo", executionMode: "standard" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={addToast}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Execution mode: standard" }));
+
+      await waitFor(() => {
+        expect(mockUpdate).toHaveBeenCalledWith("FN-001", { executionMode: "fast" }, undefined);
+      });
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Execution mode: standard" })).toHaveAttribute("aria-pressed", "false");
+      });
+      expect(addToast).toHaveBeenCalledWith("Failed to update FN-001: Request failed", "error");
+    });
+
+    it("disables inline execution mode toggle while save is in-flight", async () => {
+      const { updateTask } = await import("../../api");
+      const mockUpdate = vi.mocked(updateTask);
+      mockUpdate.mockImplementationOnce(
+        () => new Promise((resolve) => setTimeout(() => resolve(makeTask({ executionMode: "fast" }) as Task), 100)),
+      );
+
+      render(
+        <TaskDetailModal
+          task={makeTask({ id: "FN-001", column: "todo", executionMode: "standard" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      const toggle = screen.getByRole("button", { name: "Execution mode: standard" });
+      fireEvent.click(toggle);
+      expect(toggle).toBeDisabled();
+
+      await waitFor(() => {
+        expect(mockUpdate).toHaveBeenCalledWith("FN-001", { executionMode: "fast" }, undefined);
+      });
+    });
+
     it("pre-populates form with existing task values", () => {
       const { container } = render(
         <TaskDetailModal
@@ -992,6 +1110,32 @@ describe("TaskDetailModal", () => {
 
       await waitFor(() => {
         expect(mockUpdate).toHaveBeenCalledWith("FN-001", { branch: "feature/fn-3422-updated" }, undefined);
+      });
+    });
+
+    it("saves changed baseBranch independently of branch", async () => {
+      const { updateTask } = await import("../../api");
+      const mockUpdate = vi.mocked(updateTask);
+      mockUpdate.mockResolvedValueOnce({ id: "FN-001" } as Task);
+
+      const { container } = render(
+        <TaskDetailModal
+          task={makeTask({ id: "FN-001", column: "todo", branch: "feature/fn-3422", baseBranch: "develop" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      fireEvent.click(container.querySelector(".modal-edit-btn")!);
+      fireEvent.change(container.querySelector("#task-base-branch") as HTMLInputElement, { target: { value: "release/2026-05" } });
+      fireEvent.click(screen.getByText("Save"));
+
+      await waitFor(() => {
+        expect(mockUpdate).toHaveBeenCalledWith("FN-001", { baseBranch: "release/2026-05" }, undefined);
       });
     });
 
@@ -1655,7 +1799,7 @@ describe("TaskDetailModal", () => {
       expect(screen.getByText("Execution Timing")).toBeInTheDocument();
       expect(screen.getByText("Execution Details")).toBeInTheDocument();
       expect(screen.getByText("Loading token statistics…")).toBeDefined();
-      expect(screen.getByText("Fast")).toBeInTheDocument();
+      expect(screen.getAllByText("Fast").length).toBeGreaterThan(0);
       expect(screen.getByText("executing")).toBeInTheDocument();
     });
 
@@ -1743,7 +1887,7 @@ describe("TaskDetailModal", () => {
       expect(screen.getByText("Workflow runtime")).toBeInTheDocument();
       expect(screen.getByText("Execution mode")).toBeInTheDocument();
       expect(screen.getByText("Runtime status")).toBeInTheDocument();
-      expect(screen.getByText("Fast")).toBeInTheDocument();
+      expect(screen.getAllByText("Fast").length).toBeGreaterThan(0);
       expect(screen.getByText("executing")).toBeInTheDocument();
       expect(screen.getByText((1200).toLocaleString())).toBeInTheDocument();
       expect(screen.getByText((450).toLocaleString())).toBeInTheDocument();

@@ -101,10 +101,12 @@ vi.mock("electron", () => ({
 }));
 
 const mainDeps = vi.hoisted(() => {
-  const start = vi.fn(async () => undefined);
-  const stop = vi.fn(async () => undefined);
-  const getState = vi.fn(() => ({ status: "idle", error: null }));
-  const getPort = vi.fn(() => 0);
+  const startLocal = vi.fn(async () => ({ source: "embedded-local", state: "running", port: 4545 }));
+  const stopLocal = vi.fn(async () => ({ source: "none", state: "stopped" }));
+  const getStatus = vi.fn(() => ({ source: "none", state: "stopped" }));
+  const getServerPort = vi.fn(() => 0);
+  const loadDesktopLaunchMode = vi.fn(async () => "choose");
+  const saveDesktopLaunchMode = vi.fn(async () => undefined);
   return {
     registerIpcHandlers: vi.fn(),
     buildAppMenu: vi.fn(),
@@ -113,15 +115,11 @@ const mainDeps = vi.hoisted(() => {
     setupDeepLinkHandler: vi.fn(),
     setupAutoUpdater: vi.fn(),
     loadWindowState: vi.fn(async () => null),
+    loadDesktopLaunchMode,
+    saveDesktopLaunchMode,
     saveWindowState: vi.fn(),
-    readShellSettings: vi.fn(async () => ({
-      desktopMode: null,
-      hasCompletedModeSelection: false,
-      activeProfileId: null,
-      profiles: [],
-    })),
-    DesktopLocalServerManager: vi.fn(() => ({ start, stop, getState, getPort })),
-    start,
+    LocalRuntimeManager: vi.fn(() => ({ startLocal, stopLocal, getStatus, getServerPort })),
+    startLocal,
   };
 });
 
@@ -135,18 +133,26 @@ vi.mock("../deep-link.js", () => ({
 vi.mock("../native.js", () => ({
   DEFAULT_WINDOW_STATE: { width: 1280, height: 900, isMaximized: false },
   loadWindowState: mainDeps.loadWindowState,
+  loadDesktopLaunchMode: mainDeps.loadDesktopLaunchMode,
+  saveDesktopLaunchMode: mainDeps.saveDesktopLaunchMode,
   saveWindowState: mainDeps.saveWindowState,
   setupAutoUpdater: mainDeps.setupAutoUpdater,
-}));
-vi.mock("../shell-settings.js", () => ({
-  readShellSettings: mainDeps.readShellSettings,
-  getDesktopShellModeState: (settings: { hasCompletedModeSelection: boolean; desktopMode: "local" | "remote" | null }) => ({
-    isFirstRun: !settings.hasCompletedModeSelection || settings.desktopMode === null,
-    desktopMode: settings.desktopMode,
+  normalizeDesktopRemoteLaunch: vi.fn((settings) => {
+    const active = settings.profiles.find((profile: { id: string }) => profile.id === settings.activeProfileId);
+    return active ? { mode: "remote", profileId: active.id, serverBaseUrl: active.serverUrl.replace(/\/$/, ""), serverLabel: active.name, authToken: active.authToken ?? undefined } : null;
   }),
+  buildRemoteShellHandoffUrl: vi.fn((launch) => `https://remote.example.com?shellKind=desktop&shellMode=remote&profileId=${launch.profileId}`),
 }));
-vi.mock("../local-server.js", () => ({
-  DesktopLocalServerManager: mainDeps.DesktopLocalServerManager,
+vi.mock("../local-runtime.js", () => ({
+  LocalRuntimeManager: mainDeps.LocalRuntimeManager,
+}));
+
+vi.mock("../shell-settings.js", () => ({
+  readShellSettings: vi.fn(async () => ({
+    desktopMode: "remote",
+    activeProfileId: "profile_1",
+    profiles: [{ id: "profile_1", name: "Remote", serverUrl: "https://remote.example.com", authToken: "token" }],
+  })),
 }));
 
 async function importMainModule() {
@@ -160,12 +166,7 @@ describe("main process", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
-    mainDeps.readShellSettings.mockResolvedValue({
-      desktopMode: null,
-      hasCompletedModeSelection: false,
-      activeProfileId: null,
-      profiles: [],
-    });
+    delete process.env.FUSION_DESKTOP_MODE;
     if (originalDashboardUrl === undefined) {
       delete process.env.FUSION_DASHBOARD_URL;
     } else {
@@ -257,26 +258,70 @@ describe("main process", () => {
     expect(typeof mainModule.initializeApp).toBe("function");
   });
 
-  it("initializeApp starts local server only when persisted mode is local and not first run", async () => {
-    mainDeps.readShellSettings.mockResolvedValueOnce({
-      desktopMode: "local",
-      hasCompletedModeSelection: true,
-      activeProfileId: null,
-      profiles: [],
-    });
-    const { initializeApp } = await importMainModule();
+  it("initializeApp starts local runtime when remembered mode is local", async () => {
+    mainDeps.loadDesktopLaunchMode.mockResolvedValueOnce("local");
+    const { initializeApp, getCurrentDesktopLaunchMode } = await importMainModule();
 
     await initializeApp();
 
-    expect(mainDeps.start).toHaveBeenCalledTimes(1);
+    expect(mainDeps.startLocal).toHaveBeenCalledTimes(1);
+    expect(getCurrentDesktopLaunchMode()).toBe("local");
   });
 
-  it("initializeApp does not start local server on first run without mode selection", async () => {
+  it("initializeApp does not start local runtime for remembered choose mode", async () => {
+    mainDeps.loadDesktopLaunchMode.mockResolvedValueOnce("choose");
     const { initializeApp } = await importMainModule();
 
     await initializeApp();
 
-    expect(mainDeps.start).not.toHaveBeenCalled();
+    expect(mainDeps.startLocal).not.toHaveBeenCalled();
+  });
+
+  it("initializeApp routes remembered remote mode to remote dashboard handoff URL", async () => {
+    mainDeps.loadDesktopLaunchMode.mockResolvedValueOnce("remote");
+    const { initializeApp, getCurrentDesktopLaunchMode } = await importMainModule();
+
+    await initializeApp();
+
+    expect(mainDeps.startLocal).not.toHaveBeenCalled();
+    expect(mocks.browserWindowInstance.loadURL).toHaveBeenCalledWith(
+      expect.stringContaining("shellMode=remote"),
+    );
+    expect(getCurrentDesktopLaunchMode()).toBe("remote");
+  });
+
+  it("initializeApp falls back to choose and persists when remembered local start fails", async () => {
+    mainDeps.loadDesktopLaunchMode.mockResolvedValueOnce("local");
+    mainDeps.startLocal.mockRejectedValueOnce(new Error("boom"));
+    const { initializeApp, getCurrentDesktopLaunchMode } = await importMainModule();
+
+    await initializeApp();
+
+    expect(mainDeps.saveDesktopLaunchMode).toHaveBeenCalledWith("choose");
+    expect(getCurrentDesktopLaunchMode()).toBe("choose");
+  });
+
+  it("initializeApp avoids duplicate local start when remembered mode and env flag are local", async () => {
+    mainDeps.loadDesktopLaunchMode.mockResolvedValueOnce("local");
+    process.env.FUSION_DESKTOP_MODE = "local";
+    const { initializeApp } = await importMainModule();
+
+    await initializeApp();
+
+    expect(mainDeps.startLocal).toHaveBeenCalledTimes(1);
+  });
+
+  it("onDesktopModeChange persists the selected launch mode", async () => {
+    const { initializeApp } = await importMainModule();
+
+    await initializeApp();
+
+    const options = mainDeps.registerIpcHandlers.mock.calls[0]?.[2] as
+      | { onDesktopModeChange?: (mode: "local" | "remote") => Promise<void> }
+      | undefined;
+    await options?.onDesktopModeChange?.("remote");
+
+    expect(mainDeps.saveDesktopLaunchMode).toHaveBeenCalledWith("remote");
   });
 
   it("createMainWindow registers close and closed handlers", async () => {

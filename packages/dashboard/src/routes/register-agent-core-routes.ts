@@ -2,7 +2,12 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Request, Response } from "express";
 import type { Agent, AgentCapability, AgentUpdateInput, TaskStore } from "@fusion/core";
-import { getDefaultHeartbeatProcedurePath } from "@fusion/core";
+import {
+  ApprovalRequestStore,
+  getDefaultHeartbeatProcedurePath,
+  isAgentPermissionPolicyPresetId,
+  normalizeAgentPermissionPolicyFromPreset,
+} from "@fusion/core";
 import { ApiError, badRequest, notFound } from "../api-error.js";
 import type { ApiRoutesContext } from "./types.js";
 import { ensureDefaultHeartbeatProcedureFile, HEARTBEAT_PROCEDURE } from "@fusion/engine";
@@ -36,6 +41,29 @@ function isCompatibleDefaultHeartbeatPath(path: string | undefined, agent: Agent
   return new RegExp(`^\\.fusion/agents/[^/]+-${safeId}/HEARTBEAT\\.md$`).test(trimmed);
 }
 
+function withPendingApprovalCounts<T extends Agent>(agents: T[], scopedStore: TaskStore): Array<T & { pendingApprovalCount: number }> {
+  try {
+    const approvalStore = new ApprovalRequestStore(scopedStore.getDatabase());
+    const pendingRequests = approvalStore.list({ status: "pending", limit: Number.MAX_SAFE_INTEGER, offset: 0 });
+    const counts = new Map<string, number>();
+
+    for (const request of pendingRequests) {
+      const agentId = request.requester.actorId;
+      counts.set(agentId, (counts.get(agentId) ?? 0) + 1);
+    }
+
+    return agents.map((agent) => ({
+      ...agent,
+      pendingApprovalCount: counts.get(agent.id) ?? 0,
+    }));
+  } catch {
+    return agents.map((agent) => ({
+      ...agent,
+      pendingApprovalCount: 0,
+    }));
+  }
+}
+
 export function registerAgentCoreListCreateRoutes(ctx: ApiRoutesContext, deps: AgentCoreRouteDeps): void {
   const { router, getProjectContext, rethrowAsApiError } = ctx;
   const { sanitizeAgentTaskLinks, validateAgentInstructionsPayload } = deps;
@@ -65,7 +93,7 @@ export function registerAgentCoreListCreateRoutes(ctx: ApiRoutesContext, deps: A
 
       const agents = await agentStore.listAgents(filter as { state?: "idle" | "active" | "running" | "paused" | "error"; role?: AgentCapability; includeEphemeral?: boolean });
       const sanitizedAgents = await sanitizeAgentTaskLinks(agents, scopedStore);
-      res.json(sanitizedAgents);
+      res.json(withPendingApprovalCounts(sanitizedAgents, scopedStore));
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         throw err;
@@ -89,6 +117,7 @@ export function registerAgentCoreListCreateRoutes(ctx: ApiRoutesContext, deps: A
         reportsTo,
         runtimeConfig,
         permissions,
+        permissionPolicy,
         instructionsPath,
         instructionsText,
         soul,
@@ -120,6 +149,16 @@ export function registerAgentCoreListCreateRoutes(ctx: ApiRoutesContext, deps: A
       }
       if (permissions !== undefined && (typeof permissions !== "object" || permissions === null || Array.isArray(permissions))) {
         throw badRequest("permissions must be an object");
+      }
+      let normalizedPermissionPolicy;
+      if (permissionPolicy !== undefined && permissionPolicy !== null) {
+        if (typeof permissionPolicy !== "object" || Array.isArray(permissionPolicy)) {
+          throw badRequest("permissionPolicy must be an object");
+        }
+        if (typeof permissionPolicy.presetId !== "string" || !isAgentPermissionPolicyPresetId(permissionPolicy.presetId)) {
+          throw badRequest("permissionPolicy.presetId must be one of: unrestricted, approval-required, locked-down");
+        }
+        normalizedPermissionPolicy = normalizeAgentPermissionPolicyFromPreset(permissionPolicy.presetId);
       }
       if (!validateAgentInstructionsPayload(instructionsPath, instructionsText)) {
         return;
@@ -176,6 +215,7 @@ export function registerAgentCoreListCreateRoutes(ctx: ApiRoutesContext, deps: A
           reportsTo: reportsTo ?? undefined,
           runtimeConfig,
           permissions,
+          permissionPolicy: normalizedPermissionPolicy,
           instructionsPath: instructionsPath ?? undefined,
           instructionsText: instructionsText ?? undefined,
           soul: soul ?? undefined,
@@ -329,7 +369,8 @@ export function registerAgentCoreRoutes(ctx: ApiRoutesContext, deps: AgentCoreRo
       }
       // Sanitize taskId for single-agent responses (omit if linked task is terminal)
       const [sanitizedAgent] = await sanitizeAgentTaskLinks([agent], scopedStore);
-      res.json(sanitizedAgent);
+      const [agentWithPendingApprovals] = withPendingApprovalCounts([sanitizedAgent], scopedStore);
+      res.json(agentWithPendingApprovals);
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         throw err;
@@ -551,6 +592,20 @@ export function registerAgentCoreRoutes(ctx: ApiRoutesContext, deps: AgentCoreRo
           throw badRequest("permissions must be an object");
         }
         updates.permissions = body.permissions ?? undefined;
+      }
+
+      if ("permissionPolicy" in body) {
+        if (body.permissionPolicy !== null) {
+          if (typeof body.permissionPolicy !== "object" || Array.isArray(body.permissionPolicy)) {
+            throw badRequest("permissionPolicy must be an object");
+          }
+          if (typeof body.permissionPolicy.presetId !== "string" || !isAgentPermissionPolicyPresetId(body.permissionPolicy.presetId)) {
+            throw badRequest("permissionPolicy.presetId must be one of: unrestricted, approval-required, locked-down");
+          }
+          updates.permissionPolicy = normalizeAgentPermissionPolicyFromPreset(body.permissionPolicy.presetId);
+        } else {
+          updates.permissionPolicy = undefined;
+        }
       }
 
       if ("totalInputTokens" in body) {

@@ -748,6 +748,157 @@ describe("CentralCore", () => {
       await expect(central.unregisterNode("node_missing")).resolves.toBeUndefined();
     });
 
+    it("should upsert, read, and remove project-node path mappings", async () => {
+      const projectPath = join(tempDir, "mapping-project");
+      mkdirSync(projectPath);
+      projectPaths.push(projectPath);
+
+      const project = await central.registerProject({
+        name: "Mapping Project",
+        path: projectPath,
+      });
+      const nodeA = await central.registerNode({ name: "mapping-node-a", type: "local" });
+      const nodeB = await central.registerNode({ name: "mapping-node-b", type: "local" });
+
+      const created = await central.upsertProjectNodePathMapping({
+        projectId: project.id,
+        nodeId: nodeA.id,
+        path: "/node-a/worktree",
+      });
+      expect(created.path).toBe("/node-a/worktree");
+
+      const updated = await central.upsertProjectNodePathMapping({
+        projectId: project.id,
+        nodeId: nodeA.id,
+        path: "/node-a/worktree-updated",
+      });
+      expect(updated.path).toBe("/node-a/worktree-updated");
+      expect(updated.createdAt).toBe(created.createdAt);
+
+      await central.upsertProjectNodePathMapping({
+        projectId: project.id,
+        nodeId: nodeB.id,
+        path: "/node-b/worktree",
+      });
+
+      await expect(central.listProjectNodePathMappingsForProject(project.id)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            projectId: project.id,
+            nodeId: nodeA.id,
+            path: "/node-a/worktree-updated",
+          }),
+          expect.objectContaining({
+            projectId: project.id,
+            nodeId: nodeB.id,
+            path: "/node-b/worktree",
+          }),
+        ]),
+      );
+
+      await expect(central.listProjectNodePathMappingsForNode(nodeA.id)).resolves.toMatchObject([
+        { projectId: project.id, nodeId: nodeA.id, path: "/node-a/worktree-updated" },
+      ]);
+
+      await central.removeProjectNodePathMapping({ projectId: project.id, nodeId: nodeA.id });
+      await expect(central.getProjectNodePathMapping(project.id, nodeA.id)).resolves.toBeUndefined();
+    });
+
+    it("should return exact mapped path via getProjectNodePath and undefined for unmapped pairs", async () => {
+      const projectPath = join(tempDir, "mapping-read-project");
+      mkdirSync(projectPath);
+      projectPaths.push(projectPath);
+
+      const project = await central.registerProject({
+        name: "Mapping Read Project",
+        path: projectPath,
+      });
+      const mappedNode = await central.registerNode({ name: "mapping-read-node", type: "local" });
+      const otherNode = await central.registerNode({ name: "mapping-read-node-other", type: "local" });
+
+      await central.upsertProjectNodePathMapping({
+        projectId: project.id,
+        nodeId: mappedNode.id,
+        path: "/mapped/node/path",
+      });
+
+      await expect(central.getProjectNodePath(project.id, mappedNode.id)).resolves.toBe("/mapped/node/path");
+      await expect(central.getProjectNodePath(project.id, otherNode.id)).resolves.toBeUndefined();
+      await expect(central.getProjectNodePath("proj_missing", mappedNode.id)).resolves.toBeUndefined();
+    });
+
+    it("should validate project and node existence for mapping APIs", async () => {
+      const node = await central.registerNode({ name: "mapping-validation-node", type: "local" });
+
+      await expect(
+        central.upsertProjectNodePathMapping({
+          projectId: "proj_missing",
+          nodeId: node.id,
+          path: "/missing/project",
+        }),
+      ).rejects.toThrow("Project not found");
+
+      const projectPath = join(tempDir, "mapping-validation-project");
+      mkdirSync(projectPath);
+      projectPaths.push(projectPath);
+      const project = await central.registerProject({
+        name: "Mapping Validation",
+        path: projectPath,
+      });
+
+      await expect(
+        central.upsertProjectNodePathMapping({
+          projectId: project.id,
+          nodeId: "node_missing",
+          path: "/missing/node",
+        }),
+      ).rejects.toThrow("Node not found");
+
+      await expect(central.listProjectNodePathMappingsForProject("proj_missing")).rejects.toThrow(
+        "Project not found",
+      );
+      await expect(central.listProjectNodePathMappingsForNode("node_missing")).rejects.toThrow(
+        "Node not found",
+      );
+    });
+
+    it("resolves working directories strictly from exact project/node mappings", async () => {
+      const projectPath = join(tempDir, "mapping-resolver-project");
+      mkdirSync(projectPath);
+      projectPaths.push(projectPath);
+
+      const project = await central.registerProject({
+        name: "Mapping Resolver",
+        path: projectPath,
+      });
+      const remoteNode = await central.registerNode({ name: "mapping-resolver-remote", type: "remote", url: "http://remote.example" });
+      const otherNode = await central.registerNode({ name: "mapping-resolver-other", type: "remote", url: "http://other.example" });
+
+      const localNode = (await central.listNodes()).find((node) => node.type === "local");
+      expect(localNode).toBeDefined();
+
+      await expect(central.resolveLocalProjectWorkingDirectory(project.id)).resolves.toBe(projectPath);
+
+      await central.upsertProjectNodePathMapping({
+        projectId: project.id,
+        nodeId: remoteNode.id,
+        path: "/remote/project/root",
+      });
+
+      await expect(central.resolveProjectWorkingDirectory(project.id, remoteNode.id)).resolves.toBe(
+        "/remote/project/root",
+      );
+      await expect(central.resolveProjectWorkingDirectory("proj_missing", remoteNode.id)).rejects.toThrow(
+        "Project not found: proj_missing",
+      );
+      await expect(central.resolveProjectWorkingDirectory(project.id, "node_missing")).rejects.toThrow(
+        "Node not found: node_missing",
+      );
+      await expect(central.resolveProjectWorkingDirectory(project.id, otherNode.id)).rejects.toThrow(
+        `Project/node path mapping not found for projectId=${project.id} nodeId=${otherNode.id}`,
+      );
+    });
+
     it("should check local node health and emit node:health:changed", async () => {
       const node = await central.registerNode({ name: "local-health", type: "local" });
 
@@ -2766,12 +2917,22 @@ describe("CentralCore", () => {
       const legacy = await syncCentral.getSettingsForSync({});
       const snapshot = await syncCentral.getProjectSettingsSnapshot({});
       const result = await syncCentral.applyProjectSettingsSnapshot(snapshot);
-      const authSnapshot = syncCentral.getAuthMaterialSnapshot({ foo: { providerId: "foo", accountLabel: "acct" } as any });
+      const authSnapshot = syncCentral.getAuthMaterialSnapshot({
+        foo: {
+          type: "oauth",
+          accessToken: "access-token",
+          refreshToken: "refresh-token",
+          expires: Date.now() + 60_000,
+          accountId: "acct",
+        },
+      });
 
       expect(snapshot.payload.global).toEqual(legacy.global);
       expect(snapshot.payload.projects).toEqual(legacy.projects);
       expect(typeof result.success).toBe("boolean");
-      expect(syncCentral.applyAuthMaterialSnapshot(authSnapshot).foo.providerId).toBe("foo");
+      const authApplyResult = syncCentral.applyAuthMaterialSnapshot(authSnapshot);
+      expect(authApplyResult.authCount).toBe(1);
+      expect(authApplyResult.providerAuth.foo.accountId).toBe("acct");
     } finally {
       await syncCentral.close();
       rmSync(tempDir + "-snapshot", { recursive: true, force: true });

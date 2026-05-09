@@ -8,11 +8,47 @@ When running inside Fusion mobile or desktop shells, the dashboard uses a host-n
 
 - Shell host detection: `web | mobile-shell | desktop-shell`
 - Shell-first onboarding gate: native-shell connection onboarding runs before dashboard model onboarding when needed
-- Connection management: header status + manage/switch modal for saved profiles; desktop also supports local/remote mode switching
+- Connection management: header status + native-shell connection manager for add/edit/delete/switch of saved profiles; desktop also supports local/remote mode switching
+- Browser fallback: when `window.fusionShell` is unavailable, shell profile actions stay disabled/unsupported while dashboard onboarding and core task flows remain stable
 - Desktop local mode handoff uses dynamic local server port resolution (`getServerPort`) while remote mode points to the active remote profile
 - Browser/PWA mode degrades cleanly when `window.fusionShell` is absent
 
 The shared dashboard must use `window.fusionShell` for shell connectivity concerns (not direct Electron or Capacitor globals).
+
+For dashboard chrome, use the centralized helper/component path:
+- `app/shell-native.ts` (`getShellConnectionNativeResult`) for host-aware capability + non-sensitive metadata resolution
+- `app/components/ShellConnectionStatus.tsx` for rendering shell kind/mode/connection summary and action labels
+- App-level wiring should pass derived props into `Header` / `MobileNavBar`; downstream components should not read `window` bridges directly
+
+Desktop connection-management actions must go through `window.fusionAPI.openConnectionManager()` (wrapped by `shell-native.ts`), not ad-hoc renderer IPC calls.
+
+Regression tests lock shell-aware placement and fallback behavior:
+- desktop renders a single header connection-status entry point
+- mobile renders a single More-sheet connection-status entry point
+- browser/no-shell mode renders no shell-only controls and does not throw
+- `ShellConnectionStatus` action control remains a non-submit button (`type="button"`) for form safety
+
+## Canonical dashboard host-context contract
+
+Dashboard host detection is centralized in `app/shell-host.ts` and exposed to React via `ShellHostProvider` (`app/context/ShellHostContext.tsx`).
+
+Canonical contract:
+- `{ kind: "browser" }`
+- `{ kind: "desktop-shell", mode?, connectionId?, serverUrl?, canOpenConnectionManager? }`
+- `{ kind: "mobile-shell", mode?, connectionId?, serverUrl?, canOpenConnectionManager? }`
+
+Bootstrap priority is fixed:
+1. explicit bootstrapped global handoff (`__FUSION_SHELL_HOST_CONTEXT__` / compatibility aliases)
+2. shell handoff query params
+3. desktop fallback via `window.fusionAPI` presence
+4. browser fallback
+
+Shell launch query params are removed after bootstrap. UI components should consume `useShellHostContext()` instead of reading `window` globals directly.
+
+Keep host and node concerns separate:
+- `ShellHostContext.mode` (`local` / `remote`) describes how native shell sessions reached this dashboard instance.
+- `NodeContext.isRemote` describes browsing a remote mesh node from within the dashboard.
+These concepts can coexist and should not replace each other.
 
 ## Features
 
@@ -30,10 +66,11 @@ AI-guided interactive planning for creating well-specified tasks from high-level
 4. Review the AI-generated summary with:
    - Refinable title and description
    - Size estimate (S/M/L)
+   - Priority selector (`low`, `normal`, `high`, `urgent`)
    - Suggested dependencies from existing tasks
    - Key deliverables checklist
 5. Create the task directly from the summary
-6. Or use **Break into Tasks** to generate multiple subtasks where each description starts with subtask-specific implementation guidance, followed by a separate larger-plan context section (including planning interview context when available)
+6. Or use **Break into Tasks** to generate multiple subtasks where each description starts with subtask-specific implementation guidance, followed by a separate larger-plan context section (including planning interview context when available); each subtask also supports per-subtask priority selection (`low`, `normal`, `high`, `urgent`) before creation
 
 **Features**:
 - **Rate Limiting**: Maximum 5 planning sessions per hour per IP
@@ -264,6 +301,7 @@ Manage AI agents with a dedicated control surface accessible from the main dashb
 - **All States Behavior**: The default filter shows all durable agents, including paused and error agents, so stopped/problem agents stay visible without a dedicated terminated bucket. This behavior applies to both the main AgentsView and the AgentListModal.
 - **View Modes**: Board (compact grid) and list (detailed card) layouts, persisted to localStorage
 - **Agent CRUD**: Create agents with name and role (create form's text input and role/type select both use tokenized styling — `var(--surface)`, `var(--text)`, `var(--border)`, `var(--radius-sm)`, `var(--focus-ring)` — for consistent theme-aware rendering across all color themes and light/dark modes), change state, update roles inline, delete idle and paused agents
+- **AI Interview drafts (experimental)**: Interview-generated drafts now stop on a dedicated read-only review summary before any data is applied to the editable New Agent form. The summary mirrors form-aligned sections and surfaces identity (`name`, `role`, `title`, `icon`, `reportsTo`), starter operating guidance (`instructionsText`) and starter memory (`memory`), personality (`soul`), heartbeat guidance (`heartbeatProcedurePath`, `heartbeatIntervalMs`, `heartbeatEnabled`), and draft-only runtime/model suggestions (`runtimeHint`, `modelHint`), with an explicit apply action required to continue.
 - **Health Monitoring**: Heartbeat-based health status (Healthy, Unresponsive, Starting, Paused, Running, Error) using CSS variable references for theme consistency
 - **Agent Error Details**: Agent collection views now show a compact inline error indicator (instead of raw stack traces) that opens a shared error-details modal with full text, copy action, and a prefilled "Report on GitHub" shortcut
 - **Agent Detail**: Click any agent card to open a detail modal with full agent information. In list view, each agent card also provides an explicit **View Details** action button in the card actions row for clearer discoverability, while the existing clickable identity/header area remains supported. The modal features a compact header with clear visual hierarchy:

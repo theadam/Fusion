@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -248,6 +248,97 @@ describe("executeHeartbeat", () => {
       const executionPrompt = mockSession.prompt.mock.calls.at(-1)?.[0] as string;
       expect(executionPrompt).not.toContain("## Reports Health Check");
     });
+  });
+
+  it("passes action gate and permanent gating context for permanent heartbeat agents", async () => {
+    const store = createStoreWithAgentForExec({ taskId: "FN-001" });
+    const mockSession = createMockAgentSession();
+    mockedCreateFnAgent.mockResolvedValue({ session: mockSession as any });
+    const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
+
+    await monitor.executeHeartbeat({ agentId: "agent-001", source: "on_demand" });
+
+    const args = mockedCreateFnAgent.mock.calls[0]?.[0] as {
+      actionGateContext?: { agentId: string; isEphemeral: boolean };
+      permanentAgentGating?: { permissionPolicy?: { presetId: string } };
+    };
+    expect(args.actionGateContext?.agentId).toBe("agent-001");
+    expect(args.actionGateContext?.isEphemeral).toBe(false);
+    expect(args.permanentAgentGating?.permissionPolicy?.presetId).toBe("unrestricted");
+  });
+
+  it("pauseForApproval pauses task and agent when taskId exists", async () => {
+    const store = createStoreWithAgentForExec({ taskId: "FN-001" });
+    const pauseTask = vi.fn().mockResolvedValue(undefined);
+    const logEntry = vi.fn().mockResolvedValue(undefined);
+    mockTaskStore = createMockTaskStore({ pauseTask, logEntry });
+    const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
+
+    const ctx = (monitor as any).buildActionGateContext({ id: "agent-001", name: "Test Agent", permissionPolicy: undefined }, "FN-001", "run-1");
+    await ctx.pauseForApproval({
+      approvalRequestId: "apr-1",
+      decision: {
+        disposition: "require-approval",
+        category: "command_execution",
+        toolName: "bash",
+        operation: "git commit",
+        summary: "bash: git commit",
+        resourceType: "git",
+        approvalDedupeKey: "dedupe-1",
+        metadata: {},
+      },
+    });
+
+    expect(pauseTask).toHaveBeenCalledWith("FN-001", true, undefined, { pausedByAgentId: "agent-001" });
+    expect((store.updateAgentState as any)).toHaveBeenCalledWith("agent-001", "paused");
+    expect((store.updateAgent as any)).toHaveBeenCalledWith("agent-001", { pauseReason: "awaiting-approval" });
+  });
+
+  it("pauseForApproval still pauses agent when taskId is undefined", async () => {
+    const store = createStoreWithAgentForExec({ taskId: undefined });
+    const pauseTask = vi.fn().mockResolvedValue(undefined);
+    mockTaskStore = createMockTaskStore({ pauseTask });
+    const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
+
+    const ctx = (monitor as any).buildActionGateContext({ id: "agent-001", name: "Test Agent", permissionPolicy: undefined }, undefined, "run-1");
+    await ctx.pauseForApproval({
+      approvalRequestId: "apr-1",
+      decision: {
+        disposition: "require-approval",
+        category: "command_execution",
+        toolName: "bash",
+        operation: "git commit",
+        summary: "bash: git commit",
+        resourceType: "git",
+        approvalDedupeKey: "dedupe-1",
+        metadata: {},
+      },
+    });
+
+    expect(pauseTask).not.toHaveBeenCalled();
+    expect((store.updateAgentState as any)).toHaveBeenCalledWith("agent-001", "paused");
+    expect((store.updateAgent as any)).toHaveBeenCalledWith("agent-001", { pauseReason: "awaiting-approval" });
+  });
+
+  it("omits permanent-agent gating context for ephemeral heartbeat agents", async () => {
+    const store = createStoreWithAgentForExec({
+      taskId: "FN-001",
+      metadata: { agentKind: "task-worker" },
+      name: "executor-ephemeral",
+      reportsTo: undefined,
+    });
+    const mockSession = createMockAgentSession();
+    mockedCreateFnAgent.mockResolvedValue({ session: mockSession as any });
+    const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
+
+    await monitor.executeHeartbeat({ agentId: "agent-001", source: "on_demand" });
+
+    const args = mockedCreateFnAgent.mock.calls[0]?.[0] as {
+      permanentAgentGating?: unknown;
+      actionGateContext?: unknown;
+    };
+    expect(args.permanentAgentGating).toBeUndefined();
+    expect(args.actionGateContext).toBeUndefined();
   });
 
   describe("dependency validation", () => {
@@ -556,6 +647,39 @@ describe("executeHeartbeat", () => {
       );
       const toolNames = mockedCreateFnAgent.mock.calls[0]![0]!.customTools!.map((tool: any) => tool.name);
       expect(toolNames).toContain("fn_task_log");
+    });
+
+    it("auto-claim skips implementation candidates for non-executor agents", async () => {
+      const store = createStoreWithAgentForExec({
+        taskId: undefined,
+        role: "reviewer",
+        soul: "review workflows",
+      });
+      const mockSession = createMockAgentSession();
+      mockedCreateFnAgent.mockResolvedValue({ session: mockSession as any });
+
+      mockTaskStore = createMockTaskStore({
+        listTasks: vi.fn().mockResolvedValue([
+          {
+            id: "FN-CANDIDATE",
+            description: "executor reliability follow-up",
+            title: "Executor reliability",
+            prompt: "",
+            steps: [],
+            column: "todo",
+            dependencies: [],
+            log: [],
+            attachments: [],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          } as unknown as TaskDetail,
+        ]),
+      });
+
+      const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
+      await monitor.executeHeartbeat({ agentId: "agent-001", source: "timer" });
+
+      expect(store.claimTaskForAgent).not.toHaveBeenCalled();
     });
 
     it("agent WITH instructionsText but no task creates session and completes successfully", async () => {
@@ -1628,7 +1752,7 @@ describe("executeHeartbeat", () => {
       const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
       await monitor.executeHeartbeat({ agentId: "agent-001", source: "on_demand" });
 
-      expect(selectNextTaskForAgent).toHaveBeenCalledWith("agent-001");
+      expect(selectNextTaskForAgent).toHaveBeenCalledWith("agent-001", { id: "agent-001", role: "executor" });
       expect(store.assignTask).toHaveBeenCalledWith("agent-001", "FN-INBOX", expect.objectContaining({ agentId: "agent-001" }));
       expect(mockTaskStore.getTask).toHaveBeenCalledWith("FN-INBOX");
     });
@@ -1675,7 +1799,7 @@ describe("executeHeartbeat", () => {
       const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
       const result = await monitor.executeHeartbeat({ agentId: "agent-001", source: "on_demand" });
 
-      expect(selectNextTaskForAgent).toHaveBeenCalledWith("agent-001");
+      expect(selectNextTaskForAgent).toHaveBeenCalledWith("agent-001", { id: "agent-001", role: "executor" });
       expect(result.resultJson).toEqual({ reason: "no_assignment" });
     });
 
@@ -1756,7 +1880,7 @@ describe("executeHeartbeat", () => {
       const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
       const result = await monitor.executeHeartbeat({ agentId: "agent-001", source: "on_demand" });
 
-      expect(selectNextTaskForAgent).toHaveBeenCalledWith("agent-001");
+      expect(selectNextTaskForAgent).toHaveBeenCalledWith("agent-001", { id: "agent-001", role: "executor" });
       expect(checkoutTask).toHaveBeenCalledWith("FN-CHECKOUT", "agent-001", expect.objectContaining({ agentId: "agent-001" }));
       expect(result.resultJson).toEqual({ reason: "no_assignment" });
       expect(mockedCreateFnAgent).not.toHaveBeenCalled();
@@ -1807,6 +1931,13 @@ describe("executeHeartbeat", () => {
       expect(HEARTBEAT_NO_TASK_SYSTEM_PROMPT).toContain("reply_to_message_id");
     });
 
+    it("both heartbeat procedures prioritize inbox processing before wake delta", () => {
+      expect(HEARTBEAT_PROCEDURE).toContain("process unread/pending messages before any other action");
+      expect(HEARTBEAT_NO_TASK_PROCEDURE).toContain("process unread/pending messages before any other action");
+      expect(HEARTBEAT_PROCEDURE.indexOf("**Inbox**")).toBeLessThan(HEARTBEAT_PROCEDURE.indexOf("**Wake delta**"));
+      expect(HEARTBEAT_NO_TASK_PROCEDURE.indexOf("**Inbox**")).toBeLessThan(HEARTBEAT_NO_TASK_PROCEDURE.indexOf("**Wake delta**"));
+    });
+
     it("no-task system prompt processing messages section does not reference fn_task_log", () => {
       const processingMessagesSection = HEARTBEAT_NO_TASK_SYSTEM_PROMPT.split("## Processing Messages")[1] ?? "";
       expect(processingMessagesSection).not.toContain("fn_task_log");
@@ -1841,9 +1972,9 @@ describe("executeHeartbeat", () => {
       expect(callArgs.systemPrompt).toContain("fn_task_log");
       expect(callArgs.systemPrompt).toContain("fn_task_document_write");
       expect(callArgs.tools).toBe("coding");
-      // Tools: fn_task_create, fn_task_log, fn_task_document_write, fn_task_document_read, fn_list_agents, fn_delegate_task,
-      // fn_get_agent_config, fn_update_agent_config, fn_read_evaluations, fn_update_identity, fn_memory_search, fn_memory_get, fn_memory_append, fn_heartbeat_done
-      expect(callArgs.customTools).toHaveLength(14);
+      // fn_get_agent_config, fn_update_agent_config, fn_agent_create, fn_agent_delete, fn_read_evaluations, fn_update_identity,
+      // fn_web_fetch, fn_memory_search, fn_memory_get, fn_memory_append, fn_heartbeat_done
+      expect(callArgs.customTools).toHaveLength(17);
       expect(callArgs.customTools![0]!.name).toBe("fn_task_create");
       expect(callArgs.customTools![1]!.name).toBe("fn_task_log");
       expect(callArgs.customTools![2]!.name).toBe("fn_task_document_write");
@@ -1852,13 +1983,51 @@ describe("executeHeartbeat", () => {
       expect(callArgs.customTools![5]!.name).toBe("fn_delegate_task");
       expect(callArgs.customTools![6]!.name).toBe("fn_get_agent_config");
       expect(callArgs.customTools![7]!.name).toBe("fn_update_agent_config");
-      expect(callArgs.customTools![8]!.name).toBe("fn_read_evaluations");
-      expect(callArgs.customTools![9]!.name).toBe("fn_update_identity");
-      expect(callArgs.customTools![10]!.name).toBe("fn_memory_search");
-      expect(callArgs.customTools![11]!.name).toBe("fn_memory_get");
-      expect(callArgs.customTools![12]!.name).toBe("fn_memory_append");
+      expect(callArgs.customTools![8]!.name).toBe("fn_agent_create");
+      expect(callArgs.customTools![9]!.name).toBe("fn_agent_delete");
+      expect(callArgs.customTools![10]!.name).toBe("fn_read_evaluations");
+      expect(callArgs.customTools![11]!.name).toBe("fn_update_identity");
+      expect(callArgs.customTools![12]!.name).toBe("fn_web_fetch");
+      expect(callArgs.customTools![13]!.name).toBe("fn_memory_search");
+      expect(callArgs.customTools![14]!.name).toBe("fn_memory_get");
+      expect(callArgs.customTools![15]!.name).toBe("fn_memory_append");
       // fn_heartbeat_done is last (terminal tool)
-      expect(callArgs.customTools![13]!.name).toBe("fn_heartbeat_done");
+      expect(callArgs.customTools![16]!.name).toBe("fn_heartbeat_done");
+    });
+
+    it("loads workspace memory into system prompt and identity snapshot when inline memory is empty", async () => {
+      const rootDir = mkdtempSync(join(tmpdir(), "heartbeat-workspace-memory-"));
+      mkdirSync(join(rootDir, ".fusion", "agent-memory", "agent-001"), { recursive: true });
+      writeFileSync(
+        join(rootDir, ".fusion", "agent-memory", "agent-001", "MEMORY.md"),
+        "workspace memory for heartbeat",
+        "utf-8",
+      );
+
+      try {
+        const store = createStoreWithAgentForExec({
+          memory: "",
+          instructionsText: undefined,
+          instructionsPath: undefined,
+        });
+        const mockSession = createMockAgentSession();
+        mockedCreateFnAgent.mockResolvedValue({
+          session: mockSession as any,
+        });
+
+        const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir });
+
+        await monitor.executeHeartbeat({ agentId: "agent-001", source: "timer" });
+
+        const callArgs = mockedCreateFnAgent.mock.calls[0]![0];
+        expect(callArgs.systemPrompt).toContain("## Agent Memory");
+        expect(callArgs.systemPrompt).toContain("workspace memory for heartbeat");
+
+        const executionPrompt = mockSession.prompt.mock.calls.at(-1)?.[0] as string;
+        expect(executionPrompt).toMatch(/- memory: loaded \(\d+ chars, sha256:[a-f0-9]{8}, source: workspace\)/);
+      } finally {
+        rmSync(rootDir, { recursive: true, force: true });
+      }
     });
 
     it("includes memory instructions even when agent has no custom instructions", async () => {

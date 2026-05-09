@@ -7,9 +7,14 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { rm } from "node:fs/promises";
+import { ensureRoadmapSchema } from "../../../../plugins/fusion-plugin-roadmap/src/roadmap-schema.js";
+
+const createdTmpDirs = new Set<string>();
 
 function makeTmpDir(): string {
-  return mkdtempSync(join(tmpdir(), "kb-db-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "kb-db-test-"));
+  createdTmpDirs.add(dir);
+  return dir;
 }
 
 describe("Database", () => {
@@ -30,7 +35,9 @@ describe("Database", () => {
     } catch {
       // already closed
     }
-    await rm(tmpDir, { recursive: true, force: true });
+    const cleanup = Array.from(createdTmpDirs);
+    createdTmpDirs.clear();
+    await Promise.all(cleanup.map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
   describe("initialization", () => {
@@ -106,10 +113,7 @@ describe("Database", () => {
       expect(tableNames).toContain("agentRatings");
       expect(tableNames).toContain("task_documents");
       expect(tableNames).toContain("task_document_revisions");
-      // Roadmap tables
-      expect(tableNames).toContain("roadmaps");
-      expect(tableNames).toContain("roadmap_milestones");
-      expect(tableNames).toContain("roadmap_features");
+      // Roadmap tables are plugin-owned (FN-3159) and initialized via plugin schema hooks.
       // Verification cache (migration 61)
       expect(tableNames).toContain("verification_cache");
       expect(tableNames).toContain("distributed_task_id_state");
@@ -156,15 +160,13 @@ describe("Database", () => {
       expect(indexNames).toContain("idxAgentApiKeysAgentId");
       expect(indexNames).toContain("idxAgentConfigRevisionsAgentIdCreatedAt");
       expect(indexNames).toContain("idxTasksCreatedAt");
-      // Roadmap indexes
-      expect(indexNames).toContain("idxRoadmapMilestonesRoadmapOrder");
-      expect(indexNames).toContain("idxRoadmapFeaturesMilestoneOrder");
+      // Roadmap indexes are plugin-owned (FN-3159) and initialized via plugin schema hooks.
       // Verification cache index (migration 61)
       expect(indexNames).toContain("idxVerificationCacheRecordedAt");
     });
 
     it("seeds schema version", () => {
-      expect(db.getSchemaVersion()).toBe(67);
+      expect(db.getSchemaVersion()).toBe(70);
     });
     it("seeds lastModified", () => {
       const ts = db.getLastModified();
@@ -186,7 +188,7 @@ describe("Database", () => {
 
     it("is idempotent - calling init() twice does not fail", () => {
       expect(() => db.init()).not.toThrow();
-      expect(db.getSchemaVersion()).toBe(67);
+      expect(db.getSchemaVersion()).toBe(70);
     });
     it("does not overwrite existing config on re-init", () => {
       // Update the config
@@ -557,6 +559,32 @@ describe("Database", () => {
 
       await expect(db.runPluginSchemaInits(hooks)).resolves.toBeUndefined();
       await expect(db.runPluginSchemaInits(hooks)).resolves.toBeUndefined();
+    });
+
+    it("executes roadmap plugin schema hook to create roadmap-owned tables and indexes", async () => {
+      await db.runPluginSchemaInits([
+        {
+          pluginId: "roadmap-planner",
+          hook: ensureRoadmapSchema,
+        },
+      ]);
+
+      const roadmapTables = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('roadmaps', 'roadmap_milestones', 'roadmap_features') ORDER BY name")
+        .all() as Array<{ name: string }>;
+      expect(roadmapTables.map((table) => table.name)).toEqual([
+        "roadmap_features",
+        "roadmap_milestones",
+        "roadmaps",
+      ]);
+
+      const roadmapIndexes = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idxRoadmapMilestonesRoadmapOrder', 'idxRoadmapFeaturesMilestoneOrder') ORDER BY name")
+        .all() as Array<{ name: string }>;
+      expect(roadmapIndexes.map((index) => index.name)).toEqual([
+        "idxRoadmapFeaturesMilestoneOrder",
+        "idxRoadmapMilestonesRoadmapOrder",
+      ]);
     });
   });
 
@@ -959,7 +987,7 @@ describe("schema migrations", () => {
     db.init();
 
     // Verify version bumped to 29 (includes v1→v2 through v26→v29)
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
 
     // Verify new columns exist and existing data is intact
     const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
@@ -984,11 +1012,11 @@ describe("schema migrations", () => {
     const db = new Database(fusionDir);
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
 
     // Re-init should not fail
     db.init();
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
 
     db.close();
   });
@@ -1023,7 +1051,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
 
     const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     expect(cols.map((col) => col.name)).toContain("priority");
@@ -1064,7 +1092,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
 
     const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     const colNames = cols.map((col) => col.name);
@@ -1133,7 +1161,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
 
     const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     const colNames = cols.map((col) => col.name);
@@ -1236,7 +1264,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
 
     const cols = db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>;
     expect(cols.map((col) => col.name)).toContain("attachments");
@@ -1310,7 +1338,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
 
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'agentRatings'").all() as Array<{ name: string }>;
     expect(tables).toEqual([{ name: "agentRatings" }]);
@@ -1334,7 +1362,7 @@ describe("schema migrations", () => {
 
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
 
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'mission_events'").all() as Array<{ name: string }>;
     expect(tables).toEqual([{ name: "mission_events" }]);
@@ -1438,7 +1466,7 @@ describe("schema migrations", () => {
     db.init();
 
     // Verify version bumped to 29
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
 
     // Verify new columns exist and existing data is intact
     const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
@@ -1907,7 +1935,7 @@ describe("createDatabase factory", () => {
     const db = createDatabase(fusionDir);
     db.init();
 
-    expect(db.getSchemaVersion()).toBe(67);
+    expect(db.getSchemaVersion()).toBe(70);
     expect(db.getLastModified()).toBeGreaterThan(0);
 
     db.close();
@@ -2040,7 +2068,7 @@ describe("migration v67 drops orphan project auth tables", () => {
 
     const migrated = new Database(fusion);
     migrated.init();
-    expect(migrated.getSchemaVersion()).toBe(67);
+    expect(migrated.getSchemaVersion()).toBe(70);
     const tables = migrated
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'project_auth_%'")
       .all() as Array<{ name: string }>;
@@ -2054,7 +2082,7 @@ describe("migration v67 drops orphan project auth tables", () => {
     const fusion = join(temp, ".fusion");
     const fresh = new Database(fusion);
     fresh.init();
-    expect(fresh.getSchemaVersion()).toBe(67);
+    expect(fresh.getSchemaVersion()).toBe(70);
     const tables = fresh
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'project_auth_%'")
       .all() as Array<{ name: string }>;

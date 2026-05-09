@@ -88,7 +88,7 @@ export function probeFts5(db: DatabaseSync): boolean {
 
 // ── Schema Definition ────────────────────────────────────────────────
 
-const SCHEMA_VERSION = 67;
+const SCHEMA_VERSION = 70;
 
 function normalizeTaskComments(
   steeringComments: SteeringComment[] | undefined,
@@ -201,6 +201,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   attachments TEXT DEFAULT '[]',
   steeringComments TEXT DEFAULT '[]',
   comments TEXT DEFAULT '[]',
+  review TEXT,
+  reviewState TEXT,
   workflowStepResults TEXT DEFAULT '[]',
   prInfo TEXT,
   issueInfo TEXT,
@@ -684,51 +686,6 @@ CREATE TABLE IF NOT EXISTS routines (
   updatedAt TEXT NOT NULL
 );
 
--- Roadmap persistence tables (FN-1690)
--- Standalone roadmap: Roadmap → RoadmapMilestone → RoadmapFeature
--- with deterministic ordering indexes and FK cascade integrity
-
--- Roadmaps table
-CREATE TABLE IF NOT EXISTS roadmaps (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  description TEXT,
-  createdAt TEXT NOT NULL,
-  updatedAt TEXT NOT NULL
-);
-
--- Roadmap milestones table
-CREATE TABLE IF NOT EXISTS roadmap_milestones (
-  id TEXT PRIMARY KEY,
-  roadmapId TEXT NOT NULL,
-  title TEXT NOT NULL,
-  description TEXT,
-  orderIndex INTEGER NOT NULL,
-  createdAt TEXT NOT NULL,
-  updatedAt TEXT NOT NULL,
-  FOREIGN KEY (roadmapId) REFERENCES roadmaps(id) ON DELETE CASCADE
-);
-
--- Roadmap features table
-CREATE TABLE IF NOT EXISTS roadmap_features (
-  id TEXT PRIMARY KEY,
-  milestoneId TEXT NOT NULL,
-  title TEXT NOT NULL,
-  description TEXT,
-  orderIndex INTEGER NOT NULL,
-  createdAt TEXT NOT NULL,
-  updatedAt TEXT NOT NULL,
-  FOREIGN KEY (milestoneId) REFERENCES roadmap_milestones(id) ON DELETE CASCADE
-);
-
--- Covering index for deterministic milestone ordering within a roadmap
-CREATE INDEX IF NOT EXISTS idxRoadmapMilestonesRoadmapOrder
-  ON roadmap_milestones(roadmapId, orderIndex, createdAt, id);
-
--- Covering index for deterministic feature ordering within a milestone
-CREATE INDEX IF NOT EXISTS idxRoadmapFeaturesMilestoneOrder
-  ON roadmap_features(milestoneId, orderIndex, createdAt, id);
-
 -- Insight persistence tables (FN-1877)
 -- Normalized insight entities and insight-generation run records
 
@@ -1189,6 +1146,7 @@ export class Database {
 
     if (this.hasTable("tasks")) {
       this.addColumnIfMissing("tasks", "executionStartBranch", "TEXT");
+      this.addColumnIfMissing("tasks", "review", "TEXT");
     }
 
     if (version >= SCHEMA_VERSION) return;
@@ -1633,6 +1591,10 @@ export class Database {
 
     if (version < 24) {
       this.applyMigration(24, () => {
+        // Legacy project-local plugin table (introduced in v24) is retained for
+        // one-shot migration reads by PluginStore.migrateLegacyProjectRows().
+        // Post-FN-3722 all new plugin install writes must go to central
+        // plugin_installs + project_plugin_states tables; writes here are a bug.
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS plugins (
             id TEXT PRIMARY KEY,
@@ -1901,66 +1863,6 @@ export class Database {
         this.db.exec(`CREATE INDEX IF NOT EXISTS idxFixLineageSourceFeatureId ON mission_fix_feature_lineage(sourceFeatureId)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idxFixLineageFixFeatureId ON mission_fix_feature_lineage(fixFeatureId)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idxFixLineageRunId ON mission_fix_feature_lineage(runId)`);
-      });
-    }
-
-    // Roadmap persistence tables (FN-1690)
-    // Standalone roadmap: Roadmap → RoadmapMilestone → RoadmapFeature
-    // with deterministic ordering indexes and FK cascade integrity
-    if (version < 32) {
-      this.applyMigration(32, () => {
-        // Roadmaps table
-        this.db.exec(`
-          CREATE TABLE IF NOT EXISTS roadmaps (
-            id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            description TEXT,
-            createdAt TEXT NOT NULL,
-            updatedAt TEXT NOT NULL
-          )
-        `);
-
-        // Roadmap milestones table
-        this.db.exec(`
-          CREATE TABLE IF NOT EXISTS roadmap_milestones (
-            id TEXT PRIMARY KEY,
-            roadmapId TEXT NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT,
-            orderIndex INTEGER NOT NULL,
-            createdAt TEXT NOT NULL,
-            updatedAt TEXT NOT NULL,
-            FOREIGN KEY (roadmapId) REFERENCES roadmaps(id) ON DELETE CASCADE
-          )
-        `);
-
-        // Roadmap features table
-        this.db.exec(`
-          CREATE TABLE IF NOT EXISTS roadmap_features (
-            id TEXT PRIMARY KEY,
-            milestoneId TEXT NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT,
-            orderIndex INTEGER NOT NULL,
-            createdAt TEXT NOT NULL,
-            updatedAt TEXT NOT NULL,
-            FOREIGN KEY (milestoneId) REFERENCES roadmap_milestones(id) ON DELETE CASCADE
-          )
-        `);
-
-        // Covering index for deterministic milestone ordering within a roadmap
-        // Covers: WHERE roadmapId = ? ORDER BY orderIndex ASC, createdAt ASC, id ASC
-        this.db.exec(`
-          CREATE INDEX IF NOT EXISTS idxRoadmapMilestonesRoadmapOrder
-            ON roadmap_milestones(roadmapId, orderIndex, createdAt, id)
-        `);
-
-        // Covering index for deterministic feature ordering within a milestone
-        // Covers: WHERE milestoneId = ? ORDER BY orderIndex ASC, createdAt ASC, id ASC
-        this.db.exec(`
-          CREATE INDEX IF NOT EXISTS idxRoadmapFeaturesMilestoneOrder
-            ON roadmap_features(milestoneId, orderIndex, createdAt, id)
-        `);
       });
     }
 
@@ -2680,6 +2582,108 @@ export class Database {
         this.db.exec(`DROP TABLE IF EXISTS project_auth_providers`);
         this.db.exec(`DROP TABLE IF EXISTS project_auth_memberships`);
         this.db.exec(`DROP TABLE IF EXISTS project_auth_users`);
+      });
+    }
+
+    if (version < 68) {
+      this.applyMigration(68, () => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS approval_requests (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            requesterActorId TEXT NOT NULL,
+            requesterActorType TEXT NOT NULL,
+            requesterActorName TEXT NOT NULL,
+            targetActionCategory TEXT NOT NULL,
+            targetActionOperation TEXT NOT NULL,
+            targetActionSummary TEXT NOT NULL,
+            targetResourceType TEXT NOT NULL,
+            targetResourceId TEXT NOT NULL,
+            targetContext TEXT,
+            taskId TEXT,
+            runId TEXT,
+            requestedAt TEXT NOT NULL,
+            decidedAt TEXT,
+            completedAt TEXT,
+            createdAt TEXT NOT NULL,
+            updatedAt TEXT NOT NULL
+          )
+        `);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idxApprovalRequestsStatusCreatedAt ON approval_requests(status, createdAt)`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idxApprovalRequestsRequesterCreatedAt ON approval_requests(requesterActorId, createdAt)`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idxApprovalRequestsTaskCreatedAt ON approval_requests(taskId, createdAt)`);
+
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS approval_request_audit_events (
+            id TEXT PRIMARY KEY,
+            requestId TEXT NOT NULL,
+            eventType TEXT NOT NULL,
+            actorId TEXT NOT NULL,
+            actorType TEXT NOT NULL,
+            actorName TEXT NOT NULL,
+            note TEXT,
+            createdAt TEXT NOT NULL,
+            FOREIGN KEY (requestId) REFERENCES approval_requests(id) ON DELETE CASCADE
+          )
+        `);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idxApprovalRequestAuditRequestCreatedAt ON approval_request_audit_events(requestId, createdAt, id)`);
+      });
+    }
+
+    if (version < 69) {
+      this.applyMigration(69, () => {
+        this.addColumnIfMissing("tasks", "reviewState", "TEXT");
+      });
+    }
+
+    if (version < 70) {
+      this.applyMigration(70, () => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS chat_rooms (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            description TEXT,
+            projectId TEXT,
+            createdBy TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            createdAt TEXT NOT NULL,
+            updatedAt TEXT NOT NULL
+          )
+        `);
+        this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idxChatRoomsSlug ON chat_rooms(projectId, slug)`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idxChatRoomsProjectId ON chat_rooms(projectId)`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idxChatRoomsStatus ON chat_rooms(status)`);
+
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS chat_room_members (
+            roomId TEXT NOT NULL,
+            agentId TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'member',
+            addedAt TEXT NOT NULL,
+            PRIMARY KEY (roomId, agentId),
+            FOREIGN KEY (roomId) REFERENCES chat_rooms(id) ON DELETE CASCADE
+          )
+        `);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idxChatRoomMembersAgentId ON chat_room_members(agentId)`);
+
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS chat_room_messages (
+            id TEXT PRIMARY KEY,
+            roomId TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            thinkingOutput TEXT,
+            metadata TEXT,
+            attachments TEXT,
+            senderAgentId TEXT,
+            mentions TEXT,
+            createdAt TEXT NOT NULL,
+            FOREIGN KEY (roomId) REFERENCES chat_rooms(id) ON DELETE CASCADE
+          )
+        `);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idxChatRoomMessagesRoomCreatedAt ON chat_room_messages(roomId, createdAt)`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idxChatRoomMessagesRoomId ON chat_room_messages(roomId)`);
       });
     }
 

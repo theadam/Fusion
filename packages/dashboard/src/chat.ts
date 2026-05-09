@@ -20,6 +20,7 @@ import type {
   ChatStore,
   ChatSession,
   ChatSessionCreateInput,
+  MessageStore,
   Settings,
 } from "@fusion/core";
 import { summarizeTitle } from "@fusion/core";
@@ -35,6 +36,8 @@ import {
   promptWithFallback as enginePromptWithFallback,
   extractRuntimeHint,
   extractRuntimeModel,
+  createSendMessageTool,
+  createReadMessagesTool,
 } from "@fusion/engine";
 import * as engineModule from "@fusion/engine";
 
@@ -122,7 +125,7 @@ async function ensureEngineReady(): Promise<void> {
 /** Chat system prompt for the AI agent */
 const CHAT_SYSTEM_PROMPT = `You are a helpful AI assistant integrated into the fn task board system. You help users with questions about their project, code, architecture, and tasks. You have access to project files and can read them to provide informed responses. Be concise, accurate, and helpful. When referencing files or code, provide specific paths and line numbers when possible.`;
 
-const CHAT_AGENT_MESSAGE_ROUTING_GUIDANCE = `## Messaging Semantics\n\nWhen this chat is bound to an agent and you need to send a mailbox message to the dashboard user, use \`fn_send_message\` with \`type: "agent-to-user"\` and target the dashboard user alias (\`to_id: "dashboard"\` is preferred). Never route that as a user/CLI → agent message.`;
+const CHAT_AGENT_MESSAGE_ROUTING_GUIDANCE = `## Messaging Semantics\n\nYour chat reply is the primary response to the user. Do not also call \`fn_send_message\` with the same content just to mirror your chat response into mailbox.\n\nOnly use \`fn_send_message\` when the user explicitly asks for mailbox/inbox/notification delivery (for example: "send me this in mail", "ntfy me when…", or "leave me a note in my inbox"). In that explicit-request case, send with \`type: "agent-to-user"\` and target the dashboard user alias (\`to_id: "dashboard"\` is preferred). Never route that as a user/CLI → agent message.`;
 
 /** Rate limiting window in milliseconds (1 minute) */
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -500,6 +503,7 @@ export class ChatManager {
       createRuntimeContext?(pluginId: string): Promise<unknown>;
     },
     private getSettings?: () => Promise<Pick<Settings, "fallbackProvider" | "fallbackModelId" | "defaultProvider" | "defaultModelId"> | undefined> | Pick<Settings, "fallbackProvider" | "fallbackModelId" | "defaultProvider" | "defaultModelId"> | undefined,
+    private messageStore?: MessageStore,
   ) {}
 
   private async getChatModelSettings(): Promise<{
@@ -946,10 +950,18 @@ export class ChatManager {
           || usesConfiguredDefaultModel
         );
 
+      const messagingTools = agent?.id && this.messageStore
+        ? [
+            createSendMessageTool(this.messageStore, agent.id),
+            createReadMessagesTool(this.messageStore, agent.id),
+          ]
+        : undefined;
+
       const sessionOptions = {
         cwd: this.rootDir,
         systemPrompt,
         tools: "coding" as const,
+        ...(messagingTools ? { customTools: messagingTools } : {}),
         sessionManager,
         ...(effectiveModelProvider && effectiveModelId
           ? {

@@ -114,25 +114,32 @@ export class PluginLoader extends EventEmitter<{
   // ── Context Creation ───────────────────────────────────────────────
 
   private async createContext(plugin: FusionPlugin): Promise<PluginContext> {
+    return this.createRouteContext(plugin.manifest.id);
+  }
+
+  async createRouteContext(
+    pluginId: string,
+    overrides?: Partial<Pick<PluginContext, "taskStore" | "settings" | "resolveProjectTaskStore">>,
+  ): Promise<PluginContext> {
     const createAiSession = await getCreateAiSessionFactory();
     if (process.env.DEBUG?.includes("plugins")) {
       this.log.log(
         createAiSession
-          ? `[plugin:${plugin.manifest.id}] createAiSession available`
-          : `[plugin:${plugin.manifest.id}] createAiSession unavailable`,
+          ? `[plugin:${pluginId}] createAiSession available`
+          : `[plugin:${pluginId}] createAiSession unavailable`,
       );
     }
 
     return {
-      pluginId: plugin.manifest.id,
-      taskStore: this.options.taskStore,
-      settings: await this.getPluginSettings(plugin.manifest.id),
-      logger: this.createLogger(plugin.manifest.id),
+      pluginId,
+      taskStore: overrides?.taskStore ?? this.options.taskStore,
+      settings: overrides?.settings ?? await this.getPluginSettings(pluginId),
+      logger: this.createLogger(pluginId),
       createAiSession,
+      resolveProjectTaskStore: overrides?.resolveProjectTaskStore,
       emitEvent: (event: string, data: unknown) => {
-        this.emit("plugin:error", { pluginId: plugin.manifest.id, error: new Error(`Custom event: ${event}`) });
-        // Custom events are logged but not surfaced as errors
-        this.log.log(`[plugin:${plugin.manifest.id}] Custom event: ${event}`, data);
+        this.emit("plugin:error", { pluginId, error: new Error(`Custom event: ${event}`) });
+        this.log.log(`[plugin:${pluginId}] Custom event: ${event}`, data);
       },
     };
   }
@@ -367,8 +374,9 @@ export class PluginLoader extends EventEmitter<{
 
     // Call onUnload with timeout
     try {
+      const ctx = await this.createContext(oldPlugin);
       await this.withTimeout(
-        this.safeCallHook(oldPlugin, "onUnload", []),
+        this.safeCallHook(oldPlugin, "onUnload", [ctx]),
         timeoutMs,
         `onUnload timeout for ${pluginId}`,
       );
@@ -638,8 +646,9 @@ export class PluginLoader extends EventEmitter<{
 
     try {
       // Call onUnload hook
+      const ctx = await this.createContext(plugin);
       await this.withTimeout(
-        this.safeCallHook(plugin, "onUnload", []),
+        this.safeCallHook(plugin, "onUnload", [ctx]),
         5000,
         `onUnload timeout for ${pluginId}`,
       );

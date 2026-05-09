@@ -1887,6 +1887,14 @@ describe("SettingsModal", () => {
       expect(screen.getByLabelText("Research View")).toBeInTheDocument();
     });
 
+    it("shows evalsView in the Experimental Features list", async () => {
+      renderModal();
+
+      await openExperimentalFeaturesSection();
+
+      expect(screen.getByLabelText("Evals View")).toBeInTheDocument();
+    });
+
     it("shows agentOnboarding in the Experimental Features list", async () => {
       renderModal();
 
@@ -2005,6 +2013,43 @@ describe("SettingsModal", () => {
         await waitForSettingsModalReady();
 
         expect(screen.queryByRole("button", { name: /Research Defaults/i })).not.toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Authentication" })).toBeInTheDocument();
+      });
+
+      it("hides scheduled evals nav item when experimentalFeatures.evalsView is disabled", async () => {
+        mockFetchSettings.mockResolvedValue({
+          ...defaultSettings,
+          experimentalFeatures: {},
+        });
+
+        renderModal();
+        await waitForSettingsModalReady();
+
+        expect(screen.queryByRole("button", { name: /Scheduled Evals/i })).not.toBeInTheDocument();
+      });
+
+      it("shows scheduled evals nav item when experimentalFeatures.evalsView is enabled", async () => {
+        mockFetchSettings.mockResolvedValue({
+          ...defaultSettings,
+          experimentalFeatures: { evalsView: true },
+        });
+
+        renderModal();
+        await waitForSettingsModalReady();
+
+        expect(screen.getByRole("button", { name: /Scheduled Evals/i })).toBeInTheDocument();
+      });
+
+      it("falls back to the first selectable section when opening scheduled evals while evalsView is disabled", async () => {
+        mockFetchSettings.mockResolvedValue({
+          ...defaultSettings,
+          experimentalFeatures: {},
+        });
+
+        renderModal({ initialSection: "scheduled-evals" });
+        await waitForSettingsModalReady();
+
+        expect(screen.queryByRole("button", { name: /Scheduled Evals/i })).not.toBeInTheDocument();
         expect(screen.getByRole("heading", { name: "Authentication" })).toBeInTheDocument();
       });
     });
@@ -2665,7 +2710,7 @@ describe("SettingsModal", () => {
       expect(screen.getByRole("button", { name: /Test notification/ })).toBeInTheDocument();
     });
 
-    it("shows fallback-used and dreams events for both providers", async () => {
+    it("shows fallback, dreams, and mailbox message events for both providers", async () => {
       mockFetchSettings.mockResolvedValueOnce({ ...defaultSettings, ntfyEnabled: true, ntfyTopic: "test-topic" });
       renderModal();
       await waitForSettingsModalReady();
@@ -2673,10 +2718,18 @@ describe("SettingsModal", () => {
 
       expect(screen.getByLabelText("Fallback model used (recovered)")).toBeInTheDocument();
       expect(screen.getByLabelText("DREAMS.md entry added")).toBeInTheDocument();
+      const agentToUserNtfy = screen.getByLabelText("Agent → user message") as HTMLInputElement;
+      const agentToAgentNtfy = screen.getByLabelText("Agent → agent message") as HTMLInputElement;
+      expect(agentToUserNtfy.checked).toBe(true);
+      expect(agentToAgentNtfy.checked).toBe(true);
 
       await userEvent.click(screen.getByLabelText("Webhook notifications"));
       expect(screen.getAllByLabelText("Fallback model used (recovered)").length).toBeGreaterThan(0);
       expect(screen.getAllByLabelText("DREAMS.md entry added").length).toBeGreaterThan(0);
+      const [agentToUserWebhook] = screen.getAllByLabelText("Agent → user message") as HTMLInputElement[];
+      const [agentToAgentWebhook] = screen.getAllByLabelText("Agent → agent message") as HTMLInputElement[];
+      expect(agentToUserWebhook.checked).toBe(true);
+      expect(agentToAgentWebhook.checked).toBe(true);
     });
 
     it("shows webhook fields when webhook provider is enabled", async () => {
@@ -2774,6 +2827,7 @@ describe("SettingsModal", () => {
     it("renders controls and disables interval controls when evals are disabled", async () => {
       mockFetchSettings.mockResolvedValueOnce({
         ...defaultSettings,
+        experimentalFeatures: { evalsView: true },
         evalSettings: {
           enabled: false,
           intervalMs: 86_400_000,
@@ -2797,6 +2851,7 @@ describe("SettingsModal", () => {
     it("saves edited project eval settings payload", async () => {
       mockFetchSettings.mockResolvedValueOnce({
         ...defaultSettings,
+        experimentalFeatures: { evalsView: true },
         evalSettings: {
           enabled: true,
           intervalMs: 86_400_000,
@@ -2836,6 +2891,7 @@ describe("SettingsModal", () => {
     it("clears evaluator provider and model as unset when left blank", async () => {
       mockFetchSettings.mockResolvedValueOnce({
         ...defaultSettings,
+        experimentalFeatures: { evalsView: true },
         evalSettings: {
           enabled: true,
           intervalMs: 86_400_000,

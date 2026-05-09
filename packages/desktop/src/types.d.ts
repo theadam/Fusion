@@ -31,6 +31,13 @@ export interface FusionAPI {
   getSystemInfo(): Promise<SystemInfo>;
   checkForUpdates(): Promise<UpdateCheckResult>;
   getServerPort(): Promise<number | undefined>;
+  getDesktopRuntimeStatus(): Promise<ShellConnectionState["localRuntime"]>;
+  startDesktopLocalRuntime(): Promise<ShellConnectionState["localRuntime"]>;
+  stopDesktopLocalRuntime(): Promise<ShellConnectionState["localRuntime"]>;
+  getDesktopLaunchMode(): Promise<"choose" | "local" | "remote">;
+  setDesktopLaunchMode(mode: "choose" | "local" | "remote"): Promise<"choose" | "local" | "remote">;
+  getDesktopLaunchContext(): Promise<{ mode: "remote"; profileId: string; serverBaseUrl: string; serverLabel?: string; authToken?: string } | null>;
+  openConnectionManager(): Promise<void>;
 
   // Tray status
   updateTrayStatus(status: string): Promise<void>;
@@ -78,10 +85,12 @@ export interface ShellConnectionState {
   desktopMode?: "local" | "remote";
   activeProfileId: string | null;
   profiles: ShellConnectionProfile[];
-  localServer?: {
-    status: "idle" | "starting" | "ready" | "error";
+  localRuntime?: {
+    source: "embedded-local" | "external-cli" | "none";
+    state: "stopped" | "starting" | "running" | "error";
     port?: number;
-    error?: string | null;
+    baseUrl?: string;
+    error?: string;
   };
 }
 

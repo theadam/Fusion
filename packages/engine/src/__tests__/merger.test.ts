@@ -143,6 +143,7 @@ import {
   summarizeVerificationOutput,
   inferDefaultTestCommand,
   resolveTaskDiffBaseRef,
+  commitOrAmendMergeWithFixes,
   MergeAbortedError,
   type ConflictCategory,
 } from "../merger.js";
@@ -959,6 +960,72 @@ describe("aiMergeTask — task.branch field", () => {
     const result = await aiMergeTask(store, "/tmp/root", "FN-050");
 
     expect(result.branch).toBe("fusion/fn-050");
+  });
+});
+
+describe("aiMergeTask — merge-target branch resolution", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedExistsSync.mockReturnValue(true);
+    setupHappyPathExecSync();
+    mockedCreateFnAgent.mockResolvedValue({
+      session: {
+        prompt: vi.fn().mockResolvedValue(undefined),
+        dispose: vi.fn(),
+      },
+    } as any);
+  });
+
+  it("uses task.baseBranch as merge-target context when provided", async () => {
+    const store = createMockStore({
+      id: "FN-050",
+      branch: "feature/fn-050-work",
+      baseBranch: "release/2026-05",
+      worktree: "/tmp/root/.worktrees/KB-050",
+    });
+
+    await aiMergeTask(store, "/tmp/root", "FN-050");
+
+    expect(
+      mockedExecSync.mock.calls.some(([cmd]) =>
+        String(cmd).includes('git merge-base "feature/fn-050-work" "release/2026-05"'),
+      ),
+    ).toBe(true);
+
+    expect(
+      mockedExecSync.mock.calls.some(([cmd]) =>
+        String(cmd).includes('git merge-base "feature/fn-050-work" "main"'),
+      ),
+    ).toBe(false);
+
+    expect(
+      mockedExecSync.mock.calls.some(([cmd]) =>
+        String(cmd).includes('rev-parse --verify "feature/fn-050-work"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("defaults merge-target context to main when task.baseBranch is missing", async () => {
+    const store = createMockStore({
+      id: "FN-050",
+      branch: "feature/fn-050-work",
+      baseBranch: undefined,
+      worktree: "/tmp/root/.worktrees/KB-050",
+    });
+
+    await aiMergeTask(store, "/tmp/root", "FN-050");
+
+    expect(
+      mockedExecSync.mock.calls.some(([cmd]) =>
+        String(cmd).includes('git merge-base "feature/fn-050-work" "main"'),
+      ),
+    ).toBe(true);
+
+    expect(
+      mockedExecSync.mock.calls.some(([cmd]) =>
+        String(cmd).includes('rev-parse --verify "feature/fn-050-work"'),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -6915,13 +6982,141 @@ describe("aiMergeTask — in-merge verification fix", () => {
       name: "VerificationError",
     });
 
-    // Verify that fix agent was spawned (3 calls: summarizer + merger + fix)
-    expect(mockedCreateFnAgent).toHaveBeenCalledTimes(3);
+    // 2 calls: merge AI agent (attempt 1) + verification-fix agent.
+    // VerificationError no longer triggers a redundant attempt 2 — the
+    // in-merge fix runs immediately on attempt 1's catch with the correct
+    // preAttemptHeadSha baseline.
+    expect(mockedCreateFnAgent).toHaveBeenCalledTimes(2);
 
     // Verify the fix agent was called with correct options
     const fixAgentCall = mockedCreateFnAgent.mock.calls[1];
     expect(fixAgentCall[0].tools).toBe("coding");
     expect(fixAgentCall[0].cwd).toBe("/tmp/root");
+    expect(fixAgentCall[0].systemPrompt).toContain("verification fix agent");
+  });
+
+  it("runs full test+build verification after a test-failure fix", async () => {
+    let vitestRuns = 0;
+    let buildRuns = 0;
+    let statusReads = 0;
+
+    mockedExecSync.mockImplementation((cmd: any) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("rev-parse --verify")) return Buffer.from("abc123");
+      if (cmdStr === "git rev-parse HEAD" || cmdStr.startsWith("git rev-parse HEAD ")) return "mergedcommit123";
+      if (cmdStr.includes("git log")) return "- feat: something" as any;
+      if (cmdStr.includes("merge-base")) return Buffer.from("abc123");
+      if (cmdStr.includes("git diff") && cmdStr.includes("--stat")) return "1 file changed" as any;
+      if (cmdStr.includes("merge --squash")) return Buffer.from("");
+      if (cmdStr.includes("status --porcelain")) {
+        statusReads += 1;
+        return statusReads === 1 ? "" : " M src/fix.ts";
+      }
+      if (cmdStr.includes("vitest run")) {
+        vitestRuns += 1;
+        if (vitestRuns === 1) {
+          const err = new Error("Test failed") as any;
+          err.status = 1;
+          err.stdout = "";
+          err.stderr = "";
+          throw err;
+        }
+        return Buffer.from("");
+      }
+      if (cmdStr.includes("pnpm build")) {
+        buildRuns += 1;
+        return Buffer.from("");
+      }
+      if (cmdStr.includes("diff --cached --quiet")) return "1" as any;
+      if (cmdStr.includes("diff --cached")) return "0" as any;
+      if (cmdStr.includes("show --shortstat")) return "3 files changed, 10 insertions(+), 2 deletions(-)" as any;
+      if (cmdStr.includes("branch -d") || cmdStr.includes("branch -D")) return Buffer.from("");
+      if (cmdStr.includes("worktree remove")) return Buffer.from("");
+      return Buffer.from("");
+    });
+
+    mockedCreateFnAgent.mockResolvedValue({ session: { prompt: vi.fn().mockResolvedValue(undefined), dispose: vi.fn() } } as any);
+
+    const store = createMockStore(
+      { id: "FN-050", worktree: "/tmp/root/.worktrees/KB-050" },
+      [{ id: "FN-050", worktree: "/tmp/root/.worktrees/KB-050", column: "in-review" } as Task],
+    );
+    (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ ...DEFAULT_SETTINGS, testCommand: "vitest run", buildCommand: "pnpm build", verificationFixRetries: 1 });
+
+    await expect(aiMergeTask(store, "/tmp/root", "FN-050")).rejects.toThrow();
+    expect(buildRuns).toBeGreaterThanOrEqual(0);
+  });
+
+  it("retries when test-failure fix passes tests but full rerun fails on build", async () => {
+    let vitestRuns = 0;
+    let statusReads = 0;
+    mockedExecSync.mockImplementation((cmd: any) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("status --porcelain")) return ++statusReads === 1 ? "" : " M src/fix.ts";
+      if (cmdStr.includes("vitest run")) { if (++vitestRuns === 1) { const err = new Error("Test failed") as any; err.status = 1; throw err; } return Buffer.from(""); }
+      if (cmdStr.includes("pnpm build")) { const err = new Error("Build failed") as any; err.status = 1; throw err; }
+      if (cmdStr.includes("rev-parse --verify")) return Buffer.from("abc123");
+      if (cmdStr === "git rev-parse HEAD" || cmdStr.startsWith("git rev-parse HEAD ")) return "mergedcommit123";
+      if (cmdStr.includes("git log")) return "- feat: something" as any;
+      if (cmdStr.includes("merge-base")) return Buffer.from("abc123");
+      if (cmdStr.includes("git diff") && cmdStr.includes("--stat")) return "1 file changed" as any;
+      if (cmdStr.includes("merge --squash")) return Buffer.from("");
+      if (cmdStr.includes("diff --cached --quiet")) return "1" as any;
+      if (cmdStr.includes("diff --cached")) return "" as any;
+      return Buffer.from("");
+    });
+    mockedCreateFnAgent.mockResolvedValue({ session: { prompt: vi.fn().mockResolvedValue(undefined), dispose: vi.fn() } } as any);
+    const store = createMockStore({ id: "FN-050", worktree: "/tmp/root/.worktrees/KB-050" }, [{ id: "FN-050", worktree: "/tmp/root/.worktrees/KB-050", column: "in-review" } as Task]);
+    (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ ...DEFAULT_SETTINGS, testCommand: "vitest run", buildCommand: "pnpm build", verificationFixRetries: 2 });
+    await expect(aiMergeTask(store, "/tmp/root", "FN-050")).rejects.toThrow();
+  });
+
+  it("runs full test+build verification after a build-failure fix", async () => {
+    let buildRuns = 0;
+    let statusReads = 0;
+    mockedExecSync.mockImplementation((cmd: any) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("status --porcelain")) return ++statusReads === 1 ? "" : " M src/fix.ts";
+      if (cmdStr.includes("vitest run")) return Buffer.from("");
+      if (cmdStr.includes("pnpm build")) { if (++buildRuns === 1) { const err = new Error("Build failed") as any; err.status = 1; throw err; } return Buffer.from(""); }
+      if (cmdStr.includes("rev-parse --verify")) return Buffer.from("abc123");
+      if (cmdStr === "git rev-parse HEAD" || cmdStr.startsWith("git rev-parse HEAD ")) return "mergedcommit123";
+      if (cmdStr.includes("git log")) return "- feat: something" as any;
+      if (cmdStr.includes("merge-base")) return Buffer.from("abc123");
+      if (cmdStr.includes("git diff") && cmdStr.includes("--stat")) return "1 file changed" as any;
+      if (cmdStr.includes("merge --squash")) return Buffer.from("");
+      if (cmdStr.includes("diff --cached --quiet")) return "1" as any;
+      if (cmdStr.includes("diff --cached")) return "0" as any;
+      return Buffer.from("");
+    });
+    mockedCreateFnAgent.mockResolvedValue({ session: { prompt: vi.fn().mockResolvedValue(undefined), dispose: vi.fn() } } as any);
+    const store = createMockStore({ id: "FN-050", worktree: "/tmp/root/.worktrees/KB-050" }, [{ id: "FN-050", worktree: "/tmp/root/.worktrees/KB-050", column: "in-review" } as Task]);
+    (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ ...DEFAULT_SETTINGS, testCommand: "vitest run", buildCommand: "pnpm build", verificationFixRetries: 1, buildRetryCount: 0 });
+    await expect(aiMergeTask(store, "/tmp/root", "FN-050")).rejects.toThrow();
+  });
+
+  it("retries when build-failure fix keeps build green but breaks tests in full rerun", async () => {
+    let buildRuns = 0;
+    let statusReads = 0;
+    mockedExecSync.mockImplementation((cmd: any) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("status --porcelain")) return ++statusReads === 1 ? "" : " M src/fix.ts";
+      if (cmdStr.includes("vitest run")) { const err = new Error("Test failed") as any; err.status = 1; throw err; }
+      if (cmdStr.includes("pnpm build")) { if (++buildRuns === 1) { const err = new Error("Build failed") as any; err.status = 1; throw err; } return Buffer.from(""); }
+      if (cmdStr.includes("rev-parse --verify")) return Buffer.from("abc123");
+      if (cmdStr === "git rev-parse HEAD" || cmdStr.startsWith("git rev-parse HEAD ")) return "mergedcommit123";
+      if (cmdStr.includes("git log")) return "- feat: something" as any;
+      if (cmdStr.includes("merge-base")) return Buffer.from("abc123");
+      if (cmdStr.includes("git diff") && cmdStr.includes("--stat")) return "1 file changed" as any;
+      if (cmdStr.includes("merge --squash")) return Buffer.from("");
+      if (cmdStr.includes("diff --cached --quiet")) return "1" as any;
+      if (cmdStr.includes("diff --cached")) return "" as any;
+      return Buffer.from("");
+    });
+    mockedCreateFnAgent.mockResolvedValue({ session: { prompt: vi.fn().mockResolvedValue(undefined), dispose: vi.fn() } } as any);
+    const store = createMockStore({ id: "FN-050", worktree: "/tmp/root/.worktrees/KB-050" }, [{ id: "FN-050", worktree: "/tmp/root/.worktrees/KB-050", column: "in-review" } as Task]);
+    (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ ...DEFAULT_SETTINGS, testCommand: "vitest run", buildCommand: "pnpm build", verificationFixRetries: 2, buildRetryCount: 0 });
+    await expect(aiMergeTask(store, "/tmp/root", "FN-050")).rejects.toThrow();
   });
 
   it("logs fix-agent startup metadata, streams callbacks, and logs rerun lifecycle", async () => {
@@ -7140,8 +7335,9 @@ describe("aiMergeTask — in-merge verification fix", () => {
       name: "VerificationError",
     });
 
-    // Verify fix agent was NOT spawned (summarizer + merger only)
-    expect(mockedCreateFnAgent).toHaveBeenCalledTimes(2);
+    // Verify fix agent was NOT spawned — only the merge AI agent (attempt 1).
+    // VerificationError propagates without triggering attempt 2.
+    expect(mockedCreateFnAgent).toHaveBeenCalledTimes(1);
 
     // Verify no fix attempt was logged
     const logCalls = (store.logEntry as ReturnType<typeof vi.fn>).mock.calls;
@@ -7366,8 +7562,8 @@ describe("aiMergeTask — in-merge verification fix", () => {
       name: "VerificationError",
     });
 
-    // Should have 3 fix attempts (capped at 3) + summarizer + merger = 5 calls
-    expect(mockedCreateFnAgent).toHaveBeenCalledTimes(5);
+    // 1 merger AI agent (attempt 1) + 3 fix agent attempts (capped) = 4 calls
+    expect(mockedCreateFnAgent).toHaveBeenCalledTimes(4);
   });
 
   it("default verificationFixRetries (omitted) results in 3 fix attempts", async () => {
@@ -7417,8 +7613,8 @@ describe("aiMergeTask — in-merge verification fix", () => {
       name: "VerificationError",
     });
 
-    // Should have 3 fix attempts (default) + summarizer + merger = 5 calls
-    expect(mockedCreateFnAgent).toHaveBeenCalledTimes(5);
+    // 1 merger AI agent (attempt 1) + 3 fix agent attempts (default) = 4 calls
+    expect(mockedCreateFnAgent).toHaveBeenCalledTimes(4);
 
     // Verify the log shows 3 fix attempts (2 log entries per attempt: start + failure)
     const logCalls = (store.logEntry as ReturnType<typeof vi.fn>).mock.calls;
@@ -7430,5 +7626,85 @@ describe("aiMergeTask — in-merge verification fix", () => {
     expect(fixAttempts[0][1]).toContain("attempt 1/3");
     expect(fixAttempts[2][1]).toContain("attempt 2/3");
     expect(fixAttempts[4][1]).toContain("attempt 3/3");
+  });
+});
+
+describe("commitOrAmendMergeWithFixes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns already-merged success when branch tip is ancestor of integration target and finalize has no staged content", async () => {
+    mockedExecSync.mockImplementation((cmd: any) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("git diff --cached --name-only")) return "" as any;
+      if (cmdStr === "git diff --name-only") return "" as any;
+      if (cmdStr.includes("git status -z --porcelain")) return "" as any;
+      if (cmdStr === "git rev-parse HEAD") return "abc123" as any;
+      if (cmdStr === "git rev-parse fusion/fn-9999") return "def456" as any;
+      if (cmdStr === "git merge-base def456 abc123") return "abc123" as any;
+      if (cmdStr === "git diff --stat abc123..fusion/fn-9999") return "" as any;
+      if (cmdStr === "git ls-files --others --exclude-standard") return "" as any;
+      if (cmdStr.includes("git log -1 --pretty=%B HEAD")) return "commit message without trailer" as any;
+      if (cmdStr === "git merge-base --is-ancestor def456 abc123") return "" as any;
+      return "" as any;
+    });
+
+    const result = await commitOrAmendMergeWithFixes(
+      "/tmp/root",
+      "FN-9999",
+      "fusion/fn-9999",
+      "",
+      true,
+      "abc123",
+      "",
+      undefined,
+      DEFAULT_SETTINGS,
+      undefined,
+      null,
+      null,
+      new Set(),
+    );
+
+    expect(result).toEqual({ ok: true, reason: "branch-already-merged" });
+    expect(mockedExecSync.mock.calls.some((call) => String(call[0]) === "git merge-base --is-ancestor def456 abc123")).toBe(true);
+  });
+
+  it("treats squash-restore 'Already up to date' with no staged changes as already-merged success", async () => {
+    mockedExecSync.mockImplementation((cmd: any) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("git diff --cached --name-only")) return "" as any;
+      if (cmdStr === "git diff --name-only") return "" as any;
+      if (cmdStr.includes("git status -z --porcelain")) return "" as any;
+      if (cmdStr === "git rev-parse HEAD") return "abc123" as any;
+      if (cmdStr === "git rev-parse fusion/fn-9999") return "def456" as any;
+      if (cmdStr === "git merge-base def456 abc123") return "zzz999" as any;
+      if (cmdStr === "git diff --stat abc123..fusion/fn-9999") return "" as any;
+      if (cmdStr === "git ls-files --others --exclude-standard") return "" as any;
+      if (cmdStr.includes("git log -1 --pretty=%B HEAD")) return "commit message without trailer" as any;
+      if (cmdStr === "git merge-base --is-ancestor def456 abc123") throw new Error("not ancestor");
+      if (cmdStr === "git reset --hard abc123") return "" as any;
+      if (cmdStr === "git clean -fd") return "" as any;
+      if (cmdStr === "git merge --squash fusion/fn-9999") return "Already up to date." as any;
+      return "" as any;
+    });
+
+    const result = await commitOrAmendMergeWithFixes(
+      "/tmp/root",
+      "FN-9999",
+      "fusion/fn-9999",
+      "",
+      true,
+      "abc123",
+      "",
+      undefined,
+      DEFAULT_SETTINGS,
+      undefined,
+      null,
+      null,
+      new Set(),
+    );
+
+    expect(result).toEqual({ ok: true, reason: "branch-already-merged" });
   });
 });

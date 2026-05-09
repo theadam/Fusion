@@ -587,9 +587,9 @@ describe("buildSpecificationPrompt", () => {
 });
 
 describe("TRIAGE_SYSTEM_PROMPT", () => {
-  it("includes bounded research guidance", () => {
-    expect(TRIAGE_SYSTEM_PROMPT).toContain("fn_research_run");
-    expect(TRIAGE_SYSTEM_PROMPT).toContain("Keep research bounded");
+  it("does not include unconditional research guidance", () => {
+    expect(TRIAGE_SYSTEM_PROMPT).not.toContain("fn_research_run");
+    expect(TRIAGE_SYSTEM_PROMPT).not.toContain("Keep research bounded");
   });
 
   it("requires specs to keep lint, tests, build, and typecheck green even outside initial file scope", () => {
@@ -838,6 +838,14 @@ describe("fast-mode triage", () => {
       await mkdir(join(rootDir, ".fusion", "tasks", task.id), { recursive: true });
 
       const store = createMockStore({
+        getSettings: vi.fn().mockResolvedValue({
+          maxConcurrent: 2,
+          maxWorktrees: 4,
+          pollIntervalMs: 10000,
+          groupOverlappingFiles: false,
+          autoMerge: true,
+          experimentalFeatures: { researchView: true },
+        } as Settings),
         getTask: vi.fn().mockResolvedValue({ ...mockTaskDetail, id: task.id, attachments: [], comments: [] }),
         parseDependenciesFromPrompt: vi.fn().mockResolvedValue([]),
         parseStepsFromPrompt: vi.fn().mockResolvedValue([]),
@@ -879,6 +887,81 @@ describe("fast-mode triage", () => {
     } finally {
       await cleanupTriageFixtureRoot(rootDir);
     }
+  });
+
+  it("omits research tools and prompt guidance when researchView experimental flag is disabled", async () => {
+    const task = createTriageTask({ id: "FN-FAST-005", executionMode: "fast" });
+    const store = createMockStore({
+      getSettings: vi.fn().mockResolvedValue({
+        maxConcurrent: 2,
+        maxWorktrees: 4,
+        pollIntervalMs: 10000,
+        groupOverlappingFiles: false,
+        autoMerge: true,
+        experimentalFeatures: { researchView: false },
+      } as Settings),
+      getTask: vi.fn().mockResolvedValue({ ...mockTaskDetail, id: task.id, attachments: [], comments: [] }),
+    });
+
+    let capturedTools: any[] = [];
+    let capturedSystemPrompt = "";
+    mockCreateFnAgent.mockImplementationOnce(async (opts: any) => {
+      capturedTools = opts.customTools;
+      capturedSystemPrompt = opts.systemPrompt;
+      return {
+        session: {
+          state: {},
+          sessionManager: { getLeafId: vi.fn().mockReturnValue(null) },
+          prompt: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          navigateTree: vi.fn(),
+        },
+      };
+    });
+
+    const processor = new TriageProcessor(store, "/tmp/root");
+    await processor.specifyTask(task);
+
+    expect(capturedTools.some((tool: any) => tool.name === "fn_research_run")).toBe(false);
+    expect(capturedTools.some((tool: any) => tool.name === "fn_research_list")).toBe(false);
+    expect(capturedTools.some((tool: any) => tool.name === "fn_research_get")).toBe(false);
+    expect(capturedTools.some((tool: any) => tool.name === "fn_research_cancel")).toBe(false);
+    expect(capturedSystemPrompt).not.toContain("fn_research_run");
+  });
+
+  it("includes research prompt guidance when researchView experimental flag is enabled", async () => {
+    const task = createTriageTask({ id: "FN-FAST-006", executionMode: "fast" });
+    const store = createMockStore({
+      getSettings: vi.fn().mockResolvedValue({
+        maxConcurrent: 2,
+        maxWorktrees: 4,
+        pollIntervalMs: 10000,
+        groupOverlappingFiles: false,
+        autoMerge: true,
+        experimentalFeatures: { researchView: true },
+      } as Settings),
+      getTask: vi.fn().mockResolvedValue({ ...mockTaskDetail, id: task.id, attachments: [], comments: [] }),
+    });
+
+    let capturedSystemPrompt = "";
+    mockCreateFnAgent.mockImplementationOnce(async (opts: any) => {
+      capturedSystemPrompt = opts.systemPrompt;
+      return {
+        session: {
+          state: {},
+          sessionManager: { getLeafId: vi.fn().mockReturnValue(null) },
+          prompt: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          navigateTree: vi.fn(),
+        },
+      };
+    });
+
+    const processor = new TriageProcessor(store, "/tmp/root");
+    await processor.specifyTask(task);
+
+    expect(capturedSystemPrompt).toContain("fn_research_run");
+    expect(capturedSystemPrompt).toContain("Keep research bounded");
   });
 });
 
@@ -2374,8 +2457,8 @@ describe("taskCreate tool model inheritance", () => {
           pollIntervalMs: 10000,
           groupOverlappingFiles: false,
           autoMerge: true,
-          defaultProvider: "anthropic",
-          defaultModelId: "claude-sonnet-4-5",
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-5",
           planningProvider: "openai",
           planningModelId: "gpt-4o",
         } as Settings),
@@ -2406,8 +2489,8 @@ describe("taskCreate tool model inheritance", () => {
       // Per-task override should take precedence over settings
       expect(mockCreateFnAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          defaultProvider: "google",
-          defaultModelId: "gemini-2.5-pro",
+          provider: "google",
+          modelId: "gemini-2.5-pro",
         }),
       );
     });
@@ -2471,8 +2554,8 @@ describe("taskCreate tool model inheritance", () => {
       // Should use settings planning model when no per-task override
       expect(mockCreateFnAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          defaultProvider: "openai",
-          defaultModelId: "gpt-4o",
+          provider: "openai",
+          modelId: "gpt-4o",
         }),
       );
     });
@@ -2536,8 +2619,8 @@ describe("taskCreate tool model inheritance", () => {
       // Should use project default override when planning lanes are absent
       expect(mockCreateFnAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          defaultProvider: "openai",
-          defaultModelId: "gpt-4o",
+          provider: "openai",
+          modelId: "gpt-4o",
         }),
       );
     });
@@ -2601,8 +2684,8 @@ describe("taskCreate tool model inheritance", () => {
       // Incomplete override should fall through to global defaults
       expect(mockCreateFnAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          defaultProvider: "anthropic",
-          defaultModelId: "claude-sonnet-4-5",
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-5",
         }),
       );
     });
@@ -2664,10 +2747,184 @@ describe("taskCreate tool model inheritance", () => {
       // Should fall back to global defaults
       expect(mockCreateFnAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          defaultProvider: "anthropic",
-          defaultModelId: "claude-sonnet-4-5",
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-5",
         }),
       );
+    });
+  });
+
+  describe("assigned-agent triage inheritance", () => {
+    it("injects assigned-agent identity into triage system prompt", async () => {
+      const task = createTriageTask({ id: "FN-AGENT-001", assignedAgentId: "agent-007" });
+      const store = createMockStore({
+        getTask: vi.fn().mockResolvedValue({ ...task, attachments: [] }),
+      });
+
+      const mockAgentStore = {
+        getAgent: vi.fn().mockResolvedValue({
+          id: "agent-007",
+          name: "Atlas",
+          title: "Senior Planner",
+          role: "executor",
+          soul: "Think in milestones.",
+          instructionsText: "Always preserve rollout safety.",
+          memory: "Atlas memory context",
+        }),
+      };
+
+      let capturedArgs: any;
+      mockCreateFnAgent.mockImplementationOnce(async (opts: any) => {
+        capturedArgs = opts;
+        return {
+          session: {
+            state: {},
+            sessionManager: {},
+            prompt: vi.fn().mockResolvedValue(undefined),
+            dispose: vi.fn(),
+            navigateTree: vi.fn(),
+          },
+        };
+      });
+
+      const processor = new TriageProcessor(store, "/test/root", {
+        pollIntervalMs: 100_000,
+        agentStore: mockAgentStore as any,
+      });
+
+      await processor.specifyTask(task);
+
+      expect(capturedArgs.systemPrompt).toContain("## Identity");
+      expect(capturedArgs.systemPrompt).toContain("You are Atlas, Senior Planner");
+      expect(capturedArgs.systemPrompt).toContain("agent ID: agent-007");
+    });
+
+    it("prefers assigned-agent runtime model and falls back when incomplete", async () => {
+      const completeRuntimeTask = createTriageTask({ id: "FN-AGENT-MODEL-1", assignedAgentId: "agent-model-complete" });
+      const incompleteRuntimeTask = createTriageTask({ id: "FN-AGENT-MODEL-2", assignedAgentId: "agent-model-incomplete" });
+
+      const store = createMockStore({
+        getTask: vi.fn()
+          .mockResolvedValueOnce({ ...completeRuntimeTask, attachments: [] })
+          .mockResolvedValueOnce({ ...incompleteRuntimeTask, attachments: [] }),
+        getSettings: vi.fn().mockResolvedValue({
+          maxConcurrent: 2,
+          maxWorktrees: 4,
+          pollIntervalMs: 10000,
+          groupOverlappingFiles: false,
+          autoMerge: true,
+          planningProvider: "openai",
+          planningModelId: "gpt-4o",
+        } as Settings),
+      });
+
+      const mockAgentStore = {
+        getAgent: vi.fn().mockImplementation(async (id: string) => {
+          if (id === "agent-model-complete") {
+            return {
+              id,
+              name: "Model Agent",
+              role: "executor",
+              runtimeConfig: {
+                modelProvider: "anthropic",
+                modelId: "claude-sonnet-4-5",
+              },
+            };
+          }
+          return {
+            id,
+            name: "Incomplete Model Agent",
+            role: "executor",
+            runtimeConfig: {
+              modelProvider: "anthropic",
+            },
+          };
+        }),
+      };
+
+      const capturedArgs: any[] = [];
+      mockCreateFnAgent.mockImplementation(async (opts: any) => {
+        capturedArgs.push(opts);
+        return {
+          session: {
+            state: {},
+            sessionManager: {},
+            prompt: vi.fn().mockResolvedValue(undefined),
+            dispose: vi.fn(),
+            navigateTree: vi.fn(),
+          },
+        };
+      });
+
+      const processor = new TriageProcessor(store, "/test/root", {
+        pollIntervalMs: 100_000,
+        agentStore: mockAgentStore as any,
+      });
+
+      await processor.specifyTask(completeRuntimeTask);
+      await processor.specifyTask(incompleteRuntimeTask);
+
+      const completeCall = capturedArgs.find((entry) => entry.taskId === "FN-AGENT-MODEL-1");
+      const fallbackCall = capturedArgs.find((entry) => entry.taskId === "FN-AGENT-MODEL-2");
+
+      expect(completeCall).toMatchObject({ provider: "anthropic", modelId: "claude-sonnet-4-5" });
+      expect(fallbackCall).toMatchObject({ provider: "openai", modelId: "gpt-4o" });
+    });
+
+    it("passes assigned agent memory context into triage memory tools", async () => {
+      const rootDir = await createTriageFixtureRoot("fusion-triage-agent-memory-");
+      try {
+        const task = createTriageTask({ id: "FN-AGENT-MEM-001", assignedAgentId: "agent-memory-1" });
+        const store = createMockStore({
+          getTask: vi.fn().mockResolvedValue({ ...task, attachments: [] }),
+          getSettings: vi.fn().mockResolvedValue({
+            maxConcurrent: 2,
+            maxWorktrees: 4,
+            pollIntervalMs: 10000,
+            groupOverlappingFiles: false,
+            autoMerge: true,
+            memoryBackendType: "file",
+          } as Settings),
+        });
+
+        const mockAgentStore = {
+          getAgent: vi.fn().mockResolvedValue({
+            id: "agent-memory-1",
+            name: "Memory Agent",
+            role: "executor",
+            memory: "The launch runway is blocked by migration sequencing.",
+          }),
+        };
+
+        let capturedArgs: any;
+        mockCreateFnAgent.mockImplementationOnce(async (opts: any) => {
+          capturedArgs = opts;
+          return {
+            session: {
+              state: {},
+              sessionManager: {},
+              prompt: vi.fn().mockResolvedValue(undefined),
+              dispose: vi.fn(),
+              navigateTree: vi.fn(),
+            },
+          };
+        });
+
+        const processor = new TriageProcessor(store, rootDir, {
+          pollIntervalMs: 100_000,
+          agentStore: mockAgentStore as any,
+        });
+
+        await processor.specifyTask(task);
+
+        const memorySearchTool = capturedArgs.customTools.find((tool: any) => tool.name === "fn_memory_search");
+        expect(memorySearchTool).toBeDefined();
+
+        const result = await memorySearchTool.execute("tool-run", { query: "runway", limit: 5 });
+        expect(result.details.results.some((hit: any) => String(hit.path).includes(".fusion/agent-memory/agent-memory-1/MEMORY.md"))).toBe(true);
+      } finally {
+        await cleanupTriageFixtureRoot(rootDir);
+      }
     });
   });
 });

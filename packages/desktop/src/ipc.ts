@@ -1,14 +1,17 @@
 import { app, type BrowserWindow, ipcMain, type Tray } from "electron";
-import { setupAutoUpdater, showExportSettingsDialog, showImportSettingsDialog } from "./native.js";
+import { setupAutoUpdater, showExportSettingsDialog, showImportSettingsDialog, type NormalizedDesktopRemoteLaunch } from "./native.js";
 import { type EngineStatus, updateTrayStatus } from "./tray.js";
 import {
+  applyDeleteProfile,
+  applySetActiveProfile,
+  buildSavedProfile,
   getDesktopShellModeState,
   readShellSettings,
   writeShellSettings,
   type DesktopShellMode,
   type ShellConnectionProfile,
 } from "./shell-settings.js";
-import type { DesktopLocalServerState } from "./local-server.js";
+import type { DesktopRuntimeStatus } from "./local-runtime.js";
 
 interface ShellConnectionProfileInput {
   id?: string;
@@ -26,40 +29,29 @@ interface ShellConnectionState {
   desktopMode?: DesktopShellMode;
   activeProfileId: string | null;
   profiles: ShellConnectionProfile[];
-  localServer?: DesktopLocalServerState;
+  localRuntime?: DesktopRuntimeStatus;
 }
+
+type DesktopLaunchMode = "choose" | "local" | "remote";
 
 interface RegisterIpcOptions {
   onDesktopModeChange?: (mode: DesktopShellMode) => Promise<void>;
-  getLocalServerState?: () => DesktopLocalServerState;
+  onDesktopLaunchModeChange?: (mode: DesktopLaunchMode) => Promise<void>;
+  getRuntimeStatus?: () => DesktopRuntimeStatus;
+  startLocalRuntime?: () => Promise<DesktopRuntimeStatus>;
+  stopLocalRuntime?: () => Promise<DesktopRuntimeStatus>;
   getServerPort?: () => number | undefined;
+  getDesktopLaunchMode?: () => DesktopLaunchMode;
+  getDesktopLaunchContext?: () => NormalizedDesktopRemoteLaunch | null;
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function createProfileId(): string {
-  return `profile_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function normalizeServerUrl(serverUrl: string): string {
-  const normalized = serverUrl.trim().replace(/\/$/, "");
-  let parsed: URL;
-  try {
-    parsed = new URL(normalized);
-  } catch {
-    throw new Error("Server URL must be a valid absolute URL");
-  }
-  if (!parsed.protocol || !/^https?:$/.test(parsed.protocol)) {
-    throw new Error("Server URL must use http or https");
-  }
-  return normalized;
+function isDesktopLaunchMode(value: unknown): value is DesktopLaunchMode {
+  return value === "choose" || value === "local" || value === "remote";
 }
 
 function toShellState(
   settings: Awaited<ReturnType<typeof readShellSettings>>,
-  localServerState?: DesktopLocalServerState,
+  runtimeStatus?: DesktopRuntimeStatus,
 ): ShellConnectionState {
   return {
     host: "desktop-shell",
@@ -67,15 +59,15 @@ function toShellState(
     desktopMode: settings.desktopMode ?? undefined,
     activeProfileId: settings.activeProfileId,
     profiles: settings.profiles,
-    localServer: localServerState ?? { status: "idle", error: null },
+    localRuntime: runtimeStatus ?? { source: "none", state: "stopped" },
   };
 }
 
 async function emitShellState(
   mainWindow: BrowserWindow,
-  getLocalServerState?: () => DesktopLocalServerState,
+  getRuntimeStatus?: () => DesktopRuntimeStatus,
 ): Promise<ShellConnectionState> {
-  const state = toShellState(await readShellSettings(), getLocalServerState?.());
+  const state = toShellState(await readShellSettings(), getRuntimeStatus?.());
   mainWindow.webContents.send("shell:state", state);
   return state;
 }
@@ -117,45 +109,55 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, tray: Tray, optio
   ipcMain.handle("native:showImportDialog", () => showImportSettingsDialog(mainWindow));
   ipcMain.handle("app:getServerPort", () => options.getServerPort?.());
 
-  ipcMain.handle("shell:getState", () => readShellSettings().then((settings) => toShellState(settings, options.getLocalServerState?.())));
+  ipcMain.handle("desktopRuntime:getStatus", async () => options.getRuntimeStatus?.() ?? { source: "none", state: "stopped" });
+  ipcMain.handle("desktopRuntime:startLocal", async () => options.startLocalRuntime?.() ?? { source: "none", state: "stopped" });
+  ipcMain.handle("desktopRuntime:stopLocal", async () => options.stopLocalRuntime?.() ?? { source: "none", state: "stopped" });
+  ipcMain.handle("desktopLaunchMode:getMode", async () => options.getDesktopLaunchMode?.() ?? "choose");
+  ipcMain.handle("desktopLaunchMode:getContext", async () => options.getDesktopLaunchContext?.() ?? null);
+  ipcMain.handle("desktopLaunchMode:setMode", async (_event, mode: unknown) => {
+    if (!isDesktopLaunchMode(mode)) {
+      throw new Error("Invalid desktop launch mode");
+    }
+
+    if (options.onDesktopLaunchModeChange) {
+      await options.onDesktopLaunchModeChange(mode);
+      return options.getDesktopLaunchMode?.() ?? mode;
+    }
+
+    if ((mode === "local" || mode === "remote") && options.onDesktopModeChange) {
+      await options.onDesktopModeChange(mode);
+      return options.getDesktopLaunchMode?.() ?? mode;
+    }
+
+    return options.getDesktopLaunchMode?.() ?? mode;
+  });
+
+  ipcMain.handle("shell:getState", () => readShellSettings().then((settings) => toShellState(settings, options.getRuntimeStatus?.())));
   ipcMain.handle("shell:listProfiles", async () => (await readShellSettings()).profiles);
 
   ipcMain.handle("shell:saveProfile", async (_event, profile: ShellConnectionProfileInput) => {
     const settings = await readShellSettings();
-    const existing = profile.id ? settings.profiles.find((item) => item.id === profile.id) : undefined;
-    const timestamp = nowIso();
-    const nextProfile: ShellConnectionProfile = {
-      id: existing?.id ?? profile.id ?? createProfileId(),
-      name: profile.name.trim(),
-      serverUrl: normalizeServerUrl(profile.serverUrl),
-      authToken: profile.authToken ?? null,
-      createdAt: existing?.createdAt ?? timestamp,
-      updatedAt: timestamp,
-      lastUsedAt: existing?.lastUsedAt ?? null,
-    };
+    const nextProfile = buildSavedProfile(settings, profile);
+    const existing = settings.profiles.find((item) => item.id === nextProfile.id);
 
-    settings.profiles = existing ? settings.profiles.map((item) => (item.id === existing.id ? nextProfile : item)) : [...settings.profiles, nextProfile];
+    settings.profiles = existing
+      ? settings.profiles.map((item) => (item.id === existing.id ? nextProfile : item))
+      : [...settings.profiles, nextProfile];
     await writeShellSettings(settings);
-    await emitShellState(mainWindow, options.getLocalServerState);
+    await emitShellState(mainWindow, options.getRuntimeStatus);
     return nextProfile;
   });
 
   ipcMain.handle("shell:deleteProfile", async (_event, profileId: string) => {
-    const settings = await readShellSettings();
-    settings.profiles = settings.profiles.filter((item) => item.id !== profileId);
-    if (settings.activeProfileId === profileId) settings.activeProfileId = null;
+    const settings = applyDeleteProfile(await readShellSettings(), profileId);
     await writeShellSettings(settings);
-    await emitShellState(mainWindow, options.getLocalServerState);
+    await emitShellState(mainWindow, options.getRuntimeStatus);
   });
 
   ipcMain.handle("shell:setActiveProfile", async (_event, profileId: string | null) => {
-    const settings = await readShellSettings();
-    settings.activeProfileId = profileId && settings.profiles.some((item) => item.id === profileId) ? profileId : null;
-    settings.profiles = settings.profiles.map((item) =>
-      item.id === settings.activeProfileId ? { ...item, lastUsedAt: nowIso(), updatedAt: nowIso() } : item,
-    );
+    const settings = applySetActiveProfile(await readShellSettings(), profileId);
     await writeShellSettings(settings);
-    return emitShellState(mainWindow, options.getLocalServerState);
+    return emitShellState(mainWindow, options.getRuntimeStatus);
   });
 
   ipcMain.handle("shell:getDesktopModeState", async () => {
@@ -169,7 +171,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, tray: Tray, optio
     settings.hasCompletedModeSelection = true;
     await writeShellSettings(settings);
     await options.onDesktopModeChange?.(mode);
-    return emitShellState(mainWindow, options.getLocalServerState);
+    return emitShellState(mainWindow, options.getRuntimeStatus);
   });
 
   ipcMain.handle("shell:startQrScan", async () => {

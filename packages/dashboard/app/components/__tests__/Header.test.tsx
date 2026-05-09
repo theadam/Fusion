@@ -63,10 +63,35 @@ describe("Header", () => {
     expect(screen.getByText("Fusion")).toBeDefined();
   });
 
+  it("applies shell host metadata on the header root", () => {
+    const { container } = renderHeader({ shellHost: { kind: "desktop-shell", mode: "remote", canOpenConnectionManager: true } });
+    expect(container.querySelector("header.header")?.getAttribute("data-shell-kind")).toBe("desktop-shell");
+  });
+
+  it("renders shell connection control when provided", () => {
+    renderHeader({ shellConnectionControl: <button type="button">Manage connections</button> });
+    expect(screen.getByRole("button", { name: "Manage connections" })).toBeInTheDocument();
+  });
+
+  it("does not render shell connection control when omitted", () => {
+    const { container } = renderHeader({ shellConnectionControl: undefined });
+    expect(container.querySelector(".shell-connection-status")).toBeNull();
+  });
+
   it("renders action buttons", () => {
     renderHeader();
     expect(screen.getByTitle("Import from GitHub")).toBeDefined();
     expect(screen.getByTitle("Settings")).toBeDefined();
+  });
+
+  it("hides GitHub import for desktop shell host", () => {
+    renderHeader({ shellHost: { kind: "desktop-shell" } });
+    expect(screen.queryByTitle("Import from GitHub")).toBeNull();
+  });
+
+  it("keeps GitHub import for mobile shell host", () => {
+    renderHeader({ shellHost: { kind: "mobile-shell" } });
+    expect(screen.getByTitle("Import from GitHub")).toBeDefined();
   });
 
   it("renders system stats button on desktop when handler is provided", () => {
@@ -143,6 +168,16 @@ describe("Header", () => {
       expect(screen.getByLabelText("Unread chat response")).toBeInTheDocument();
     });
 
+    it("shows mailbox pending-approval indicator when mailbox is not active", () => {
+      renderHeader({ onChangeView: noop, view: "board", mailboxPendingApprovalCount: 2 });
+      expect(screen.getByLabelText("Pending approvals")).toBeInTheDocument();
+    });
+
+    it("hides mailbox pending-approval indicator when mailbox view is active", () => {
+      renderHeader({ onChangeView: noop, view: "mailbox", mailboxPendingApprovalCount: 2 });
+      expect(screen.queryByLabelText("Pending approvals")).toBeNull();
+    });
+
     it("hides chat unread indicator when chat view is active", () => {
       renderHeader({ onChangeView: noop, view: "chat", chatHasUnreadResponse: true });
       expect(screen.queryByLabelText("Unread chat response")).toBeNull();
@@ -201,7 +236,7 @@ describe("Header", () => {
     it("hides legacy roadmaps overflow item when roadmap plugin view is present", () => {
       renderHeader({
         onChangeView: noop,
-        experimentalFeatures: { roadmap: true },
+        experimentalFeatures: {},
         pluginDashboardViews: [
           {
             pluginId: "fusion-plugin-roadmap",
@@ -228,7 +263,7 @@ describe("Header", () => {
       renderHeader({
         onChangeView: noop,
         showSkillsTab: false,
-        experimentalFeatures: { insights: false, roadmap: false, memoryView: false, devServerView: false, researchView: false },
+        experimentalFeatures: { insights: false, memoryView: false, devServerView: false, researchView: false },
       });
 
       fireEvent.click(screen.getByTestId("view-toggle-overflow-trigger"));
@@ -247,6 +282,24 @@ describe("Header", () => {
 
       expect(onChangeView).toHaveBeenCalledWith("research");
       expect(screen.queryByTestId("view-overflow-research")).toBeNull();
+    });
+
+    it("hides evals in the desktop view overflow when evalsView is disabled", () => {
+      renderHeader({ onChangeView: noop, experimentalFeatures: { evalsView: false } });
+
+      fireEvent.click(screen.getByTestId("view-toggle-overflow-trigger"));
+      expect(screen.queryByTestId("view-overflow-evals")).toBeNull();
+    });
+
+    it("routes to evals from the desktop view overflow when evalsView is enabled", () => {
+      const onChangeView = vi.fn();
+      renderHeader({ onChangeView, experimentalFeatures: { evalsView: true } });
+
+      fireEvent.click(screen.getByTestId("view-toggle-overflow-trigger"));
+      fireEvent.click(screen.getByTestId("view-overflow-evals"));
+
+      expect(onChangeView).toHaveBeenCalledWith("evals");
+      expect(screen.queryByTestId("view-overflow-evals")).toBeNull();
     });
   });
 

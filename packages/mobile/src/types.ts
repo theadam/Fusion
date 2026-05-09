@@ -38,6 +38,19 @@ export interface ShellConnectionState {
   };
 }
 
+export interface MobileRemoteShellLaunch {
+  shellKind: "mobile";
+  shellMode: "remote";
+  profileId: string;
+  serverBaseUrl: string;
+  serverLabel?: string;
+  token?: string;
+}
+
+export type MobileShellHandoffResult =
+  | { kind: "remote-launch"; url: string; launch: MobileRemoteShellLaunch }
+  | { kind: "fallback"; reason: "no-active-profile" | "missing-profile" | "invalid-server-url" };
+
 export interface FusionShellApi {
   getState(): Promise<ShellConnectionState>;
   listProfiles(): Promise<ShellConnectionProfile[]>;
@@ -48,4 +61,9 @@ export interface FusionShellApi {
   startQrScan(): Promise<{ serverUrl: string; authToken?: string | null }>;
   openConnectionManager(): Promise<void>;
   subscribe(listener: (state: ShellConnectionState) => void): () => void;
+}
+
+export interface MobileShellDashboardBridge {
+  getState?: () => Promise<ShellConnectionState>;
+  openConnectionManager?: () => Promise<void>;
 }

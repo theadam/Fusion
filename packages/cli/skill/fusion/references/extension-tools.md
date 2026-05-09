@@ -263,6 +263,33 @@ Start a stopped agent — resumes its execution. Transitions the agent from paus
 |-----------|------|----------|-------------|
 | `id` | string | ✓ | Agent ID to start (e.g., agent-abc123) |
 
+### fn_agent_create
+
+Create a new non-ephemeral agent.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | ✓ | Agent name |
+| `role` | string | ✓ | Agent role/capability |
+| `soul` | string | — | Agent personality/identity text |
+| `instructions_text` | string | — | Inline custom instructions |
+| `instructions_path` | string | — | Path to instructions markdown |
+| `reportsTo` | string | — | Manager agent ID |
+| `heartbeat_interval_ms` | number | — |  |
+| `heartbeat_timeout_ms` | number | — |  |
+| `max_concurrent_runs` | number | — |  |
+| `message_response_mode` | union | — |  |
+
+### fn_agent_delete
+
+Delete a non-ephemeral agent.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | ✓ | Agent ID to delete |
+| `force` | boolean | — | Force delete when holding checkout |
+| `reassign_to` | string | — | Optional replacement agent for assigned tasks |
+
 ### fn_list_agents
 
 List all available agents in the system. Shows each agent's name, role, state, personality (soul), and current assignment. Use this to discover which agents exist and what they specialize in before delegating work.
@@ -282,6 +309,7 @@ Create a new task and assign it to a specific agent for execution. The task goes
 | `agent_id` | string | ✓ | The agent ID to delegate work to |
 | `description` | string | ✓ | What needs to be done |
 | `dependencies` | array | — | Task IDs this new task depends on (e.g. [\"KB-001\"] |
+| `override` | boolean | — | Set true to bypass executor-role assignment policy |
 
 ### fn_agent_show
 
@@ -362,6 +390,17 @@ Show a single insight-generation run by ID.
 | `id` | string | ✓ | Insight run ID (e.g. INSR-XXXXX) |
 
 ## Other Tools
+
+### fn_web_fetch
+
+Lightweight URL fetch (no JS rendering). Use agent-browser skill for JS-heavy pages. URL to fetch (http/https) Optional extraction hint for downstream summarization Timeout in milliseconds (default: 30000) Max bytes to return (default: 512000)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | ✓ | URL to fetch (http/https) |
+| `prompt` | string | — | Optional extraction hint for downstream summarization |
+| `timeoutMs` | number | — | Timeout in milliseconds (default: 30000) |
+| `maxBytes` | number | — | Max bytes to return (default: 512000) |
 
 ### fn_research_run
 

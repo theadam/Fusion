@@ -65,6 +65,9 @@ import type {
   SettingsSyncResult,
   GlobalSettings,
   ProviderAuthEntry,
+  ProjectNodePathMapping,
+  ProjectNodePathMappingUpsertInput,
+  ProjectNodePathMappingDeleteInput,
 } from "./types.js";
 import { getAppVersion, parseSemver } from "./app-version.js";
 import { validateDockerNodeConfig } from "./types.js";
@@ -294,6 +297,21 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
         toJsonNullable(project.settings)
       );
 
+      const localNode = this.db!
+        .prepare("SELECT id FROM nodes WHERE type = 'local' ORDER BY createdAt ASC LIMIT 1")
+        .get() as { id: string } | undefined;
+      if (localNode) {
+        this.db!
+          .prepare(
+            `INSERT INTO projectNodePathMappings (projectId, nodeId, path, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(projectId, nodeId) DO UPDATE SET
+               path = excluded.path,
+               updatedAt = excluded.updatedAt`
+          )
+          .run(project.id, localNode.id, project.path, now, now);
+      }
+
       // Initialize health record
       this.db!.prepare(
         `INSERT INTO projectHealth (projectId, status, updatedAt, totalTasksCompleted, totalTasksFailed)
@@ -438,28 +456,48 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
       updatedAt: now,
     };
 
-    this.db!.prepare(
-      `UPDATE projects SET
-        name = ?,
-        path = ?,
-        status = ?,
-        isolationMode = ?,
-        updatedAt = ?,
-        lastActivityAt = ?,
-        nodeId = ?,
-        settings = ?
-       WHERE id = ?`
-    ).run(
-      updated.name,
-      updated.path,
-      updated.status,
-      updated.isolationMode,
-      updated.updatedAt,
-      updated.lastActivityAt ?? null,
-      updated.nodeId ?? null,
-      toJsonNullable(updated.settings),
-      id
-    );
+    this.db!.transaction(() => {
+      this.db!.prepare(
+        `UPDATE projects SET
+          name = ?,
+          path = ?,
+          status = ?,
+          isolationMode = ?,
+          updatedAt = ?,
+          lastActivityAt = ?,
+          nodeId = ?,
+          settings = ?
+         WHERE id = ?`
+      ).run(
+        updated.name,
+        updated.path,
+        updated.status,
+        updated.isolationMode,
+        updated.updatedAt,
+        updated.lastActivityAt ?? null,
+        updated.nodeId ?? null,
+        toJsonNullable(updated.settings),
+        id
+      );
+
+      if (updated.path !== project.path) {
+        const localNode = this.db!
+          .prepare("SELECT id FROM nodes WHERE type = 'local' ORDER BY createdAt ASC LIMIT 1")
+          .get() as { id: string } | undefined;
+
+        if (localNode) {
+          this.db!
+            .prepare(
+              `INSERT INTO projectNodePathMappings (projectId, nodeId, path, createdAt, updatedAt)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(projectId, nodeId) DO UPDATE SET
+                 path = excluded.path,
+                 updatedAt = excluded.updatedAt`
+            )
+            .run(id, localNode.id, updated.path, now, now);
+        }
+      }
+    });
 
     this.db!.bumpLastModified();
     this.emit("project:updated", updated);
@@ -1655,6 +1693,231 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
     return updated;
   }
 
+  async createProjectNodePathMapping(input: ProjectNodePathMappingUpsertInput): Promise<ProjectNodePathMapping> {
+    this.ensureInitialized();
+
+    await this.assertProjectNodeMappingTargetsExist(input.projectId, input.nodeId);
+
+    const existing = await this.getProjectNodePathMapping(input.projectId, input.nodeId);
+    if (existing) {
+      throw new Error(`Project/node mapping already exists: ${input.projectId}/${input.nodeId}`);
+    }
+
+    const now = new Date().toISOString();
+    this.db!
+      .prepare(
+        `INSERT INTO projectNodePathMappings (projectId, nodeId, path, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(input.projectId, input.nodeId, input.path, now, now);
+    this.db!.bumpLastModified();
+
+    return {
+      projectId: input.projectId,
+      nodeId: input.nodeId,
+      path: input.path,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  async updateProjectNodePathMapping(input: ProjectNodePathMappingUpsertInput): Promise<ProjectNodePathMapping> {
+    this.ensureInitialized();
+
+    await this.assertProjectNodeMappingTargetsExist(input.projectId, input.nodeId);
+
+    const existing = await this.getProjectNodePathMapping(input.projectId, input.nodeId);
+    if (!existing) {
+      throw new Error(`Project/node mapping not found: ${input.projectId}/${input.nodeId}`);
+    }
+
+    const now = new Date().toISOString();
+    this.db!
+      .prepare(
+        `UPDATE projectNodePathMappings
+         SET path = ?, updatedAt = ?
+         WHERE projectId = ? AND nodeId = ?`
+      )
+      .run(input.path, now, input.projectId, input.nodeId);
+    this.db!.bumpLastModified();
+
+    return {
+      ...existing,
+      path: input.path,
+      updatedAt: now,
+    };
+  }
+
+  async getProjectNodePathMapping(
+    projectId: string,
+    nodeId: string,
+  ): Promise<ProjectNodePathMapping | undefined> {
+    this.ensureInitialized();
+
+    const row = this.db!
+      .prepare("SELECT * FROM projectNodePathMappings WHERE projectId = ? AND nodeId = ?")
+      .get(projectId, nodeId) as
+      | {
+          projectId: string;
+          nodeId: string;
+          path: string;
+          createdAt: string;
+          updatedAt: string;
+        }
+      | undefined;
+
+    return row ? this.rowToProjectNodePathMapping(row) : undefined;
+  }
+
+  async getProjectNodePath(projectId: string, nodeId: string): Promise<string | undefined> {
+    this.ensureInitialized();
+
+    const row = this.db!
+      .prepare("SELECT path FROM projectNodePathMappings WHERE projectId = ? AND nodeId = ?")
+      .get(projectId, nodeId) as { path: string } | undefined;
+
+    return row?.path;
+  }
+
+  async resolveProjectWorkingDirectory(projectId: string, nodeId: string): Promise<string> {
+    this.ensureInitialized();
+
+    const project = await this.getProject(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const node = await this.getNode(nodeId);
+    if (!node) {
+      throw new Error(`Node not found: ${nodeId}`);
+    }
+
+    const mappedPath = await this.getProjectNodePath(projectId, nodeId);
+    if (!mappedPath) {
+      throw new Error(
+        `Project/node path mapping not found for projectId=${projectId} nodeId=${nodeId}`,
+      );
+    }
+
+    return mappedPath;
+  }
+
+  async resolveLocalProjectWorkingDirectory(projectId: string): Promise<string> {
+    this.ensureInitialized();
+
+    const localNode = await this.getLocalNode();
+    if (!localNode) {
+      throw new Error("Local node not found");
+    }
+
+    return this.resolveProjectWorkingDirectory(projectId, localNode.id);
+  }
+
+  async listProjectNodePathMappings(filters?: {
+    projectId?: string;
+    nodeId?: string;
+  }): Promise<ProjectNodePathMapping[]> {
+    this.ensureInitialized();
+
+    if (filters?.projectId && filters?.nodeId) {
+      const row = await this.getProjectNodePathMapping(filters.projectId, filters.nodeId);
+      return row ? [row] : [];
+    }
+
+    if (filters?.projectId) {
+      const rows = this.db!
+        .prepare("SELECT * FROM projectNodePathMappings WHERE projectId = ? ORDER BY nodeId")
+        .all(filters.projectId) as Array<{
+        projectId: string;
+        nodeId: string;
+        path: string;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+      return rows.map((row) => this.rowToProjectNodePathMapping(row));
+    }
+
+    if (filters?.nodeId) {
+      const rows = this.db!
+        .prepare("SELECT * FROM projectNodePathMappings WHERE nodeId = ? ORDER BY projectId")
+        .all(filters.nodeId) as Array<{
+        projectId: string;
+        nodeId: string;
+        path: string;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+      return rows.map((row) => this.rowToProjectNodePathMapping(row));
+    }
+
+    const rows = this.db!
+      .prepare("SELECT * FROM projectNodePathMappings ORDER BY projectId, nodeId")
+      .all() as Array<{
+      projectId: string;
+      nodeId: string;
+      path: string;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+    return rows.map((row) => this.rowToProjectNodePathMapping(row));
+  }
+
+  async listProjectNodePathMappingsForProject(projectId: string): Promise<ProjectNodePathMapping[]> {
+    this.ensureInitialized();
+
+    const project = await this.getProject(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    return this.listProjectNodePathMappings({ projectId });
+  }
+
+  async listProjectNodePathMappingsForNode(nodeId: string): Promise<ProjectNodePathMapping[]> {
+    this.ensureInitialized();
+
+    const node = await this.getNode(nodeId);
+    if (!node) {
+      throw new Error(`Node not found: ${nodeId}`);
+    }
+
+    return this.listProjectNodePathMappings({ nodeId });
+  }
+
+  async upsertProjectNodePathMapping(input: ProjectNodePathMappingUpsertInput): Promise<ProjectNodePathMapping> {
+    this.ensureInitialized();
+
+    const existing = await this.getProjectNodePathMapping(input.projectId, input.nodeId);
+    if (existing) {
+      return this.updateProjectNodePathMapping(input);
+    }
+
+    return this.createProjectNodePathMapping(input);
+  }
+
+  async removeProjectNodePathMapping(
+    inputOrProjectId: ProjectNodePathMappingDeleteInput | string,
+    nodeIdArg?: string,
+  ): Promise<void> {
+    this.ensureInitialized();
+
+    const projectId =
+      typeof inputOrProjectId === "string" ? inputOrProjectId : inputOrProjectId.projectId;
+    const nodeId = typeof inputOrProjectId === "string" ? nodeIdArg : inputOrProjectId.nodeId;
+
+    if (!nodeId) {
+      throw new Error("Node ID is required");
+    }
+
+    const result = this.db!
+      .prepare("DELETE FROM projectNodePathMappings WHERE projectId = ? AND nodeId = ?")
+      .run(projectId, nodeId) as { changes?: number };
+
+    if ((result.changes ?? 0) > 0) {
+      this.db!.bumpLastModified();
+    }
+  }
+
   // ── Project Health API ──────────────────────────────────────────────────
 
   /**
@@ -2216,6 +2479,18 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
     }
   }
 
+  private async assertProjectNodeMappingTargetsExist(projectId: string, nodeId: string): Promise<void> {
+    const project = await this.getProject(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const node = await this.getNode(nodeId);
+    if (!node) {
+      throw new Error(`Node not found: ${nodeId}`);
+    }
+  }
+
   private rowToProject(row: {
     id: string;
     name: string;
@@ -2339,6 +2614,22 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
       status: row.status as NodeStatus,
       lastSeen: row.lastSeen,
       connectedAt: row.connectedAt,
+    };
+  }
+
+  private rowToProjectNodePathMapping(row: {
+    projectId: string;
+    nodeId: string;
+    path: string;
+    createdAt: string;
+    updatedAt: string;
+  }): ProjectNodePathMapping {
+    return {
+      projectId: row.projectId,
+      nodeId: row.nodeId,
+      path: row.path,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
     };
   }
 
@@ -2863,11 +3154,11 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
   async applyProjectSettingsSnapshot(snapshot: ProjectSettingsSnapshot): Promise<SettingsSyncResult> {
     validateSnapshotEnvelope(snapshot);
     const payloadWithoutChecksum: Omit<SettingsSyncPayload, "checksum"> = {
-      version: 1,
-      exportedAt: snapshot.exportedAt,
       global: snapshot.payload.global,
       projects: snapshot.payload.projects,
       providerAuth: undefined,
+      exportedAt: snapshot.exportedAt,
+      version: 1,
     };
     const checksum = createHash("sha256")
       .update(JSON.stringify(payloadWithoutChecksum))
@@ -2880,9 +3171,14 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
     return createAuthMaterialSnapshot(providerAuth);
   }
 
-  applyAuthMaterialSnapshot(snapshot: AuthMaterialSnapshot): Record<string, ProviderAuthEntry> {
+  applyAuthMaterialSnapshot(snapshot: AuthMaterialSnapshot): { success: true; authCount: number; providerAuth: Record<string, ProviderAuthEntry> } {
     validateSnapshotEnvelope(snapshot);
-    return { ...(snapshot.payload.providerAuth ?? {}) };
+    const providerAuth = { ...(snapshot.payload.providerAuth ?? {}) };
+    return {
+      success: true,
+      authCount: Object.keys(providerAuth).length,
+      providerAuth,
+    };
   }
 
   // ── Settings Sync API ─────────────────────────────────────────────────

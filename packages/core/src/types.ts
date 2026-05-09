@@ -1,3 +1,4 @@
+
 /** Valid thinking effort levels for AI agent sessions, controlling the cost/quality tradeoff of reasoning. */
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
@@ -227,7 +228,9 @@ export type NtfyNotificationEvent =
   | "planning-awaiting-input"
   | "gridlock"
   | "fallback-used"
-  | "memory-dreams-processed";
+  | "memory-dreams-processed"
+  | "message:agent-to-user"
+  | "message:agent-to-agent";
 
 /** Known notification event types. Providers may support additional custom events. */
 export const NOTIFICATION_EVENTS = [
@@ -240,6 +243,8 @@ export const NOTIFICATION_EVENTS = [
   "gridlock",
   "fallback-used",
   "memory-dreams-processed",
+  "message:agent-to-user",
+  "message:agent-to-agent",
 ] as const;
 
 /** Notification event type. Known events plus provider-specific custom events. */
@@ -699,6 +704,177 @@ export interface TaskCommentInput {
   author: string;
 }
 
+export type TaskReviewMode = "pull-request" | "direct";
+export type TaskReviewSource = "github-pr" | "reviewer-agent";
+export type TaskReviewDecision = "approved" | "changes-requested" | "commented" | "pending";
+export type TaskReviewVerdict = "APPROVE" | "REVISE" | "RETHINK" | "UNAVAILABLE";
+export type TaskReviewerType = "plan" | "code";
+export type TaskReviewItemStatus = "queued" | "in-progress" | "addressed" | "failed";
+
+export interface LegacyTaskReviewItem {
+  id: string;
+  source: TaskReviewSource;
+  status: TaskReviewItemStatus;
+  summary: string;
+  body?: string;
+  filePath?: string;
+  line?: number;
+  commentUrl?: string;
+  reviewer?: string;
+  createdAt: string;
+  updatedAt: string;
+  addressedAt?: string;
+  failedReason?: string;
+}
+
+export interface TaskReview {
+  mode: TaskReviewMode;
+  source: TaskReviewSource;
+  decision: TaskReviewDecision;
+  summary?: string;
+  latestRefreshAt?: string;
+  selectedItemIds?: string[];
+  items: LegacyTaskReviewItem[];
+}
+
+export type PrCheckState =
+  | "success"
+  | "pending"
+  | "failure"
+  | "cancelled"
+  | "timed_out"
+  | "action_required"
+  | "neutral"
+  | "skipped"
+  | "stale"
+  | "startup_failure";
+
+export interface PrCheckStatus {
+  name: string;
+  required: boolean;
+  state: PrCheckState;
+}
+
+export interface TaskReviewAuthor {
+  login: string;
+}
+
+export interface PrTaskReviewSummaryReviewer {
+  login: string;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "PENDING";
+  submittedAt?: string;
+}
+
+export interface PrTaskReviewSummary {
+  reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  reviewers: PrTaskReviewSummaryReviewer[];
+  blockingReasons: string[];
+  checks: PrCheckStatus[];
+}
+
+export interface TaskReviewStateItem {
+  id: string;
+  threadId?: string;
+  githubCommentId?: number;
+  path?: string;
+  diffSide?: string;
+  body: string;
+  author: TaskReviewAuthor;
+  createdAt: string;
+  updatedAt?: string;
+  state?: string;
+  htmlUrl?: string;
+  isResolved?: boolean;
+  source?: TaskReviewSource;
+  reviewType?: TaskReviewerType;
+  verdict?: TaskReviewVerdict;
+  step?: number;
+  summary?: string;
+}
+
+export type ReviewAddressingStatus = "queued" | "in-progress" | "addressed" | "failed";
+
+export interface ReviewAddressingSnapshot {
+  itemId: string;
+  sourceMode: "pull-request" | "reviewer-agent";
+  source: "pr-review" | "reviewer-agent";
+  summary: string;
+  body: string;
+  authorLogin?: string;
+  filePath?: string;
+  lineNumber?: number;
+  threadId?: string;
+  url?: string;
+}
+
+export interface ReviewAddressingRecord {
+  itemId: string;
+  status: ReviewAddressingStatus;
+  selectedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+  stale?: boolean;
+  snapshot?: ReviewAddressingSnapshot;
+}
+
+export interface ReviewerTaskReviewSummary {
+  verdict?: TaskReviewVerdict;
+  reviewType?: TaskReviewerType;
+  summary?: string;
+}
+
+export type TaskReviewRefreshSource = "manual" | "auto" | "initial-load";
+export type TaskReviewRefreshStatus = "idle" | "refreshing" | "ready" | "error";
+
+export interface TaskReviewState {
+  source: "pull-request" | "reviewer-agent";
+  lastRefreshedAt?: string;
+  refreshSource?: TaskReviewRefreshSource;
+  refreshStatus?: TaskReviewRefreshStatus;
+  refreshError?: string;
+  summary?: PrTaskReviewSummary | ReviewerTaskReviewSummary;
+  items: TaskReviewStateItem[];
+  addressing: ReviewAddressingRecord[];
+}
+
+export interface TaskReviewSummary {
+  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  reviewers?: PrTaskReviewSummaryReviewer[];
+  blockingReasons?: string[];
+  checks?: PrCheckStatus[];
+  verdict?: TaskReviewVerdict;
+  reviewType?: TaskReviewerType;
+  summary?: string;
+}
+
+export interface TaskReviewDataItem {
+  itemId: string;
+  sourceMode: "pull-request" | "reviewer-agent";
+  title: string;
+  body: string;
+  author: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  url?: string;
+  filePath?: string;
+  line?: number;
+  threadId?: string;
+  reviewState?: string | null;
+  isResolved?: boolean;
+  progressStatus?: "queued" | "in-progress" | "addressed" | "failed" | null;
+}
+
+export type TaskReviewItem = TaskReviewDataItem;
+
+export interface TaskReviewData {
+  mode: "pull-request" | "reviewer-agent";
+  refreshable: boolean;
+  fetchedAt: string | null;
+  summary: TaskReviewSummary | null;
+  items: TaskReviewItem[];
+}
+
 export interface TaskDocument {
   /** UUID primary key */
   id: string;
@@ -918,6 +1094,10 @@ export interface Task {
   attachments?: TaskAttachment[];
   steeringComments?: SteeringComment[];
   comments?: TaskComment[];
+  /** Structured review metadata shown in the Review tab (legacy contract). */
+  review?: TaskReview;
+  /** Structured review metadata shown in the Review tab (canonical contract). */
+  reviewState?: TaskReviewState;
   /** PR information for tasks linked to GitHub pull requests */
   prInfo?: PrInfo;
   mergeDetails?: MergeDetails;
@@ -2339,6 +2519,10 @@ export interface ArchivedTaskEntry {
   attachments?: TaskAttachment[];
   /** User and agent comments remain searchable in the archive DB. */
   comments?: TaskComment[];
+  /** Structured review metadata shown in the Review tab (legacy contract). */
+  review?: TaskReview;
+  /** Structured review metadata shown in the Review tab (canonical contract). */
+  reviewState?: TaskReviewState;
   /** Reconstructed prompt content at archive time, without attachment blobs. */
   prompt?: string;
   /** Agent log retention mode used when this archive entry was written. */
@@ -2535,6 +2719,33 @@ export interface PeerInfo {
 }
 
 /** Request payload sent when a node initiates a peer sync. */
+export interface SnapshotBase {
+  version: number;
+  exportedAt: string;
+  checksum: string;
+}
+
+export interface SharedMeshStatePayload {
+  taskMetadata?: SnapshotBase & { payload: { tasks: Task[] } };
+  missionHierarchy?: SnapshotBase & {
+    payload: {
+      missions: import("./mission-types.js").Mission[];
+      milestones: import("./mission-types.js").Milestone[];
+      slices: import("./mission-types.js").Slice[];
+      features: import("./mission-types.js").MissionFeature[];
+      missionEvents: import("./mission-types.js").MissionEvent[];
+      assertions: import("./mission-types.js").MissionContractAssertion[];
+      featureAssertionLinks: import("./mission-types.js").FeatureAssertionLink[];
+    };
+  };
+  agents?: SnapshotBase & { payload: { agents: Agent[]; blockedStates: { agentId: string; state: BlockedStateSnapshot }[] } };
+  agentRuns?: SnapshotBase & { payload: { runs: AgentHeartbeatRun[] } };
+  activityLog?: SnapshotBase & { payload: { entries: ActivityLogEntry[] } };
+  runAudit?: SnapshotBase & { payload: { entries: RunAuditEvent[] } };
+  projectSettings?: SnapshotBase & { payload: { global: GlobalSettings; projects?: Record<string, ProjectSettings> } };
+  authMaterial?: SnapshotBase & { payload: { providerAuth?: Record<string, ProviderAuthEntry> } };
+}
+
 export interface PeerSyncRequest {
   /** Node ID of the sender. */
   senderNodeId: string;
@@ -2546,6 +2757,8 @@ export interface PeerSyncRequest {
   timestamp: string;
   /** Optional settings sync payload included in the request. */
   settings?: SettingsSyncPayload;
+  /** Optional shared-state payload included in the request. */
+  sharedState?: SharedMeshStatePayload;
 }
 
 /** Response payload returned after a peer sync exchange. */
@@ -2562,6 +2775,8 @@ export interface PeerSyncResponse {
   timestamp: string;
   /** Optional settings sync payload included in the response. */
   settings?: SettingsSyncPayload;
+  /** Optional shared-state payload included in the response. */
+  sharedState?: SharedMeshStatePayload;
 }
 
 /** A single provider's authentication credential for sync transport. */
@@ -2572,6 +2787,12 @@ export interface ProviderAuthEntry {
   key?: string;
   /** OAuth access token (for "oauth" type). Omitted for API key providers. */
   accessToken?: string;
+  /** OAuth refresh token (for "oauth" type). */
+  refreshToken?: string;
+  /** OAuth credential expiry epoch milliseconds. */
+  expires?: number;
+  /** Optional OAuth account identifier. */
+  accountId?: string;
   /** Whether this credential has been validated. */
   authenticated?: boolean;
 }
@@ -3251,6 +3472,33 @@ export interface RegisteredProject {
 /** @deprecated Use RegisteredProject instead */
 export type ProjectInfo = RegisteredProject;
 
+/** A persisted per-project, per-node working directory path mapping. */
+export interface ProjectNodePathMapping {
+  /** Project ID reference */
+  projectId: string;
+  /** Node ID reference */
+  nodeId: string;
+  /** Absolute working-directory path for this project on this node */
+  path: string;
+  /** ISO-8601 timestamp of creation */
+  createdAt: string;
+  /** ISO-8601 timestamp of last update */
+  updatedAt: string;
+}
+
+/** Input payload for creating/updating a project-node path mapping. */
+export interface ProjectNodePathMappingUpsertInput {
+  projectId: string;
+  nodeId: string;
+  path: string;
+}
+
+/** Input payload for deleting a project-node path mapping. */
+export interface ProjectNodePathMappingDeleteInput {
+  projectId: string;
+  nodeId: string;
+}
+
 /** Health metrics for a registered project */
 export interface ProjectHealth {
   /** Project ID reference */
@@ -3325,6 +3573,7 @@ export interface PlanningSummary {
   title: string;
   description: string;
   suggestedSize: "S" | "M" | "L";
+  priority?: TaskPriority;
   suggestedDependencies: string[];
   keyDeliverables: string[];
 }
@@ -3630,6 +3879,224 @@ export const AGENT_PERMISSIONS = [
 /** A single canonical permission string. */
 export type AgentPermission = (typeof AGENT_PERMISSIONS)[number];
 
+/**
+ * Canonical v1 action categories for permanent-agent runtime gating.
+ *
+ * `none` is a classifier-only result for positively-recognized read-only actions.
+ * It is never stored as a policy rule key.
+ */
+export const PERMANENT_AGENT_ACTION_CATEGORIES = [
+  "git_write",
+  "file_write_delete",
+  "command_execution",
+  "network_api",
+  "task_agent_mutation",
+  "none",
+] as const;
+
+/** A single v1 permanent-agent action category. */
+export type PermanentAgentActionCategory = (typeof PERMANENT_AGENT_ACTION_CATEGORIES)[number];
+
+/** Sensitive runtime categories covered by policy rules (excludes classifier-only `none`). */
+export type PermanentAgentSensitiveActionCategory = Exclude<PermanentAgentActionCategory, "none">;
+
+/** Runtime action categories governed by agent permission policy presets. */
+export const AGENT_PERMISSION_POLICY_ACTION_CATEGORIES: readonly PermanentAgentSensitiveActionCategory[] = [
+  "git_write",
+  "file_write_delete",
+  "command_execution",
+  "network_api",
+  "task_agent_mutation",
+] as const;
+
+/** A single runtime action category governed by permission policy. */
+export type AgentPermissionPolicyActionCategory = PermanentAgentSensitiveActionCategory;
+
+/** How a runtime action category is handled by permission policy. */
+export type AgentPermissionPolicyDisposition = "allow" | "block" | "require-approval";
+
+/** Minimum portable permanent-agent gating context consumed by engine runtime wrappers. */
+export interface PermanentAgentGatingContext {
+  permissionPolicy?: {
+    presetId: string;
+    rules: Partial<Record<PermanentAgentSensitiveActionCategory, AgentPermissionPolicyDisposition>>;
+  };
+  requester?: ApprovalRequestActorSnapshot;
+  taskId?: string;
+  runId?: string;
+  sessionId?: string;
+  createApprovalRequest?: (input: {
+    category: AgentPermissionPolicyActionCategory;
+    toolName: string;
+    args: Record<string, unknown>;
+  }) => Promise<ApprovalRequest | null>;
+  findPendingApprovalRequest?: (dedupeKey: string) => Promise<ApprovalRequest | null>;
+}
+
+/** Built-in permission policy preset identifiers for permanent agents. */
+export const AGENT_PERMISSION_POLICY_PRESET_IDS = ["unrestricted", "approval-required", "locked-down"] as const;
+
+/** A single built-in permission policy preset identifier. */
+export type AgentPermissionPolicyPresetId = (typeof AGENT_PERMISSION_POLICY_PRESET_IDS)[number];
+
+/** Canonical category->disposition map for a permission policy. */
+export type AgentPermissionPolicyRules = Record<
+  AgentPermissionPolicyActionCategory,
+  AgentPermissionPolicyDisposition
+>;
+
+/** First-class persisted permission policy contract for permanent agents. */
+export interface AgentPermissionPolicy {
+  presetId: AgentPermissionPolicyPresetId;
+  rules: AgentPermissionPolicyRules;
+}
+
+/** Approval request lifecycle statuses. */
+export const APPROVAL_REQUEST_STATUSES = ["pending", "approved", "denied", "completed"] as const;
+
+/** A single approval request lifecycle status. */
+export type ApprovalRequestStatus = (typeof APPROVAL_REQUEST_STATUSES)[number];
+
+/** Append-only audit event types for approval requests. */
+export const APPROVAL_REQUEST_AUDIT_EVENT_TYPES = [
+  "created",
+  "approved",
+  "denied",
+  "completed",
+] as const;
+
+/** A single append-only audit event type for approval requests. */
+export type ApprovalRequestAuditEventType = (typeof APPROVAL_REQUEST_AUDIT_EVENT_TYPES)[number];
+
+/** Immutable actor identity snapshot captured at request/audit event time. */
+export interface ApprovalRequestActorSnapshot {
+  actorId: string;
+  actorType: "agent" | "user" | "system";
+  actorName: string;
+}
+
+/** Legacy action-category aliases accepted for backward compatibility. */
+export const LEGACY_AGENT_PERMISSION_POLICY_ACTION_CATEGORY_ALIASES = [
+  "file_write",
+  "file_delete",
+  "command_execute",
+  "network_access",
+  "task_mutation",
+  "agent_mutation",
+] as const;
+
+export type LegacyAgentPermissionPolicyActionCategory =
+  (typeof LEGACY_AGENT_PERMISSION_POLICY_ACTION_CATEGORY_ALIASES)[number];
+
+/** Canonical + compatibility action-category input accepted at boundaries. */
+export type ApprovalRequestActionCategoryInput =
+  | AgentPermissionPolicyActionCategory
+  | LegacyAgentPermissionPolicyActionCategory;
+
+/** Normalize legacy action-category aliases to canonical v1 categories. */
+export function normalizeApprovalRequestActionCategory(
+  category: ApprovalRequestActionCategoryInput,
+): AgentPermissionPolicyActionCategory {
+  switch (category) {
+    case "file_write":
+    case "file_delete":
+      return "file_write_delete";
+    case "command_execute":
+      return "command_execution";
+    case "network_access":
+      return "network_api";
+    case "task_mutation":
+    case "agent_mutation":
+      return "task_agent_mutation";
+    default:
+      return category;
+  }
+}
+
+/** Action payload gated by an approval request. */
+export interface ApprovalRequestTargetAction {
+  category: AgentPermissionPolicyActionCategory;
+  action: string;
+  summary: string;
+  resourceType: string;
+  resourceId: string;
+  context?: Record<string, unknown>;
+}
+
+/** Append-only audit event row for approval request history. */
+export interface ApprovalRequestAuditEvent {
+  id: string;
+  requestId: string;
+  eventType: ApprovalRequestAuditEventType;
+  actor: ApprovalRequestActorSnapshot;
+  note?: string;
+  createdAt: string;
+}
+
+/** Durable approval request record used by engine and dashboard surfaces. */
+export interface ApprovalRequest {
+  id: string;
+  status: ApprovalRequestStatus;
+  requester: ApprovalRequestActorSnapshot;
+  targetAction: ApprovalRequestTargetAction;
+  taskId?: string;
+  runId?: string;
+  requestedAt: string;
+  decidedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Create input for a new pending approval request. */
+export interface ApprovalRequestCreateInput {
+  requester: ApprovalRequestActorSnapshot;
+  targetAction: Omit<ApprovalRequestTargetAction, "category"> & {
+    category: ApprovalRequestActionCategoryInput;
+  };
+  taskId?: string;
+  runId?: string;
+}
+
+/** Input for pending->approved / pending->denied decisions. */
+export interface ApprovalRequestDecisionInput {
+  actor: ApprovalRequestActorSnapshot;
+  note?: string;
+}
+
+/** Input for approved->completed transition. */
+export interface ApprovalRequestCompletionInput {
+  actor: ApprovalRequestActorSnapshot;
+  note?: string;
+}
+
+/** Query filters for approval request listings. */
+export interface ApprovalRequestListInput {
+  status?: ApprovalRequestStatus;
+  requesterActorId?: string;
+  taskId?: string;
+  runId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** True when a transition is valid for approval request lifecycle rules. */
+export function isValidApprovalRequestTransition(
+  from: ApprovalRequestStatus,
+  to: ApprovalRequestStatus,
+): boolean {
+  if (from === to) {
+    return true;
+  }
+  if (from === "pending") {
+    return to === "approved" || to === "denied";
+  }
+  if (from === "approved") {
+    return to === "completed";
+  }
+  return false;
+}
+
 /** Describes how an agent's task assignment capability was determined. */
 export type TaskAssignSource =
   | "role_default" // Granted automatically by role (e.g., scheduler gets tasks:assign)
@@ -3700,12 +4167,16 @@ export interface Agent {
   pauseReason?: string;
   /** Capability permission flags */
   permissions?: Record<string, boolean>;
+  /** Runtime action gating policy (preset + normalized category rules). */
+  permissionPolicy?: AgentPermissionPolicy;
   /** Cumulative input tokens across all runs */
   totalInputTokens?: number;
   /** Cumulative output tokens across all runs */
   totalOutputTokens?: number;
   /** Last error message */
   lastError?: string;
+  /** Number of currently pending approvals requested by this agent. */
+  pendingApprovalCount?: number;
   /** Path to a markdown file containing custom instructions (resolved relative to project root).
    *  Must end in `.md`, no `..` traversal. Max 500 chars. */
   instructionsPath?: string;
@@ -3842,6 +4313,7 @@ export interface AgentCreateInput {
   reportsTo?: string;
   runtimeConfig?: Record<string, unknown>;
   permissions?: Record<string, boolean>;
+  permissionPolicy?: AgentPermissionPolicy;
   instructionsPath?: string;
   instructionsText?: string;
   soul?: string;
@@ -3862,6 +4334,7 @@ export interface AgentUpdateInput {
   runtimeConfig?: Record<string, unknown>;
   pauseReason?: string;
   permissions?: Record<string, boolean>;
+  permissionPolicy?: AgentPermissionPolicy;
   lastError?: string;
   totalInputTokens?: number;
   totalOutputTokens?: number;
@@ -3959,6 +4432,7 @@ export interface AgentConfigSnapshot {
   reportsTo?: string;
   runtimeConfig?: Record<string, unknown>;
   permissions?: Record<string, boolean>;
+  permissionPolicy?: AgentPermissionPolicy;
   instructionsPath?: string;
   instructionsText?: string;
   soul?: string;
@@ -4088,6 +4562,12 @@ export function agentToConfigSnapshot(agent: Agent): AgentConfigSnapshot {
     reportsTo: agent.reportsTo,
     runtimeConfig: agent.runtimeConfig ? { ...agent.runtimeConfig } : undefined,
     permissions: agent.permissions ? { ...agent.permissions } : undefined,
+    permissionPolicy: agent.permissionPolicy
+      ? {
+          presetId: agent.permissionPolicy.presetId,
+          rules: { ...agent.permissionPolicy.rules },
+        }
+      : undefined,
     instructionsPath: agent.instructionsPath,
     instructionsText: agent.instructionsText,
     soul: agent.soul,
@@ -4117,6 +4597,7 @@ export function diffConfigSnapshots(
     "reportsTo",
     "runtimeConfig",
     "permissions",
+    "permissionPolicy",
     "instructionsPath",
     "instructionsText",
     "soul",

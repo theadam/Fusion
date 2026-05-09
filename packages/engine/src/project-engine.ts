@@ -224,6 +224,7 @@ export class ProjectEngine {
     // cause `internalEnqueueMerge` to silently no-op.
     //
     // Tests substitute a minimal runtime mock that may not implement this hook.
+    this.runtime.setActiveMergeTaskIdProvider?.(() => this.getActiveMergeTaskId());
     this.runtime.setMergeEnqueuer?.((taskId) => {
       // If the wedged attempt was the active one, abort its in-flight signal
       // and dispose its session so subsequent code paths can release file
@@ -238,6 +239,10 @@ export class ProjectEngine {
       this.mergeActive.delete(taskId);
       this.internalEnqueueMerge(taskId);
     });
+  }
+
+  getActiveMergeTaskId(): string | null {
+    return this.activeMergeTaskId;
   }
 
   /**
@@ -289,6 +294,7 @@ export class ProjectEngine {
       this.notificationService = new NotificationService(store, {
         projectId: this.options.projectId,
         ntfyBaseUrl: this.options.ntfyBaseUrl,
+        messageStore: this.runtime.getMessageStore(),
       });
       await this.notificationService.start();
 

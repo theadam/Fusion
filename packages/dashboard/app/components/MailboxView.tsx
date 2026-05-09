@@ -1,5 +1,5 @@
 import "./MailboxModal.css";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, type CSSProperties } from "react";
 import {
   Mail,
   Send,
@@ -23,18 +23,25 @@ import {
   deleteMessage,
   fetchConversation,
   fetchAgents,
+  fetchApprovals,
+  fetchApprovalDetail,
+  decideApproval,
   type InboxResponse,
   type OutboxResponse,
   type AgentMailboxResponse,
   type Agent,
+  type ApprovalRequestSummary,
+  type ApprovalRequestDetail,
 } from "../api";
+import { MailboxMessageContent } from "./MailboxMessageContent";
 import { MessageComposer } from "./MessageComposer";
 import { subscribeSse } from "../sse-bus";
 import { useViewportMode } from "../hooks/useViewportMode";
+import { useMobileKeyboard } from "../hooks/useMobileKeyboard";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
-type MailboxTab = "inbox" | "outbox" | "agents";
+type MailboxTab = "inbox" | "outbox" | "agents" | "approvals";
 
 interface MailboxViewProps {
   projectId?: string;
@@ -91,6 +98,29 @@ function messagePreview(content: string, max = 80): string {
   return `${content.slice(0, max)}…`;
 }
 
+function getDeepLinkedMessageId(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const paramId = params.get("mailbox-message");
+  if (paramId) {
+    return paramId;
+  }
+
+  const hashMatch = /^#message-(.+)$/.exec(window.location.hash);
+  return hashMatch?.[1] ?? null;
+}
+
+function listMessageAnchorId(messageId: string): string {
+  return `mailbox-list-message-${messageId}`;
+}
+
+function detailMessageAnchorId(messageId: string): string {
+  return `mailbox-detail-message-${messageId}`;
+}
+
 function buildReplyThread(messages: Message[], selectedMessage: Message): Message[] {
   const allMessages = [...messages];
   if (!allMessages.some((message) => message.id === selectedMessage.id)) {
@@ -143,6 +173,12 @@ export function MailboxView({
   const [agentSubTab, setAgentSubTab] = useState<"inbox" | "outbox">("inbox");
   const [agentMailbox, setAgentMailbox] = useState<AgentMailboxResponse | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [approvalSubTab, setApprovalSubTab] = useState<"pending" | "history">("pending");
+  const [approvals, setApprovals] = useState<ApprovalRequestSummary[]>([]);
+  const [approvalPendingCount, setApprovalPendingCount] = useState(0);
+  const [selectedApproval, setSelectedApproval] = useState<ApprovalRequestDetail | null>(null);
+  const [approvalComment, setApprovalComment] = useState("");
+  const [approvalDecisionLoading, setApprovalDecisionLoading] = useState<false | "approve" | "deny">(false);
 
   const agentNamesById = useMemo(
     () => new Map(agents.map((agent) => [agent.id, agent.name ?? ""])),
@@ -155,6 +191,18 @@ export function MailboxView({
   const viewportMode = useViewportMode();
   const isMobile = viewportMode === "mobile";
   const isSplitPane = !isMobile;
+  const { keyboardOverlap, viewportHeight, viewportOffsetTop, keyboardOpen } = useMobileKeyboard({ enabled: isMobile });
+  const containerKeyboardStyle = useMemo<CSSProperties | undefined>(() => {
+    if (!keyboardOpen) {
+      return undefined;
+    }
+
+    return {
+      "--keyboard-overlap": `${keyboardOverlap}px`,
+      "--vv-offset-top": `${viewportOffsetTop}px`,
+      ...(viewportHeight != null ? { "--vv-height": `${viewportHeight}px` } : {}),
+    } as CSSProperties;
+  }, [keyboardOpen, keyboardOverlap, viewportHeight, viewportOffsetTop]);
 
   // ── Data fetching ─────────────────────────────────────────────────────
 
@@ -215,12 +263,37 @@ export function MailboxView({
     }
   }, [projectId, onUnreadCountChange]);
 
+  const loadApprovals = useCallback(async (status: "pending" | "history") => {
+    setIsLoading(true);
+    try {
+      const list = await fetchApprovals({ status: status === "pending" ? "pending" : undefined, limit: 100 }, projectId);
+      if (status === "pending") {
+        setApprovals(list.requests);
+      } else {
+        const [approved, denied, completed] = await Promise.all([
+          fetchApprovals({ status: "approved", limit: 100 }, projectId),
+          fetchApprovals({ status: "denied", limit: 100 }, projectId),
+          fetchApprovals({ status: "completed", limit: 100 }, projectId),
+        ]);
+        setApprovals([...approved.requests, ...denied.requests, ...completed.requests].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+      }
+      setApprovalPendingCount(list.pendingCount);
+    } catch {
+      // Silently fail
+    } finally {
+      setIsLoading(false);
+    }
+  }, [projectId]);
+
   // Load data on tab change
   useEffect(() => {
     if (activeTab === "inbox") loadInbox();
     else if (activeTab === "outbox") loadOutbox();
     else if (activeTab === "agents") loadAgents();
-  }, [activeTab, loadInbox, loadOutbox, loadAgents]);
+    else if (activeTab === "approvals") {
+      void loadApprovals(approvalSubTab);
+    }
+  }, [activeTab, loadInbox, loadOutbox, loadAgents, loadApprovals, approvalSubTab]);
 
   // Load agent mailbox when selected
   useEffect(() => {
@@ -252,6 +325,8 @@ export function MailboxView({
         void loadInbox();
       } else if (activeTab === "outbox") {
         void loadOutbox();
+      } else if (activeTab === "approvals") {
+        void loadApprovals(approvalSubTab);
       }
 
       if (selectedAgentId) {
@@ -265,9 +340,12 @@ export function MailboxView({
         "message:received": onMailboxUpdate,
         "message:read": onMailboxUpdate,
         "message:deleted": onMailboxUpdate,
+        "approval:requested": onMailboxUpdate,
+        "approval:updated": onMailboxUpdate,
+        "approval:decided": onMailboxUpdate,
       },
     });
-  }, [projectId, activeTab, selectedAgentId, refreshUnreadCount, loadInbox, loadOutbox, loadAgentMailbox]);
+  }, [projectId, activeTab, selectedAgentId, refreshUnreadCount, loadInbox, loadOutbox, loadAgentMailbox, loadApprovals, approvalSubTab]);
 
   // ── Actions ───────────────────────────────────────────────────────────
 
@@ -306,6 +384,50 @@ export function MailboxView({
       setConversationMessages([message]);
     }
   }, [projectId, unreadCount, onUnreadCountChange, activeTab]);
+
+  // Deep-link: open and highlight a specific message from URL params.
+  useEffect(() => {
+    const deepLinkedMessageId = getDeepLinkedMessageId();
+    if (!deepLinkedMessageId) {
+      return;
+    }
+
+    const message = [
+      ...(inbox?.messages ?? []),
+      ...(outbox?.messages ?? []),
+      ...(agentMailbox?.inbox ?? []),
+      ...(agentMailbox?.outbox ?? []),
+      ...conversationMessages,
+    ].find((candidate) => candidate.id === deepLinkedMessageId);
+
+    if (!message) {
+      return;
+    }
+
+    void handleOpenMessage(message);
+  }, [inbox, outbox, agentMailbox, conversationMessages, handleOpenMessage]);
+
+  useEffect(() => {
+    const deepLinkedMessageId = getDeepLinkedMessageId();
+    if (!deepLinkedMessageId) {
+      return;
+    }
+
+    const element = document.getElementById(detailMessageAnchorId(deepLinkedMessageId));
+    if (!element) {
+      return;
+    }
+
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    element.classList.add("mailbox-message-highlight");
+    const timer = window.setTimeout(() => {
+      element.classList.remove("mailbox-message-highlight");
+    }, 2000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [selectedMessage, conversationMessages]);
 
   const handleCloseMessage = useCallback(() => {
     setSelectedMessage(null);
@@ -384,6 +506,33 @@ export function MailboxView({
     setComposeReplyContext(null);
   }, []);
 
+  const handleOpenApproval = useCallback(async (request: ApprovalRequestSummary) => {
+    try {
+      const detail = await fetchApprovalDetail(request.id, projectId);
+      setSelectedApproval(detail);
+      setApprovalComment("");
+    } catch {
+      addToast?.("Failed to load approval request", "error");
+    }
+  }, [projectId, addToast]);
+
+  const handleApprovalDecision = useCallback(async (decision: "approve" | "deny") => {
+    if (!selectedApproval || approvalDecisionLoading) return;
+    setApprovalDecisionLoading(decision);
+    try {
+      await decideApproval(selectedApproval.id, { decision, comment: approvalComment || undefined }, projectId);
+      await loadApprovals(approvalSubTab);
+      const updated = await fetchApprovalDetail(selectedApproval.id, projectId);
+      setSelectedApproval(updated);
+      setApprovalComment("");
+      addToast?.(`Request ${decision === "approve" ? "approved" : "denied"}`, "success");
+    } catch {
+      addToast?.("Failed to submit decision", "error");
+    } finally {
+      setApprovalDecisionLoading(false);
+    }
+  }, [selectedApproval, approvalDecisionLoading, approvalComment, projectId, loadApprovals, approvalSubTab, addToast]);
+
   // ── Render ────────────────────────────────────────────────────────────
 
   const renderMessageDetail = () => {
@@ -392,7 +541,7 @@ export function MailboxView({
     const threadMessages = buildReplyThread(conversationMessages, selectedMessage);
 
     return (
-      <div className="mailbox-message-detail" data-testid="mailbox-message-detail">
+      <div className="mailbox-message-detail" data-testid="mailbox-message-detail" id={detailMessageAnchorId(selectedMessage.id)}>
         <div className="mailbox-message-detail-header">
           {isMobile && (
             <button
@@ -456,6 +605,7 @@ export function MailboxView({
               return (
                 <div
                   key={msg.id}
+                  id={detailMessageAnchorId(msg.id)}
                   className={`mailbox-conversation-msg ${msg.id === selectedMessage.id ? "current" : ""}`}
                 >
                   <div className="mailbox-conversation-msg-header">
@@ -463,11 +613,14 @@ export function MailboxView({
                     <span className="mailbox-message-time">{formatTimestamp(msg.createdAt)}</span>
                   </div>
                   {replyToId && (
-                    <div className="mailbox-reply-context" data-testid={`mailbox-reply-context-${msg.id}`}>
+                    <div className="mailbox-reply-context-static" data-testid={`mailbox-reply-context-${msg.id}`}>
                       ↪ Replying to {replyToMessage ? messagePreview(replyToMessage.content, 60) : `message ${replyToId}`}
                     </div>
                   )}
-                  <div className="mailbox-conversation-msg-body">{msg.content}</div>
+                  <MailboxMessageContent
+                    content={msg.content}
+                    className="mailbox-conversation-msg-body"
+                  />
                 </div>
               );
             })}
@@ -476,13 +629,15 @@ export function MailboxView({
         {(threadMessages.length <= 1) && (
           <>
             {selectedMessage.metadata?.replyTo?.messageId && (
-              <div className="mailbox-reply-context" data-testid="mailbox-selected-reply-context">
+              <div className="mailbox-reply-context-static" data-testid="mailbox-selected-reply-context">
                 ↪ Replying to message {selectedMessage.metadata.replyTo.messageId}
               </div>
             )}
-            <div className="mailbox-message-body" data-testid="mailbox-message-body">
-              {selectedMessage.content}
-            </div>
+            <MailboxMessageContent
+              content={selectedMessage.content}
+              className="mailbox-message-body"
+              testId="mailbox-message-body"
+            />
           </>
         )}
       </div>
@@ -503,6 +658,7 @@ export function MailboxView({
           {inbox?.messages.map((msg) => (
             <div
               key={msg.id}
+              id={listMessageAnchorId(msg.id)}
               className={`mailbox-item ${!msg.read ? "unread" : ""}`}
               onClick={() => handleOpenMessage(msg)}
               data-testid={`mailbox-item-${msg.id}`}
@@ -537,6 +693,7 @@ export function MailboxView({
           {outbox?.messages.map((msg) => (
             <div
               key={msg.id}
+              id={listMessageAnchorId(msg.id)}
               className="mailbox-item"
               onClick={() => handleOpenMessage(msg)}
               data-testid={`mailbox-item-${msg.id}`}
@@ -555,6 +712,53 @@ export function MailboxView({
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {activeTab === "approvals" && (
+        <div className="mailbox-approvals" data-testid="mailbox-approvals">
+          <div className="mailbox-approval-filters" data-testid="mailbox-approval-filters">
+            <button
+              className={`btn btn-sm btn-secondary mailbox-agent-subtab ${approvalSubTab === "pending" ? "active" : ""}`}
+              onClick={() => { setApprovalSubTab("pending"); setSelectedApproval(null); }}
+              data-testid="mailbox-approval-filter-pending"
+            >
+              Pending
+            </button>
+            <button
+              className={`btn btn-sm btn-secondary mailbox-agent-subtab ${approvalSubTab === "history" ? "active" : ""}`}
+              onClick={() => { setApprovalSubTab("history"); setSelectedApproval(null); }}
+              data-testid="mailbox-approval-filter-history"
+            >
+              History
+            </button>
+          </div>
+          <div className="mailbox-list" data-testid="mailbox-approval-list">
+            {approvals.length === 0 && !isLoading && (
+              <div className="mailbox-empty" data-testid="mailbox-approval-empty">
+                <InboxIcon size={32} />
+                <p>{approvalSubTab === "pending" ? "No pending approvals" : "No historical approvals"}</p>
+              </div>
+            )}
+            {approvals.map((request) => (
+              <div
+                key={request.id}
+                className="mailbox-item mailbox-approval-item"
+                onClick={() => void handleOpenApproval(request)}
+                data-testid={`mailbox-approval-item-${request.id}`}
+              >
+                <div className={`status-dot mailbox-approval-status-dot mailbox-approval-status-dot--${request.status}`} />
+                <div className="mailbox-item-content">
+                  <div className="mailbox-item-header">
+                    <span className="mailbox-item-from">{request.agentId} · {request.actionCategory}</span>
+                    <span className="mailbox-item-time">{formatTimestamp(request.createdAt)}</span>
+                  </div>
+                  <div className="mailbox-item-preview">{request.actionSummary}</div>
+                </div>
+                <span className={`mailbox-approval-status mailbox-approval-status--${request.status}`}>{request.status}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -639,6 +843,7 @@ export function MailboxView({
                 {selectedAgentId && agentMailbox && agentSubTab === "inbox" && agentMailbox.inbox.map((msg) => (
                   <div
                     key={msg.id}
+                    id={listMessageAnchorId(msg.id)}
                     className={`mailbox-item ${!msg.read ? "unread" : ""}`}
                     onClick={() => handleOpenMessage(msg)}
                     data-testid={`mailbox-item-${msg.id}`}
@@ -660,6 +865,7 @@ export function MailboxView({
                 {selectedAgentId && agentMailbox && agentSubTab === "outbox" && agentMailbox.outbox.map((msg) => (
                   <div
                     key={msg.id}
+                    id={listMessageAnchorId(msg.id)}
                     className="mailbox-item"
                     onClick={() => handleOpenMessage(msg)}
                     data-testid={`mailbox-item-${msg.id}`}
@@ -705,6 +911,58 @@ export function MailboxView({
       return renderMessageDetail();
     }
 
+    if (activeTab === "approvals" && selectedApproval) {
+      return (
+        <div className="mailbox-message-detail mailbox-approval-detail" data-testid="mailbox-approval-detail">
+          {isMobile && (
+            <button className="btn btn-sm btn-secondary" onClick={() => setSelectedApproval(null)} data-testid="mailbox-approval-back-to-list">← Back</button>
+          )}
+          <div className="mailbox-message-detail-header">
+            <div className="mailbox-message-detail-meta">
+              <span className="mailbox-message-type">{selectedApproval.actionCategory}</span>
+              <span className="mailbox-message-time">{selectedApproval.status}</span>
+            </div>
+          </div>
+          <div className="mailbox-message-body">
+            <strong>{selectedApproval.actionSummary}</strong>
+            <p>Requester: {selectedApproval.requester.actorName} ({selectedApproval.agentId})</p>
+            {selectedApproval.taskId && <p>Task: {selectedApproval.taskId}</p>}
+            <p>Requested: {formatTimestamp(selectedApproval.createdAt)}</p>
+          </div>
+          <div className="mailbox-conversation" data-testid="mailbox-approval-history">
+            {selectedApproval.history.map((event) => (
+              <div key={event.id} className="mailbox-conversation-msg">
+                <div className="mailbox-conversation-msg-header">
+                  <span>{event.eventType}</span>
+                  <span>{event.actor.actorName}</span>
+                </div>
+                {event.note && <div className="mailbox-item-preview">{event.note}</div>}
+              </div>
+            ))}
+          </div>
+          {selectedApproval.status === "pending" && (
+            <div className="mailbox-approval-decision" data-testid="mailbox-approval-decision">
+              <textarea
+                className="message-composer-textarea mailbox-approval-comment"
+                value={approvalComment}
+                onChange={(event) => setApprovalComment(event.target.value)}
+                placeholder="Optional comment"
+                data-testid="mailbox-approval-comment"
+              />
+              <div className="mailbox-header-actions">
+                <button className="btn btn-sm btn-secondary" onClick={() => void handleApprovalDecision("deny")} disabled={approvalDecisionLoading !== false} data-testid="mailbox-approval-deny">
+                  Deny
+                </button>
+                <button className="btn btn-sm btn-primary" onClick={() => void handleApprovalDecision("approve")} disabled={approvalDecisionLoading !== false} data-testid="mailbox-approval-approve">
+                  Approve
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     return (
       <div className="mailbox-split-empty" data-testid="mailbox-split-empty">
         <Mail size={24} />
@@ -714,7 +972,7 @@ export function MailboxView({
   };
 
   return (
-    <div className="mailbox-view" data-testid="mailbox-view">
+    <div className="mailbox-view" style={containerKeyboardStyle} data-testid="mailbox-view">
       {/* Header */}
       <div className="mailbox-header">
         <div className="mailbox-title">
@@ -752,6 +1010,7 @@ export function MailboxView({
             onClick={() => {
               if (activeTab === "inbox") loadInbox();
               else if (activeTab === "outbox") loadOutbox();
+              else if (activeTab === "approvals") loadApprovals(approvalSubTab);
               else if (selectedAgentId) loadAgentMailbox(selectedAgentId);
             }}
             disabled={isLoading}
@@ -784,11 +1043,20 @@ export function MailboxView({
         </button>
         <button
           className={`btn btn-sm btn-secondary mailbox-tab ${activeTab === "agents" ? "active" : ""}`}
-          onClick={() => { setActiveTab("agents"); setSelectedMessage(null); }}
+          onClick={() => { setActiveTab("agents"); setSelectedMessage(null); setSelectedApproval(null); }}
           data-testid="mailbox-tab-agents"
         >
           <Bot size={14} />
           <span>Agents</span>
+        </button>
+        <button
+          className={`btn btn-sm btn-secondary mailbox-tab ${activeTab === "approvals" ? "active" : ""}`}
+          onClick={() => { setActiveTab("approvals"); setSelectedMessage(null); setSelectedApproval(null); }}
+          data-testid="mailbox-tab-approvals"
+        >
+          <CheckCheck size={14} />
+          <span>Approvals</span>
+          {approvalPendingCount > 0 && <span className="mailbox-tab-badge" data-testid="mailbox-approvals-pending-badge">{approvalPendingCount}</span>}
         </button>
       </div>
 
@@ -805,6 +1073,7 @@ export function MailboxView({
         ) : (
           <>
             {renderMessageDetail()}
+            {activeTab === "approvals" && selectedApproval && renderDetailPane()}
             {showComposer && (
               <MessageComposer
                 recipient={composeRecipient}
@@ -816,7 +1085,7 @@ export function MailboxView({
                 addToast={addToast}
               />
             )}
-            {!selectedMessage && !showComposer && renderListPane()}
+            {!selectedMessage && !selectedApproval && !showComposer && renderListPane()}
           </>
         )}
       </div>

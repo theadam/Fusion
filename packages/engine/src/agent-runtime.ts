@@ -15,8 +15,10 @@
  */
 
 import type { AgentSession, SessionManager, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type { PermanentAgentGatingContext } from "@fusion/core";
 import type { SkillSelectionContext } from "./skill-resolver.js";
 import type { FallbackModelUsedPayload } from "./pi.js";
+import type { AgentActionGateContext } from "./agent-action-gate.js";
 
 /**
  * Options for creating an agent session.
@@ -84,6 +86,9 @@ export interface AgentRuntimeOptions {
   /** Optional task context for fallback notifications. */
   taskId?: string;
   taskTitle?: string;
+  actionGateContext?: AgentActionGateContext;
+  /** Permanent-agent action gating context for v1 category classification enforcement. */
+  permanentAgentGating?: PermanentAgentGatingContext;
 }
 
 /**

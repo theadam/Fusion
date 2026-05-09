@@ -1,18 +1,20 @@
 import "./AgentDetailView.css";
+import "./MailboxModal.css";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Bot, Heart, Activity, Pause, Play, Square, Trash2, RefreshCw, 
   Settings, FileText, ActivitySquare, X, Copy, 
   ExternalLink, CheckCircle, XCircle, Loader2, GitBranch, ListChecks,
   AlertCircle,
-  ChevronDown, ChevronRight, ChevronLeft, BarChart3, BookOpen, Eye, FileEdit
+  ChevronDown, ChevronRight, ChevronLeft, BarChart3, BookOpen, Eye, FileEdit,
+  Mail, Send, Inbox as InboxIcon, User
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { AgentDetail, AgentState, AgentHeartbeatRun, AgentBudgetStatus, ModelInfo, MemoryFileInfo, AgentCapability, PluginRuntimeInfo, SkillContent, AgentOnboardingSummary } from "../api";
-import { fetchAgent, updateAgent, updateAgentState, deleteAgent, fetchAgentLogsWithMeta, fetchAgentRunLogs, fetchAgentChildren, fetchAgentRuns, fetchAgentRunDetail, startAgentRun, stopAgentRun, updateAgentInstructions, updateAgentSoul, updateAgentMemory, fetchAgentMemoryFiles, fetchAgentMemoryFile, saveAgentMemoryFile, fetchAgentTasks, fetchChainOfCommand, fetchAgentBudgetStatus, resetAgentBudget, fetchWorkspaceFileContent, saveWorkspaceFileContent, fetchModels, fetchPluginRuntimes, fetchAgents, upgradeAgentHeartbeatProcedure, updateGlobalSettings, fetchSkillContent, uploadAgentAvatar, deleteAgentAvatar } from "../api";
+import type { AgentDetail, AgentState, AgentHeartbeatRun, AgentBudgetStatus, ModelInfo, MemoryFileInfo, AgentCapability, PluginRuntimeInfo, SkillContent, AgentOnboardingSummary, AgentMailboxResponse } from "../api";
+import { fetchAgent, updateAgent, updateAgentState, deleteAgent, fetchAgentLogsWithMeta, fetchAgentRunLogs, fetchAgentChildren, fetchAgentRuns, fetchAgentRunDetail, startAgentRun, stopAgentRun, updateAgentInstructions, updateAgentSoul, updateAgentMemory, fetchAgentMemoryFiles, fetchAgentMemoryFile, saveAgentMemoryFile, fetchAgentTasks, fetchChainOfCommand, fetchAgentBudgetStatus, resetAgentBudget, fetchWorkspaceFileContent, saveWorkspaceFileContent, fetchModels, fetchPluginRuntimes, fetchAgents, upgradeAgentHeartbeatProcedure, updateGlobalSettings, fetchSkillContent, uploadAgentAvatar, deleteAgentAvatar, fetchAgentMailbox, markMessageRead } from "../api";
 import type { Agent } from "../api";
-import type { AgentLogEntry, Task } from "@fusion/core";
+import type { AgentLogEntry, Task, Message, ParticipantType } from "@fusion/core";
 import { getErrorMessage } from "@fusion/core";
 import { AgentLogViewer } from "./AgentLogViewer";
 import { AgentReflectionsTab } from "./AgentReflectionsTab";
@@ -74,11 +76,12 @@ interface AgentDetailViewProps {
   onMutationSuccess?: (context: { agentId: string; deleted?: boolean }) => void | Promise<void>;
 }
 
-type TabId = "dashboard" | "logs" | "config" | "runs" | "tasks" | "employees" | "soul" | "instructions" | "memory" | "reflections";
+type TabId = "dashboard" | "logs" | "mail" | "config" | "runs" | "tasks" | "employees" | "soul" | "instructions" | "memory" | "reflections";
 
 const TABS: { id: TabId; label: string; icon: typeof Activity }[] = [
   { id: "dashboard", label: "Dashboard", icon: ActivitySquare },
   { id: "logs", label: "Logs", icon: FileText },
+  { id: "mail", label: "Mail", icon: Mail },
   { id: "runs", label: "Runs", icon: Activity },
   { id: "tasks", label: "Tasks", icon: ListChecks },
   { id: "employees", label: "Employees", icon: GitBranch },
@@ -138,6 +141,9 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
   const [isStreaming, setIsStreaming] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [latestRun, setLatestRun] = useState<AgentHeartbeatRun | null>(null);
+  const [agentMailbox, setAgentMailbox] = useState<AgentMailboxResponse | null>(null);
+  const [isLoadingMailbox, setIsLoadingMailbox] = useState(false);
+  const [mailboxError, setMailboxError] = useState<string | null>(null);
   const agentDetailModalRef = useRef<HTMLDivElement>(null);
   const overlayMouseDownRef = useRef(false);
   useModalResizePersist(agentDetailModalRef, !inline, "fusion:agent-detail-modal-size");
@@ -219,6 +225,20 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
     }
   }, [agent?.taskId, agentId, projectId]);
 
+  const loadMailbox = useCallback(async () => {
+    setIsLoadingMailbox(true);
+    setMailboxError(null);
+    try {
+      const mailbox = await fetchAgentMailbox(agentId, projectId);
+      setAgentMailbox(mailbox);
+    } catch (err) {
+      setMailboxError(getErrorMessage(err));
+      setAgentMailbox(null);
+    } finally {
+      setIsLoadingMailbox(false);
+    }
+  }, [agentId, projectId]);
+
   const handleConfigChangesState = useCallback((hasChanges: boolean) => {
     hasConfigChangesRef.current = hasChanges;
   }, []);
@@ -259,6 +279,12 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
       loadedLatestRunLogsRef.current = null;
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (agent && activeTab === "mail") {
+      void loadMailbox();
+    }
+  }, [agent, activeTab, loadMailbox]);
 
   // When falling back to latest-run logs (no taskId) and that run is active,
   // subscribe to the run-scoped SSE stream so the Logs tab tails updates.
@@ -317,6 +343,8 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
       setLogs([]);
       setIsStreaming(false);
       setLatestRun(null);
+      setAgentMailbox(null);
+      setMailboxError(null);
       loadedLatestRunLogsRef.current = null;
       hasConfigChangesRef.current = false;
     }
@@ -327,24 +355,37 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
     const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
     const contextVersionAtStart = contextVersionRef.current;
 
+    const refreshAgentForApprovalEvent = (event: MessageEvent) => {
+      if (contextVersionRef.current !== contextVersionAtStart) return;
+      try {
+        const payload: unknown = JSON.parse(event.data);
+        if (!payload || typeof payload !== "object") return;
+        const approvalAgentId = (payload as { agentId?: unknown }).agentId;
+        if (approvalAgentId !== agentId) return;
+        void loadAgent();
+      } catch {
+        // Ignore malformed events
+      }
+    };
+
     return subscribeSse(`/api/events${query}`, {
       events: {
         "agent:updated": (event) => {
           if (contextVersionRef.current !== contextVersionAtStart) return;
-
           try {
             const payload: unknown = JSON.parse(event.data);
             if (!payload || typeof payload !== "object") return;
-
             const updatedId = (payload as { id?: unknown }).id;
             if (updatedId !== agentId) return;
             if (hasConfigChangesRef.current) return;
-
             void loadAgent();
           } catch {
             // Ignore malformed events
           }
         },
+        "approval:requested": refreshAgentForApprovalEvent,
+        "approval:updated": refreshAgentForApprovalEvent,
+        "approval:decided": refreshAgentForApprovalEvent,
       },
     });
   }, [agentId, projectId, loadAgent]);
@@ -654,6 +695,18 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
               fallbackLabel={!agent.taskId && latestRun ? `Latest run · ${latestRun.id.slice(0, 8)}` : null}
             />
           )}
+
+          {activeTab === "mail" && (
+            <MailTab
+              agent={agent}
+              mailbox={agentMailbox}
+              isLoading={isLoadingMailbox}
+              error={mailboxError}
+              projectId={projectId}
+              addToast={addToast}
+              onRefresh={() => void loadMailbox()}
+            />
+          )}
           
           {activeTab === "runs" && (
             <RunsTab 
@@ -922,6 +975,12 @@ function DashboardTab({
         </div>
         <div className="dashboard-summary-hero__meta">
           <span className="dashboard-summary-hero__health" title={health.reason ?? health.label}>{health.icon} {health.label}</span>
+          {(agent.pendingApprovalCount ?? 0) > 0 ? (
+            <span className="badge agent-detail-approval-badge" title="Pending approvals">
+              <span className="status-dot status-dot--pending" />
+              {agent.pendingApprovalCount} pending approvals
+            </span>
+          ) : null}
           <span>Role: {agent.role}</span>
           <span>
             <span className="dashboard-summary-label">{runtimeHint ? "Runtime" : "Model"}</span>
@@ -1132,6 +1191,199 @@ function LogsTab({
       ) : (
         <AgentLogViewer entries={logs} loading={false} />
       )}
+    </div>
+  );
+}
+
+function formatMailboxTimestamp(ts: string): string {
+  const date = new Date(ts);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function mailboxParticipantLabel(id: string, type: ParticipantType): string {
+  if (type === "user") return id === "dashboard" ? "You" : `User: ${id}`;
+  if (type === "agent") return `Agent: ${id}`;
+  return "System";
+}
+
+function MailTab({
+  agent,
+  mailbox,
+  isLoading,
+  error,
+  projectId,
+  addToast,
+  onRefresh,
+}: {
+  agent: AgentDetail;
+  mailbox: AgentMailboxResponse | null;
+  isLoading: boolean;
+  error: string | null;
+  projectId?: string;
+  addToast?: (message: string, type?: "success" | "error") => void;
+  onRefresh: () => void;
+}) {
+  const [activeSubtab, setActiveSubtab] = useState<"inbox" | "outbox">("inbox");
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const messages = activeSubtab === "inbox" ? (mailbox?.inbox ?? []) : (mailbox?.outbox ?? []);
+  const selectedMessage = selectedMessageId ? messages.find((message) => message.id === selectedMessageId) ?? null : null;
+
+  useEffect(() => {
+    setSelectedMessageId(null);
+  }, [activeSubtab, agent.id]);
+
+  const handleMessageClick = async (message: Message) => {
+    setSelectedMessageId(message.id);
+
+    if (activeSubtab !== "inbox" || message.read) {
+      return;
+    }
+
+    try {
+      await markMessageRead(message.id, projectId);
+      onRefresh();
+    } catch (err) {
+      const errorMessage = `Failed to mark message as read: ${getErrorMessage(err)}`;
+      if (addToast) {
+        addToast(errorMessage, "error");
+      } else {
+        console.warn(errorMessage);
+      }
+    }
+  };
+
+  const handleRefresh = () => {
+    setSelectedMessageId(null);
+    onRefresh();
+  };
+
+  const renderMessage = (message: Message) => (
+    <button
+      key={message.id}
+      type="button"
+      className={cn("mailbox-item", "agent-mail-tab-message", activeSubtab === "inbox" && !message.read && "unread", selectedMessageId === message.id && "agent-mail-tab-message--selected")}
+      onClick={() => void handleMessageClick(message)}
+      aria-pressed={selectedMessageId === message.id}
+    >
+      <div className="mailbox-item-avatar">
+        {(activeSubtab === "inbox" ? message.fromType : message.toType) === "agent" ? <Bot size={16} /> : <User size={16} />}
+      </div>
+      <div className="mailbox-item-content">
+        <div className="mailbox-item-header">
+          {activeSubtab === "inbox" ? (
+            <span className="mailbox-item-from">{mailboxParticipantLabel(message.fromId, message.fromType)}</span>
+          ) : (
+            <span className="mailbox-item-to">To: {mailboxParticipantLabel(message.toId, message.toType)}</span>
+          )}
+          <span className="mailbox-item-time">{formatMailboxTimestamp(message.createdAt)}</span>
+        </div>
+        <div className="mailbox-item-preview">{message.content.slice(0, 80)}{message.content.length > 80 ? "…" : ""}</div>
+      </div>
+      {activeSubtab === "inbox" && !message.read ? <div className="mailbox-item-unread-dot" aria-label="Unread message" /> : null}
+    </button>
+  );
+
+  return (
+    <div className="agent-mail-tab">
+      <div className="agent-mail-tab-header">
+        <h3>{agent.name} Mail</h3>
+        <button className="btn btn-sm" onClick={handleRefresh} disabled={isLoading}>
+          <RefreshCw size={14} />
+          Refresh
+        </button>
+      </div>
+
+      <div className="mailbox-agent-subtabs" data-testid="agent-detail-mail-subtabs">
+        <button
+          className={cn("btn", "btn-sm", "btn-secondary", "mailbox-agent-subtab", activeSubtab === "inbox" && "active")}
+          onClick={() => setActiveSubtab("inbox")}
+        >
+          <InboxIcon size={12} />
+          <span>Inbox</span>
+          {(mailbox?.unreadCount ?? 0) > 0 ? <span className="mailbox-tab-badge">{mailbox?.unreadCount}</span> : null}
+        </button>
+        <button
+          className={cn("btn", "btn-sm", "btn-secondary", "mailbox-agent-subtab", activeSubtab === "outbox" && "active")}
+          onClick={() => setActiveSubtab("outbox")}
+        >
+          <Send size={12} />
+          <span>Outbox</span>
+        </button>
+      </div>
+
+      {isLoading && !mailbox ? (
+        <div className="agent-detail-loading agent-detail-loading--inline" role="status" aria-live="polite">
+          <Loader2 className="animate-spin" size={16} />
+          <span>Loading mailbox...</span>
+        </div>
+      ) : null}
+
+      {!isLoading && error ? (
+        <div className="agent-mail-tab-error" role="alert">
+          <AlertCircle size={16} />
+          <span>Failed to load mailbox: {error}</span>
+        </div>
+      ) : null}
+
+      {!isLoading && !error ? (
+        selectedMessage ? (
+          <div className="agent-mail-tab-detail" data-testid="agent-detail-mail-message">
+            <button
+              type="button"
+              className="btn btn-sm agent-mail-tab-back"
+              data-testid="agent-detail-mail-back"
+              onClick={() => setSelectedMessageId(null)}
+            >
+              <ChevronLeft size={14} />
+              Back to {activeSubtab === "inbox" ? "Inbox" : "Outbox"}
+            </button>
+            <div className="agent-mail-tab-detail-meta">
+              <div className="agent-mail-tab-detail-row">
+                <span className="agent-mail-tab-detail-label">From</span>
+                <span>{mailboxParticipantLabel(selectedMessage.fromId, selectedMessage.fromType)}</span>
+              </div>
+              <div className="agent-mail-tab-detail-row">
+                <span className="agent-mail-tab-detail-label">To</span>
+                <span>{mailboxParticipantLabel(selectedMessage.toId, selectedMessage.toType)}</span>
+              </div>
+              <div className="agent-mail-tab-detail-row">
+                <span className="agent-mail-tab-detail-label">Type</span>
+                <span>{selectedMessage.type}</span>
+              </div>
+              <div className="agent-mail-tab-detail-row">
+                <span className="agent-mail-tab-detail-label">Sent</span>
+                <span>{new Date(selectedMessage.createdAt).toLocaleString()}</span>
+              </div>
+              {selectedMessage.metadata?.replyTo?.messageId ? (
+                <div className="agent-mail-tab-reply-context">↪ Replying to message {selectedMessage.metadata.replyTo.messageId}</div>
+              ) : null}
+            </div>
+            <div className="agent-mail-tab-detail-body">{selectedMessage.content}</div>
+          </div>
+        ) : (
+          <div className="mailbox-list" data-testid="agent-detail-mail-list">
+            {messages.length === 0 ? (
+              <div className="mailbox-empty" data-testid="agent-detail-mail-empty">
+                {activeSubtab === "inbox" ? <InboxIcon size={32} /> : <Send size={32} />}
+                <p>{activeSubtab === "inbox" ? "No received messages for this agent" : "No sent messages for this agent"}</p>
+              </div>
+            ) : (
+              messages.map(renderMessage)
+            )}
+          </div>
+        )
+      ) : null}
     </div>
   );
 }

@@ -267,6 +267,8 @@ describe("PluginManager", () => {
     expect(screen.getByText("OpenClaw Runtime")).toBeTruthy();
     expect(screen.getByText("Droid Runtime")).toBeTruthy();
     expect(screen.getByText("Dependency Graph")).toBeTruthy();
+    expect(screen.getByText("WhatsApp Chat")).toBeTruthy();
+    expect(screen.getByText(/Pairs to WhatsApp Web \(multi-device\) with QR or pairing code/i)).toBeTruthy();
   });
 
   it("renders built-in agent browser metadata-only entry when uninstalled", async () => {
@@ -337,6 +339,52 @@ describe("PluginManager", () => {
     expect(screen.getByLabelText("Command Timeout (ms)")).toBeTruthy();
   });
 
+  it("does not show setup-required state when built-in setup check is deferred for non-started plugin", async () => {
+    vi.mocked(fetchPlugins).mockResolvedValueOnce([
+      {
+        ...mockPlugins[0],
+        id: BUILTIN_AGENT_BROWSER_PLUGIN_ID,
+        name: "Agent Browser",
+        state: "installed",
+      },
+    ]);
+    vi.mocked(fetchPluginSetupStatus).mockResolvedValueOnce({
+      hasSetup: true,
+      setupCheckDeferred: true,
+      deferredReason: "plugin-not-started",
+      pluginState: "installed",
+    });
+
+    render(<PluginManager addToast={addToast} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Start plugin to check setup")).toBeTruthy();
+    });
+    expect(screen.queryByText("Setup required")).toBeNull();
+  });
+
+  it("keeps setup-required state for true setup errors on started built-in plugins", async () => {
+    vi.mocked(fetchPlugins).mockResolvedValueOnce([
+      {
+        ...mockPlugins[0],
+        id: BUILTIN_AGENT_BROWSER_PLUGIN_ID,
+        name: "Agent Browser",
+        state: "started",
+      },
+    ]);
+    vi.mocked(fetchPluginSetupStatus).mockResolvedValueOnce({
+      hasSetup: true,
+      status: "error",
+      error: "Binary missing",
+    });
+
+    render(<PluginManager addToast={addToast} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Setup required")).toBeTruthy();
+    });
+  });
+
   it("installs built-in runtime plugins from the built-in section", async () => {
     render(<PluginManager addToast={addToast} />);
 
@@ -353,7 +401,7 @@ describe("PluginManager", () => {
 
     await waitFor(() => {
       expect(installPlugin).toHaveBeenCalledWith({ path: "./plugins/fusion-plugin-hermes-runtime" }, undefined);
-      expect(addToast).toHaveBeenCalledWith("Hermes Runtime installed successfully", "success");
+      expect(addToast).toHaveBeenCalledWith("Hermes Runtime installed globally", "success");
     });
   });
 
@@ -373,7 +421,7 @@ describe("PluginManager", () => {
 
     await waitFor(() => {
       expect(installPlugin).toHaveBeenCalledWith({ path: "./plugins/fusion-plugin-dependency-graph" }, undefined);
-      expect(addToast).toHaveBeenCalledWith("Dependency Graph installed successfully", "success");
+      expect(addToast).toHaveBeenCalledWith("Dependency Graph installed globally", "success");
     });
   });
 
@@ -519,12 +567,12 @@ describe("PluginManager", () => {
       expect(screen.getByText("Test Plugin A")).toBeTruthy();
     });
 
-    const uninstallButtons = screen.getAllByTitle("Uninstall");
+    const uninstallButtons = screen.getAllByTitle("Uninstall globally");
     await userEvent.click(uninstallButtons[0]);
 
     expect(mockConfirm).toHaveBeenCalledWith({
-      title: "Uninstall Plugin",
-      message: 'Are you sure you want to uninstall "Test Plugin A"?',
+      title: "Uninstall Plugin Globally",
+      message: 'Are you sure you want to uninstall "Test Plugin A" globally (all projects)?',
       danger: true,
     });
     expect(uninstallPlugin).not.toHaveBeenCalled();
@@ -540,7 +588,7 @@ describe("PluginManager", () => {
       expect(screen.getByText("Test Plugin A")).toBeTruthy();
     });
 
-    const uninstallButtons = screen.getAllByTitle("Uninstall");
+    const uninstallButtons = screen.getAllByTitle("Uninstall globally");
     await userEvent.click(uninstallButtons[0]);
 
     await waitFor(() => {
@@ -903,7 +951,7 @@ describe("PluginManager", () => {
       });
 
       // Verify initial state - toggle should NOT be checked
-      const toggle = screen.getByRole("checkbox");
+      const toggle = screen.getByRole("checkbox", { name: /Test Plugin A/ });
       expect(toggle).not.toBeChecked();
 
       // Now send an SSE event from a DIFFERENT project trying to enable the plugin
@@ -917,6 +965,7 @@ describe("PluginManager", () => {
             transition: "enabled",
             sourceEvent: "plugin:enabled",
             timestamp: new Date().toISOString(),
+            scope: "project",
             projectId: "other-project", // Different project - this event should be filtered
             enabled: true,
             state: "started",
@@ -927,10 +976,8 @@ describe("PluginManager", () => {
       });
 
       // Toggle should STILL NOT be checked since event is from different project (filtered)
-      await waitFor(() => {
-        const filteredToggle = screen.getByRole("checkbox");
-        expect(filteredToggle).not.toBeChecked();
-      });
+      const filteredToggle = screen.getByRole("checkbox", { name: /Test Plugin A/ });
+      expect(filteredToggle).not.toBeChecked();
     });
 
     it("cleans up EventSource on unmount", async () => {

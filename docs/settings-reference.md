@@ -42,7 +42,7 @@ Defaults from `DEFAULT_GLOBAL_SETTINGS`; key scope from `GLOBAL_SETTINGS_KEYS`.
 | `ntfyEnabled` | `boolean` | `false` | Enable ntfy push notifications. |
 | `ntfyTopic` | `string` | `undefined` | ntfy topic name. |
 | `ntfyBaseUrl` | `string` | `undefined` | Optional custom ntfy server base URL (must use `http://` or `https://`). If blank/unset, Fusion uses `https://ntfy.sh` for both runtime and test notifications. |
-| `ntfyEvents` | `("in-review" \| "merged" \| "failed" \| "awaiting-approval" \| "awaiting-user-review" \| "planning-awaiting-input" \| "gridlock" \| "fallback-used" \| "memory-dreams-processed")[]` | `["in-review","merged","failed","awaiting-approval","awaiting-user-review","planning-awaiting-input","gridlock","fallback-used","memory-dreams-processed"]` | Event types that trigger ntfy notifications. `planning-awaiting-input` fires when planning mode is waiting on user input. `gridlock` fires when all schedulable todo tasks are blocked; delivery is cooldown-throttled (first alert immediately, then suppressed for 15 minutes until gridlock resolves). `fallback-used` fires when Fusion recovers from a retryable model failure by switching to a configured fallback model. `memory-dreams-processed` fires when manual dream processing writes a new `DREAMS.md` entry (project and/or agent); disable it via ntfy/webhook event filters if you want to opt out. |
+| `ntfyEvents` | `("in-review" \| "merged" \| "failed" \| "awaiting-approval" \| "awaiting-user-review" \| "planning-awaiting-input" \| "gridlock" \| "fallback-used" \| "memory-dreams-processed" \| "message:agent-to-user" \| "message:agent-to-agent")[]` | `["in-review","merged","failed","awaiting-approval","awaiting-user-review","planning-awaiting-input","gridlock","fallback-used","memory-dreams-processed","message:agent-to-user","message:agent-to-agent"]` | Event types that trigger ntfy notifications. `planning-awaiting-input` fires when planning mode is waiting on user input. `gridlock` fires when all schedulable todo tasks are blocked; delivery is cooldown-throttled (first alert immediately, then suppressed for 15 minutes until gridlock resolves). `fallback-used` fires when Fusion recovers from a retryable model failure by switching to a configured fallback model. `memory-dreams-processed` fires when manual dream processing writes a new `DREAMS.md` entry (project and/or agent); disable it via ntfy/webhook event filters if you want to opt out. `message:agent-to-user` fires when an agent sends a direct message to the user. `message:agent-to-agent` fires when an agent sends a message to another agent (including replies). |
 | `ntfyDashboardHost` | `string` | `undefined` | Dashboard host used to build deep links in notifications. |
 | `webhookEnabled` | `boolean` | `false` | Enable webhook notifications for task lifecycle events. Part of the legacy flat settings; prefer `notificationProviders` for new setups. |
 | `webhookUrl` | `string` | `undefined` | Webhook endpoint URL. Must be `http://` or `https://`. Part of legacy flat settings. |
@@ -71,7 +71,7 @@ Defaults from `DEFAULT_GLOBAL_SETTINGS`; key scope from `GLOBAL_SETTINGS_KEYS`.
 | `daemonPort` | `number` | `4040` | Port for daemon/serve mode binding. |
 | `daemonHost` | `string` | `"127.0.0.1"` | Host for daemon/serve mode binding. Defaults to localhost only; pass `"0.0.0.0"` to expose on all interfaces. |
 | `settingsSyncEnabled` | `boolean` | `false` | Enable automatic settings synchronization between nodes. |
-| `settingsSyncAuth` | `boolean` | `false` | Include model auth credentials in settings sync operations. |
+| `settingsSyncAuth` | `boolean` | `false` | Include auth-material snapshots (`sharedState.authMaterial` and auth sync endpoints) when settings sync is enabled. Ignored when `settingsSyncEnabled` is `false`. |
 | `settingsSyncInterval` | `number` | `900000` | Automatic sync interval in ms. Valid values: `300000`, `900000`, `1800000`, `3600000`. |
 | `settingsSyncConflictResolution` | `"last-write-wins" \| "always-ask" \| "keep-local" \| "keep-remote"` | `"last-write-wins"` | Conflict strategy for divergent synced settings. |
 | `dashboardCurrentNodeId` | `string` | `undefined` | Currently selected dashboard node ID. Restores the last-viewed node on fresh browser/PWA sessions. `undefined` means viewing the local node. |
@@ -96,7 +96,7 @@ Defaults from `DEFAULT_GLOBAL_SETTINGS`; key scope from `GLOBAL_SETTINGS_KEYS`.
 | `researchGlobalMaxSearchResults` | `number` | `undefined` | Maximum search results per provider query. |
 | `researchGlobalFetchTimeoutMs` | `number` | `30000` | Timeout for individual HTTP fetches in milliseconds. |
 | `researchGlobalUserAgent` | `string` | `"FusionResearchBot/1.0"` | User-Agent header for HTTP requests made by research providers. |
-| `experimentalFeatures` | `Record<string, boolean>` | `{}` | Global-scoped experimental feature flags. Includes `experimentalFeatures.researchView` for standalone Research route visibility. |
+| `experimentalFeatures` | `Record<string, boolean>` | `{}` | Global-scoped experimental feature flags. Includes `experimentalFeatures.researchView`, which gates all Research surfaces and tools (dashboard view, engine task-session tools, and CLI `fn_research_*` tools), and `experimentalFeatures.evalsView`, which gates Evals surfaces (dashboard view, Settings → Scheduled Evals, and scheduled-eval cron execution). |
 | `remoteAccess` | `RemoteAccessSettings` | `{ activeProvider: null, providers: {...}, tokenStrategy: {...}, lifecycle: {...} }` | Global-scoped remote access provider + token strategy configuration used by Remote Access routes and tunnel lifecycle controls. |
 
 ### Notification providers (pluggable)
@@ -140,7 +140,7 @@ When `id` is `"ntfy"` in `notificationProviders`, the provider `config` supports
 |---|---|---:|---|
 | `topic` | `string` | _required_ | ntfy topic name (1–64 chars, alphanumeric + `-_`). |
 | `ntfyBaseUrl` | `string` | `"https://ntfy.sh"` | Optional custom ntfy server URL. |
-| `events` | `("in-review" \| "merged" \| "failed" \| "awaiting-approval" \| "awaiting-user-review" \| "planning-awaiting-input" \| "gridlock" \| "fallback-used" \| "memory-dreams-processed")[]` | `DEFAULT_NTFY_EVENTS` | Event filter list used by the provider. For `gridlock`, enabled events are still cooldown-throttled at runtime (15-minute suppression window, reset on full resolution). `memory-dreams-processed` is emitted when manual dream processing appends a new project/agent `DREAMS.md` entry. |
+| `events` | `("in-review" \| "merged" \| "failed" \| "awaiting-approval" \| "awaiting-user-review" \| "planning-awaiting-input" \| "gridlock" \| "fallback-used" \| "memory-dreams-processed" \| "message:agent-to-user" \| "message:agent-to-agent")[]` | `DEFAULT_NTFY_EVENTS` | Event filter list used by the provider. For `gridlock`, enabled events are still cooldown-throttled at runtime (15-minute suppression window, reset on full resolution). `memory-dreams-processed` is emitted when manual dream processing appends a new project/agent `DREAMS.md` entry. `message:agent-to-user`/`message:agent-to-agent` are emitted for mailbox messages and deep-link to the specific message when `dashboardHost` is configured. |
 | `dashboardHost` | `string` | `undefined` | Dashboard host for deep links in notifications. |
 
 Disable daily update checks globally:
@@ -293,7 +293,7 @@ This applies to:
 - run limits (`maxConcurrentRuns`, `maxSourcesPerRun`, `maxDurationMs`, `requestTimeoutMs`)
 - export default (`defaultExportFormat`)
 
-The standalone Research route is feature-gated separately via `experimentalFeatures.researchView`.
+Research is globally feature-gated via `experimentalFeatures.researchView`.
 When that flag is disabled, the Settings modal also hides both Research sections (`Research Defaults` and project `Research`) and falls back to the first visible section if a hidden research section is requested directly.
 
 Research failures are normalized to a shared error-code contract (`FEATURE_DISABLED`, `MISSING_CREDENTIALS`, `PROVIDER_UNAVAILABLE`, `RATE_LIMITED`, `PROVIDER_TIMEOUT`, `RUN_CANCELLED`, `RETRY_EXHAUSTED`, `INVALID_TRANSITION`, `NON_RETRYABLE_PROVIDER_ERROR`, `INTERNAL_ERROR`) with retryability metadata so dashboard, API, CLI, and agent tooling show consistent recovery guidance.
@@ -302,7 +302,7 @@ Recovery entrypoints in the dashboard:
 - **Settings → Research Defaults**: fix missing default provider configuration and provider-level readiness.
 - **Settings → Authentication**: repair missing provider credentials (`MISSING_CREDENTIALS`).
 - **Settings → Research (project)**: re-enable project research or source toggles when runs are blocked by project settings.
-- **Settings → Experimental Features**: enable `researchView` when the standalone Research route/surfaces are hidden.
+- **Settings → Experimental Features**: enable `researchView` when Research surfaces or `fn_research_*` tools report feature-disabled.
 
 **Credential storage rule:** API keys for Research providers are not stored in settings JSON. They are managed through the existing auth storage pipeline (`/api/auth/status`, `POST /api/auth/api-key`, `DELETE /api/auth/api-key`) and persisted in auth credential storage with masked hints in API responses.
 
@@ -343,8 +343,11 @@ Routing precedence for task dispatch is:
 
 Fusion also stores `projects.nodeId` in the **central registry database** (`~/.fusion/fusion-central.db`). That value is a multi-project runtime placement field used by `ProjectManager` (for selecting remote vs local project runtime), not the same setting as `defaultNodeId` task dispatch routing.
 
+Node-specific project working directories are persisted separately in central DB table `projectNodePathMappings` (`projectId` + `nodeId` + `path`). Do not treat `projects.nodeId` as the path source of truth.
+
 - `defaultNodeId` (project settings): task-level dispatch default
 - `projects.nodeId` (central registry): which node hosts the project runtime in multi-project mode
+- `projectNodePathMappings.path` (central registry): working-directory path for that project on that specific node
 
 See also:
 - [Task Management → Node Routing](./task-management.md#node-routing)
@@ -570,6 +573,8 @@ The fallback ensures tasks continue executing even if the configured runtime plu
 
 To use plugin-provided runtimes like Paperclip, Hermes, or OpenClaw:
 
+> Scope model: plugin installation + plugin settings are global (shared across projects), while plugin enabled/disabled state and runtime status are project-scoped.
+
 1. Install one or more runtime plugins:
 
 ```bash
@@ -618,29 +623,37 @@ fn plugin install ./plugins/fusion-plugin-openclaw-runtime
 
 For more details, see the [Paperclip Runtime Plugin documentation](../plugins/fusion-plugin-paperclip-runtime/README.md), [Hermes Runtime Plugin documentation](../plugins/fusion-plugin-hermes-runtime/README.md), and [OpenClaw Runtime Plugin documentation](../plugins/fusion-plugin-openclaw-runtime/README.md).
 
-### OpenClaw Gateway Configuration
+### OpenClaw Runtime Configuration
 
-The OpenClaw runtime plugin connects to a running OpenClaw gateway instance through its OpenAI-compatible HTTP API. You can configure the gateway connection using plugin settings or environment variables.
+The OpenClaw runtime plugin is CLI-first. Fusion invokes `openclaw agent --json` directly and defaults to embedded local mode (`--local`). Gateway mode is optional via `useGateway: true`.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `gatewayUrl` | `string` | `http://127.0.0.1:18789` | URL of the OpenClaw gateway instance |
-| `gatewayToken` | `string` | (none) | Authentication token for the gateway |
-| `agentId` | `string` | `"main"` | OpenClaw agent ID to use for sessions |
+| `binaryPath` | `string` | `openclaw` | Path to the OpenClaw binary. |
+| `agentId` | `string` | `"main"` | OpenClaw agent ID used for `--agent`. |
+| `model` | `string` | (OpenClaw default) | Optional model override passed as `--model`. |
+| `thinking` | `string` | `"off"` | Thinking level passed as `--thinking`. |
+| `cliTimeoutSec` | `number` | `0` | OpenClaw-side timeout (`--timeout`, 0 = no OpenClaw timeout). |
+| `cliTimeoutMs` | `number` | `300000` | Fusion-side hard kill timeout for each subprocess turn. |
+| `useGateway` | `boolean` | `false` | When true, omit `--local` and allow OpenClaw's gateway path. |
 
 | Setting | Environment Variable | Default if Unset |
 |---|---|---|
-| `gatewayUrl` | `OPENCLAW_GATEWAY_URL` | `http://127.0.0.1:18789` |
-| `gatewayToken` | `OPENCLAW_GATEWAY_TOKEN` | (none — unauthenticated) |
+| `binaryPath` | `OPENCLAW_BIN` | `openclaw` |
 | `agentId` | `OPENCLAW_AGENT_ID` | `main` |
+| `model` | `OPENCLAW_MODEL` | (OpenClaw default) |
+| `thinking` | `OPENCLAW_THINKING` | `off` |
+| `cliTimeoutSec` | `OPENCLAW_TIMEOUT_SEC` | `0` |
+| `cliTimeoutMs` | `OPENCLAW_CLI_TIMEOUT_MS` | `300000` |
+| `useGateway` | `OPENCLAW_USE_GATEWAY` | `false` |
 
 Resolution priority is: plugin settings (`PluginContext.settings`) → environment variables → built-in defaults.
 
-> ℹ️ These are **plugin-level** settings configured when the OpenClaw runtime plugin is installed/enabled (for example in the dashboard Plugin Manager or plugin config). They are not agent-level `runtimeConfig` fields. Agents only need `runtimeConfig.runtimeHint: "openclaw"`; gateway connection details are handled by the plugin.
+> ℹ️ These are **plugin-level** settings configured when the OpenClaw runtime plugin is installed/enabled. They are not agent-level `runtimeConfig` fields. Agents only need `runtimeConfig.runtimeHint: "openclaw"`.
 
-> ⚠️ `gatewayToken` is a secret. Never log it or commit it to version control. For production, prefer setting `OPENCLAW_GATEWAY_TOKEN` in the environment.
+OpenClaw tool-control uses the supported MCP CLI surface (`openclaw mcp set` + profile-scoped `--profile` runs) when custom Fusion tools are present; built-ins (`read`, `write`, `edit`, `bash`, `grep`, `find`) remain filtered from that MCP bridge.
 
-For additional gateway/runtime details, see the [OpenClaw Runtime Plugin documentation](../plugins/fusion-plugin-openclaw-runtime/README.md).
+For runtime details, see the [OpenClaw Runtime Plugin documentation](../plugins/fusion-plugin-openclaw-runtime/README.md).
 
 ---
 
@@ -885,6 +898,7 @@ Common built-in dashboard flags include:
 - `devServerView`
 - `todoView` (enables dashboard Todo View; see [Todo View](./todo-view.md))
 - `researchView`
+- `evalsView` (gates Evals dashboard view, Settings → Scheduled Evals section, and scheduled-eval cron execution)
 - `remoteAccess`
 - `agentOnboarding` (enables the **AI Interview** option inside the New Agent dialog)
 

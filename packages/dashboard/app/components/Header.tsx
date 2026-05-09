@@ -15,6 +15,7 @@ import type { TaskView } from "../hooks/useViewState";
 import type { PluginDashboardViewEntry } from "../api";
 import { buildPluginTaskViewId, isPluginViewId } from "../plugins/pluginViewRegistry";
 import { getPluginNavIcon } from "./pluginNavIcon";
+import type { ShellHostContext } from "../shell-host";
 
 export { useViewportMode };
 
@@ -183,6 +184,8 @@ export interface HeaderProps {
   onOpenMailbox?: () => void;
   /** Unread message count for badge display */
   mailboxUnreadCount?: number;
+  /** Pending approval count for mailbox indicator */
+  mailboxPendingApprovalCount?: number;
   /** Whether chat has an unread assistant response */
   chatHasUnreadResponse?: boolean;
   onOpenSchedules?: () => void;
@@ -224,7 +227,7 @@ export interface HeaderProps {
   onSelectProject?: (project: ProjectInfo) => void;
   onViewAllProjects?: () => void;
   projectId?: string;
-  isElectron?: boolean;
+  shellHost?: ShellHostContext;
   /** When true, the mobile bottom nav bar handles primary navigation and header nav controls are hidden. */
   mobileNavEnabled?: boolean;
   /** Available nodes for the node selector */
@@ -236,7 +239,7 @@ export interface HeaderProps {
   /** Whether the current view is a remote node */
   isRemote?: boolean;
   /** Experimental feature flags controlling visibility of nav items. */
-  experimentalFeatures?: { insights?: boolean; roadmap?: boolean; memoryView?: boolean; devServer?: boolean; devServerView?: boolean; researchView?: boolean };
+  experimentalFeatures?: { insights?: boolean; memoryView?: boolean; devServer?: boolean; devServerView?: boolean; researchView?: boolean; evalsView?: boolean };
   pluginDashboardViews?: PluginDashboardViewEntry[];
   shellConnectionControl?: ReactNode;
 }
@@ -252,6 +255,7 @@ export function Header({
   onOpenSystemStats,
   onOpenMailbox,
   mailboxUnreadCount = 0,
+  mailboxPendingApprovalCount = 0,
   chatHasUnreadResponse = false,
   onOpenSchedules,
   onOpenGitManager,
@@ -287,7 +291,7 @@ export function Header({
   onSelectProject,
   onViewAllProjects,
   projectId,
-  isElectron = false,
+  shellHost = { kind: "browser" },
   mobileNavEnabled,
   availableNodes = [],
   currentNode,
@@ -357,24 +361,20 @@ export function Header({
     return Object.entries(overflowScripts).sort(([a], [b]) => a.localeCompare(b));
   }, [overflowScripts]);
 
-  const hasRoadmapsPluginView = useMemo(
-    () => pluginDashboardViews.some((entry) => entry.pluginId === "fusion-plugin-roadmap"),
-    [pluginDashboardViews],
-  );
-
   const hasViewOverflowItems = useMemo(() => {
     return !!(
+      onChangeView ||
       experimentalFeatures?.researchView ||
       todosEnabled ||
       experimentalFeatures?.insights ||
-      (experimentalFeatures?.roadmap && !hasRoadmapsPluginView) ||
+
       showSkillsTab ||
       experimentalFeatures?.memoryView ||
       experimentalFeatures?.devServerView ||
       !hideFullNav ||
       pluginDashboardViews.some((entry) => entry.view.placement !== "primary")
     );
-  }, [experimentalFeatures, todosEnabled, showSkillsTab, hideFullNav, pluginDashboardViews, hasRoadmapsPluginView]);
+  }, [onChangeView, experimentalFeatures, todosEnabled, showSkillsTab, hideFullNav, pluginDashboardViews]);
 
   const getEffectiveViewport = useCallback(() => {
     const vv = window.visualViewport;
@@ -843,9 +843,11 @@ export function Header({
     if (onSearchChange) onSearchChange("");
   }, [onSearchChange]);
 
+  const isDesktopShell = shellHost.kind === "desktop-shell";
+
   return (
     <div className="header-wrapper">
-      <header className="header">
+      <header className="header" data-shell-kind={shellHost.kind}>
         <div className="header-left">
           <div className="header-brand">
           <svg
@@ -1149,6 +1151,9 @@ export function Header({
               aria-pressed={view === "mailbox"}
             >
               <Mail size={16} />
+              {mailboxPendingApprovalCount > 0 && view !== "mailbox" && (
+                <span className="status-dot status-dot--pending header-chat-unread-dot" aria-label="Pending approvals" />
+              )}
             </button>
             {pluginDashboardViews
               .filter((entry) => entry.view.placement === "primary")
@@ -1174,7 +1179,7 @@ export function Header({
               <>
                 <button
                   ref={viewOverflowTriggerRef}
-                  className={`view-toggle-btn${["research", "skills", "roadmaps", "insights", "memory", "dev-server", "devserver", "graph"].includes(view) || (todosEnabled && todosOpen) || isPluginViewId(view) ? " active" : ""}`}
+                  className={`view-toggle-btn${["research", "skills", "insights", "memory", "dev-server", "devserver", "graph"].includes(view) || (experimentalFeatures?.evalsView && view === "evals") || (todosEnabled && todosOpen) || isPluginViewId(view) ? " active" : ""}`}
                   onClick={() => setIsViewOverflowOpen((prev) => !prev)}
                   title="More views"
                   aria-label="More views"
@@ -1191,6 +1196,20 @@ export function Header({
                     role="menu"
                     aria-label="More views"
                   >
+                    {experimentalFeatures?.evalsView && (
+                      <button
+                        className={`view-toggle-overflow-item${view === "evals" ? " active" : ""}`}
+                        onClick={() => {
+                          onChangeView("evals");
+                          setIsViewOverflowOpen(false);
+                        }}
+                        role="menuitem"
+                        data-testid="view-overflow-evals"
+                      >
+                        <Target size={14} />
+                        <span>Evals</span>
+                      </button>
+                    )}
                     {experimentalFeatures?.researchView && (
                       <button
                         className={`view-toggle-overflow-item${view === "research" ? " active" : ""}`}
@@ -1219,19 +1238,7 @@ export function Header({
                         <span>Insights</span>
                       </button>
                     )}
-                    {experimentalFeatures?.roadmap && !hasRoadmapsPluginView && (
-                      <button
-                        className={`view-toggle-overflow-item${view === "roadmaps" ? " active" : ""}`}
-                        onClick={() => {
-                          onChangeView("roadmaps");
-                          setIsViewOverflowOpen(false);
-                        }}
-                        role="menuitem"
-                        data-testid="view-overflow-roadmaps"
-                      >
-                        <span>Roadmaps</span>
-                      </button>
-                    )}
+
                     {showSkillsTab && (
                       <button
                         className={`view-toggle-overflow-item${view === "skills" ? " active" : ""}`}
@@ -1345,7 +1352,7 @@ export function Header({
         )}
 
         {/* Desktop actions */}
-        {!isCompact && !isElectron && (
+        {!isCompact && !isDesktopShell && (
           <button className="btn-icon" onClick={onOpenGitHubImport} title="Import from GitHub">
             <GitHubLogo size={16} />
           </button>
@@ -1710,7 +1717,7 @@ export function Header({
                 <span>Nodes</span>
               </button>
             )}
-            {!isElectron && (
+            {!isDesktopShell && (
               <button
                 className="mobile-overflow-item"
                 onClick={() => handleOverflowAction(onOpenGitHubImport)}
@@ -1833,6 +1840,9 @@ export function Header({
               >
                 <Mail size={16} />
                 <span>Mailbox{mailboxUnreadCount > 0 ? ` (${mailboxUnreadCount})` : ""}</span>
+                {mailboxPendingApprovalCount > 0 && (
+                  <span className="header-badge" data-testid="overflow-mailbox-approval-badge">{mailboxPendingApprovalCount}</span>
+                )}
               </button>
             )}
             {/* Usage - in overflow on mobile */}

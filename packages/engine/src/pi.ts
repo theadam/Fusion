@@ -35,6 +35,11 @@ import {
   type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import { getEnabledPiExtensionPaths, getFusionAgentDir, getLegacyPiAgentDir, reconcileClaudeCliPaths, reconcileDroidCliPaths, resolvePiExtensionProjectRoot } from "@fusion/core";
+import type {
+  AgentPermissionPolicyActionCategory,
+  PermanentAgentActionCategory,
+  PermanentAgentGatingContext,
+} from "@fusion/core";
 import {
   resolveSessionSkills,
   createSkillsOverrideFromSelection,
@@ -44,6 +49,13 @@ import { isContextLimitError } from "./context-limit-detector.js";
 import { createFusionAuthStorage, getModelRegistryModelsPath } from "./auth-storage.js";
 import { piLog, extensionsLog } from "./logger.js";
 import { readCustomProviders } from "./custom-providers.js";
+import {
+  buildGateRejection,
+  evaluateAgentActionGate,
+  resolveGateOutcome,
+  type AgentActionGateContext,
+} from "./agent-action-gate.js";
+import { resolvePermanentAgentToolDecision } from "./permanent-agent-gating.js";
 
 export interface AgentResult {
   session: AgentSession;
@@ -429,11 +441,15 @@ export interface FallbackModelUsedPayload {
   timestamp?: string;
 }
 
+export type BuiltinWebToolName = "WebSearch" | "WebFetch";
+
 export interface AgentOptions {
   cwd: string;
   systemPrompt: string;
   tools?: "coding" | "readonly";
   customTools?: ToolDefinition[];
+  /** Optional allowlist of builtin runtime web tools to keep enabled. */
+  builtinToolsAllowlist?: BuiltinWebToolName[];
   onText?: (delta: string) => void;
   onThinking?: (delta: string) => void;
   onToolStart?: (name: string, args?: Record<string, unknown>) => void;
@@ -470,6 +486,9 @@ export interface AgentOptions {
   /** Optional task context for fallback notifications. */
   taskId?: string;
   taskTitle?: string;
+  actionGateContext?: AgentActionGateContext;
+  /** Permanent-agent action gating context forwarded by runtime/session helpers. */
+  permanentAgentGating?: PermanentAgentGatingContext;
 }
 
 function resolveConfiguredModel(
@@ -997,14 +1016,40 @@ function isWorktreeAllowedPath(
  * message with `content: undefined`, which pi's downstream handling later
  * crashes on with "Cannot read properties of undefined (reading 'filter')".
  */
-function boundaryRejection(message: string) {
+function boundaryRejection(message: string, details?: Record<string, unknown>) {
   return {
     content: [{ type: "text", text: message }],
     isError: true,
     ok: false,
     error: message,
+    ...(details ? { details } : {}),
   };
 }
+
+function normalizeApprovalRequestCategory(
+  category: PermanentAgentActionCategory,
+): AgentPermissionPolicyActionCategory {
+  if (category === "none") {
+    return "command_execution";
+  }
+  return category;
+}
+
+function buildPermanentAgentApprovalDedupeKey(input: {
+  requesterActorId?: string;
+  taskId?: string;
+  toolName: string;
+  category: PermanentAgentActionCategory;
+}): string {
+  return [
+    input.requesterActorId ?? "",
+    input.taskId ?? "",
+    input.toolName,
+    input.category,
+  ].join("|");
+}
+
+const HEARTBEAT_TERMINAL_TOOL_NAME = "fn_heartbeat_done";
 
 export function wrapToolsWithBoundary(
   tools: ToolDefinition[],
@@ -1057,6 +1102,170 @@ export function wrapToolsWithBoundary(
 
         // Call the original tool implementation with all arguments passed through
         return originalExecute(...args);
+      },
+    };
+  });
+}
+
+export function wrapToolsWithPermanentAgentGating(
+  tools: ToolDefinition[],
+  gating: PermanentAgentGatingContext | undefined,
+): ToolDefinition[] {
+  if (!gating) {
+    return tools;
+  }
+
+  return tools.map((tool) => {
+    // FN-3852: heartbeat terminal completion must never be approval-gated,
+    // otherwise permanent-agent runs can deadlock in an open session.
+    if (tool.name === HEARTBEAT_TERMINAL_TOOL_NAME) {
+      return tool;
+    }
+
+    const originalExecute = tool.execute as any;
+    return {
+      ...tool,
+      execute: async (...args: any[]) => {
+        const params = (args[1] ?? {}) as Record<string, unknown>;
+        const decision = resolvePermanentAgentToolDecision({
+          toolName: tool.name,
+          args: params,
+          gating,
+        });
+
+        if (decision.disposition === "allow") {
+          return originalExecute(...args);
+        }
+
+        const details: Record<string, unknown> = {
+          disposition: decision.disposition,
+          category: decision.category,
+          toolName: decision.toolName,
+          ...(decision.disposition === "require-approval" ? { requiresApproval: true } : {}),
+        };
+
+        if (decision.disposition === "require-approval") {
+          const dedupeKey = buildPermanentAgentApprovalDedupeKey({
+            requesterActorId: gating.requester?.actorId,
+            taskId: gating.taskId,
+            toolName: decision.toolName,
+            category: decision.category,
+          });
+          details.approvalDedupeKey = dedupeKey;
+
+          let approvalRequest = await gating.findPendingApprovalRequest?.(dedupeKey);
+          if (!approvalRequest && gating.createApprovalRequest) {
+            approvalRequest = await gating.createApprovalRequest({
+              category: normalizeApprovalRequestCategory(decision.category),
+              toolName: decision.toolName,
+              args: params,
+            });
+          }
+
+          if (approvalRequest?.id) {
+            details.approvalRequestId = approvalRequest.id;
+          }
+        }
+
+        const reason = decision.disposition === "block"
+          ? `Action blocked by permanent-agent policy (${decision.category}) for tool ${decision.toolName}`
+          : `Action requires approval (${decision.category}) before tool ${decision.toolName} can run`;
+
+        return boundaryRejection(reason, details);
+      },
+    };
+  });
+}
+
+export function wrapToolsWithActionGate(
+  tools: ToolDefinition[],
+  gateContext: AgentActionGateContext | undefined,
+): ToolDefinition[] {
+  if (!gateContext || gateContext.isEphemeral) {
+    return tools;
+  }
+
+  return tools.map((tool) => {
+    // FN-3852: heartbeat terminal completion must never be approval-gated,
+    // otherwise permanent-agent runs can deadlock in an open session.
+    if (tool.name === HEARTBEAT_TERMINAL_TOOL_NAME) {
+      return tool;
+    }
+
+    const originalExecute = tool.execute as any;
+    return {
+      ...tool,
+      execute: async (...args: any[]) => {
+        const params = (args[1] ?? {}) as Record<string, unknown>;
+        const decision = evaluateAgentActionGate({
+          agentId: gateContext.agentId,
+          taskId: gateContext.taskId,
+          toolName: tool.name,
+          args: params,
+          permissionPolicy: gateContext.permissionPolicy,
+        });
+
+        const latestApproval = gateContext.findApprovalByDedupeKey
+          ? await gateContext.findApprovalByDedupeKey(decision.approvalDedupeKey)
+          : await gateContext.findPendingApprovalByDedupeKey?.(decision.approvalDedupeKey).then((request) =>
+            request ? { id: request.id, status: "pending" as const } : null
+          );
+
+        const gateOutcome = resolveGateOutcome(decision, latestApproval ?? null);
+
+        if (gateOutcome.outcome === "allow") {
+          return originalExecute(...args);
+        }
+
+        if (gateOutcome.outcome === "execute-once-then-complete") {
+          const result = await originalExecute(...args);
+          if (gateOutcome.approvalRequestId) {
+            await gateContext.markApprovalCompleted?.(gateOutcome.approvalRequestId);
+          }
+          return result;
+        }
+
+        if (gateOutcome.outcome === "block") {
+          if (latestApproval?.status === "denied") {
+            return buildGateRejection(
+              {
+                ...decision,
+                metadata: {
+                  ...decision.metadata,
+                  approvalRequestId: latestApproval.id,
+                  dedupeKey: decision.approvalDedupeKey,
+                },
+              },
+              "Action was denied by approver. The agent must not retry this action.",
+            );
+          }
+
+          return buildGateRejection(
+            decision,
+            `Action blocked by permission policy (${decision.category}) for ${gateContext.agentName}`,
+          );
+        }
+
+        let approvalRequestId = gateOutcome.approvalRequestId;
+        if (!approvalRequestId) {
+          const created = await gateContext.createApprovalRequest(decision, params) as { id?: string } | null;
+          approvalRequestId = created?.id;
+          if (approvalRequestId) {
+            await gateContext.pauseForApproval?.({ approvalRequestId, decision });
+          }
+        }
+
+        return buildGateRejection(
+          {
+            ...decision,
+            metadata: {
+              ...decision.metadata,
+              ...(approvalRequestId ? { approvalRequestId } : {}),
+              dedupeKey: decision.approvalDedupeKey,
+            },
+          },
+          `Action requires approval (request ${approvalRequestId ?? "pending"}). Agent and task have been paused; will resume once a decision is made.`,
+        );
       },
     };
   });
@@ -1139,7 +1348,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
   if (worktreeProjectRoot) {
     await assertValidWorktreeSession(worktreePath, worktreeProjectRoot);
   }
-  const wrappedTools = wrapToolsWithBoundary(tools, worktreePath, worktreeProjectRoot);
+  const boundaryContext = { worktreePath, worktreeProjectRoot };
 
   // resolvedProjectRoot was computed above (before registerExtensionProviders)
   // and is reused here for resource loader and skill discovery.
@@ -1231,10 +1440,23 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
     // suppress the defaults with `noTools: "builtin"` and register our wrapped
     // tools through `customTools` instead. The wrapped tools preserve the same
     // names (`read`, `bash`, ...) as the built-ins they replace.
-    const customToolList: ToolDefinition[] = [
-      ...(wrappedTools as ToolDefinition[]),
+    const toolChainStart: ToolDefinition[] = [
+      ...(tools as ToolDefinition[]),
       ...(options.customTools ?? []),
     ];
+    const toolsWithPermanentGating = wrapToolsWithPermanentAgentGating(
+      toolChainStart,
+      options.permanentAgentGating,
+    );
+    const toolsWithActionGate = wrapToolsWithActionGate(
+      toolsWithPermanentGating,
+      options.actionGateContext,
+    );
+    const customToolList: ToolDefinition[] = wrapToolsWithBoundary(
+      toolsWithActionGate,
+      boundaryContext.worktreePath,
+      boundaryContext.worktreeProjectRoot,
+    );
     // Last-chance abort hook. Fires *here* — after every awaited setup step
     // in createFnAgent (provider registration, worktree validation, resource
     // loader reload) and immediately before the actual LLM session spawn.
@@ -1243,7 +1465,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
     if (options.beforeSpawnSession) {
       await options.beforeSpawnSession();
     }
-    return createAgentSession({
+    const createSessionOptions: Parameters<typeof createAgentSession>[0] = {
       cwd: options.cwd,
       authStorage,
       modelRegistry,
@@ -1253,7 +1475,18 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
       sessionManager,
       settingsManager,
       ...(modelOverride ? { model: modelOverride } : {}),
-    });
+    };
+
+    if (options.builtinToolsAllowlist && options.builtinToolsAllowlist.length > 0) {
+      createSessionOptions.tools = [
+        ...new Set([
+          ...customToolList.map((tool) => tool.name),
+          ...options.builtinToolsAllowlist,
+        ]),
+      ];
+    }
+
+    return createAgentSession(createSessionOptions);
   };
 
   const emitFallbackUsed = async (triggerPoint: "session-creation" | "prompt-time"): Promise<void> => {

@@ -50,7 +50,7 @@ import {
   sendErrorResponse,
   unauthorized,
 } from "./api-error.js";
-import { resolvePluginManifest } from "./plugin-routes.js";
+import { createPluginRouter, resolvePluginManifest } from "./plugin-routes.js";
 import { hermesRuntimeMetadata } from "@fusion-plugin-examples/hermes-runtime";
 import { openclawRuntimeMetadata } from "@fusion-plugin-examples/openclaw-runtime";
 
@@ -91,6 +91,7 @@ import { createApiRoutesContext } from "./routes/context.js";
 import { registerTaskWorkflowRoutes } from "./routes/register-task-workflow-routes.js";
 import { registerPlanningSubtaskRoutes } from "./routes/register-planning-subtask-routes.js";
 import { registerChatRoutes } from "./routes/register-chat-routes.js";
+import { registerChatRoomRoutes } from "./routes/register-chat-room-routes.js";
 import { registerSettingsMemoryRoutes } from "./routes/register-settings-memory-routes.js";
 import { registerMessagingScriptRoutes } from "./routes/register-messaging-scripts.js";
 import { registerGitGitHubRoutes } from "./routes/register-git-github.js";
@@ -119,6 +120,7 @@ import { registerRuntimeProviderRoutes } from "./routes/register-runtime-provide
 import { registerFnBinaryRoutes } from "./routes/register-fn-binary-routes.js";
 import { registerUpdateCheckRoutes } from "./routes/register-update-check-routes.js";
 import { registerIntegratedRouters, registerIntegratedDevServerRouter } from "./routes/register-integrated-routers.js";
+import { registerApprovalRoutes } from "./routes/register-approval-routes.js";
 import { runGitCommand } from "./routes/resolve-diff-base.js";
 
 const TASK_DETAIL_ACTIVITY_LOG_LIMIT = 500;
@@ -295,7 +297,12 @@ async function discoverDashboardPiExtensions(cwd: string): Promise<PiExtensionSe
   };
 }
 
-import { createFnAgent as engineCreateFnAgentForRefine, promptWithFallback as enginePromptWithFallback } from "@fusion/engine";
+import {
+  createFnAgent as engineCreateFnAgentForRefine,
+  getExemptToolNames as engineGetExemptToolNames,
+  promptWithFallback as enginePromptWithFallback,
+  reloadExemptTools as engineReloadExemptTools,
+} from "@fusion/engine";
 
 // Test-injectable override; defaults to the statically imported engine binding.
 let createFnAgentForRefine: typeof import("@fusion/engine").createFnAgent | undefined = engineCreateFnAgentForRefine;
@@ -972,11 +979,13 @@ export function createApiRoutes(store: TaskStore, options?: ServerOptions): Rout
     validateOptionalModelField,
     upload,
   });
+  registerChatRoomRoutes(routeContext);
   registerMessagingScriptRoutes(routeContext);
   registerGitGitHubRoutes(routeContext);
   registerFilesTerminalWorkspaceRoutes(routeContext);
   registerAgentsProjectsNodesRoutes(routeContext);
   registerPluginsAutomationRoutes(routeContext);
+  registerApprovalRoutes(routeContext);
 
   // HeartbeatMonitor for triggering agent execution runs
   const heartbeatMonitor = options?.heartbeatMonitor;
@@ -1261,6 +1270,33 @@ export function createApiRoutes(store: TaskStore, options?: ServerOptions): Rout
       }
 
       res.json({ success: true, source });
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        throw err;
+      }
+      rethrowAsApiError(err);
+    }
+  });
+
+  /**
+   * POST /api/action-gate/reload
+   * Reloads action-gate exempt tools from defaults or a provided override list.
+   */
+  router.post("/action-gate/reload", async (req, res) => {
+    try {
+      const body = (req.body && typeof req.body === "object") ? (req.body as Record<string, unknown>) : {};
+      const hasTools = Object.hasOwn(body, "tools");
+      if (hasTools) {
+        const tools = body.tools;
+        if (!Array.isArray(tools) || tools.some((tool) => typeof tool !== "string")) {
+          throw badRequest("Request body must provide tools as string[] when present");
+        }
+        engineReloadExemptTools(tools);
+      } else {
+        engineReloadExemptTools();
+      }
+
+      res.json({ ok: true, tools: engineGetExemptToolNames() });
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         throw err;
@@ -3097,7 +3133,6 @@ export function createApiRoutes(store: TaskStore, options?: ServerOptions): Rout
   // Keep this call at the current position to preserve precedence with
   // surrounding route handlers. registerIntegratedRouters() mounts:
   // - /missions
-  // - /roadmaps
   // - /insights
   // - /todos
   registerIntegratedRouters({
@@ -3590,8 +3625,10 @@ export function createApiRoutes(store: TaskStore, options?: ServerOptions): Rout
 
     if (plugin.state !== "started") {
       res.json({
-        hasSetup: false,
-        status: { status: "error", error: "Plugin not loaded" },
+        hasSetup: true,
+        setupCheckDeferred: true,
+        deferredReason: "plugin-not-started",
+        pluginState: plugin.state,
       });
       return;
     }
@@ -4428,6 +4465,19 @@ export function createApiRoutes(store: TaskStore, options?: ServerOptions): Rout
   // Dev server mount intentionally stays in this late position to keep route
   // precedence unchanged relative to existing wildcard handlers.
   registerIntegratedDevServerRouter({ router, store });
+
+  if (options?.pluginStore && options?.pluginLoader) {
+    const pluginRunner = options.pluginRunner as Parameters<typeof createPluginRouter>[2];
+    router.use(
+      "/plugins",
+      createPluginRouter(
+        options.pluginStore,
+        options.pluginLoader,
+        pluginRunner,
+        store,
+      ),
+    );
+  }
 
   // Scripts and messaging routes are registered by registerMessagingScriptRoutes().
 

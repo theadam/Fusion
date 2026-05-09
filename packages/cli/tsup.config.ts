@@ -13,7 +13,13 @@ const RUNTIME_PLUGIN_IDS = [
   "fusion-plugin-openclaw-runtime",
   "fusion-plugin-paperclip-runtime",
   "fusion-plugin-cursor-runtime",
+  "fusion-plugin-droid-runtime",
 ] as const;
+
+const RUNTIME_PLUGINS_WITH_MCP_SCHEMA_SERVER = new Set([
+  "fusion-plugin-openclaw-runtime",
+  "fusion-plugin-droid-runtime",
+]);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dashboardClientSrc = join(__dirname, "..", "dashboard", "dist", "client");
@@ -26,6 +32,12 @@ const llamaCppSrc = join(__dirname, "..", "pi-llama-cpp");
 const llamaCppDest = join(__dirname, "dist", "pi-llama-cpp");
 const dependencyGraphPluginSrc = join(__dirname, "..", "..", "plugins", "fusion-plugin-dependency-graph");
 const dependencyGraphPluginDest = join(__dirname, "dist", "plugins", "fusion-plugin-dependency-graph");
+const whatsappChatPluginSrc = join(__dirname, "..", "..", "plugins", "fusion-plugin-whatsapp-chat");
+const whatsappChatPluginDest = join(__dirname, "dist", "plugins", "fusion-plugin-whatsapp-chat");
+const roadmapPluginSrc = join(__dirname, "..", "..", "plugins", "fusion-plugin-roadmap");
+const roadmapPluginDest = join(__dirname, "dist", "plugins", "fusion-plugin-roadmap");
+const reportsPluginSrc = join(__dirname, "..", "..", "plugins", "fusion-plugin-reports");
+const reportsPluginDest = join(__dirname, "dist", "plugins", "fusion-plugin-reports");
 const dashboardClientStub = `<!doctype html>
 <html lang="en">
   <head>
@@ -140,6 +152,51 @@ export default defineConfig({
       );
     }
 
+    if (existsSync(whatsappChatPluginDest)) {
+      rmSync(whatsappChatPluginDest, { recursive: true, force: true });
+    }
+    if (existsSync(whatsappChatPluginSrc)) {
+      mkdirSync(whatsappChatPluginDest, { recursive: true });
+      cpSync(join(whatsappChatPluginSrc, "manifest.json"), join(whatsappChatPluginDest, "manifest.json"));
+      cpSync(join(whatsappChatPluginSrc, "package.json"), join(whatsappChatPluginDest, "package.json"));
+      cpSync(join(whatsappChatPluginSrc, "src"), join(whatsappChatPluginDest, "src"), { recursive: true });
+      console.log("Copied WhatsApp chat plugin to dist/plugins/fusion-plugin-whatsapp-chat/");
+    } else {
+      console.warn(
+        `WARNING: WhatsApp chat plugin source not found at ${whatsappChatPluginSrc}; bundled auto-install will be unavailable.`,
+      );
+    }
+
+    if (existsSync(roadmapPluginDest)) {
+      rmSync(roadmapPluginDest, { recursive: true, force: true });
+    }
+    if (existsSync(roadmapPluginSrc)) {
+      mkdirSync(roadmapPluginDest, { recursive: true });
+      cpSync(join(roadmapPluginSrc, "manifest.json"), join(roadmapPluginDest, "manifest.json"));
+      cpSync(join(roadmapPluginSrc, "package.json"), join(roadmapPluginDest, "package.json"));
+      cpSync(join(roadmapPluginSrc, "src"), join(roadmapPluginDest, "src"), { recursive: true });
+      console.log("Copied roadmap plugin to dist/plugins/fusion-plugin-roadmap/");
+    } else {
+      console.warn(
+        `WARNING: Roadmap plugin source not found at ${roadmapPluginSrc}; bundled auto-install will be unavailable.`,
+      );
+    }
+
+    if (existsSync(reportsPluginDest)) {
+      rmSync(reportsPluginDest, { recursive: true, force: true });
+    }
+    if (existsSync(reportsPluginSrc)) {
+      mkdirSync(reportsPluginDest, { recursive: true });
+      cpSync(join(reportsPluginSrc, "manifest.json"), join(reportsPluginDest, "manifest.json"));
+      cpSync(join(reportsPluginSrc, "package.json"), join(reportsPluginDest, "package.json"));
+      cpSync(join(reportsPluginSrc, "src"), join(reportsPluginDest, "src"), { recursive: true });
+      console.log("Copied reports plugin to dist/plugins/fusion-plugin-reports/");
+    } else {
+      console.warn(
+        `WARNING: Reports plugin source not found at ${reportsPluginSrc}; bundled auto-install will be unavailable.`,
+      );
+    }
+
     // Bundle each runtime plugin into a self-contained ESM file so npm/npx
     // installs can load them without the workspace `@fusion/plugin-sdk`.
     for (const pluginId of RUNTIME_PLUGIN_IDS) {
@@ -196,6 +253,16 @@ export default defineConfig({
         external: ["@fusion/core", "@fusion/engine"],
         logLevel: "warning",
       });
+
+      if (RUNTIME_PLUGINS_WITH_MCP_SCHEMA_SERVER.has(pluginId)) {
+        const mcpServerAsset = join(pluginSrcDir, "src", "mcp-schema-server.cjs");
+        if (!existsSync(mcpServerAsset)) {
+          throw new Error(
+            `[tsup] Missing required bridge asset for ${pluginId} at ${mcpServerAsset}; expected committed source file mcp-schema-server.cjs.`,
+          );
+        }
+        cpSync(mcpServerAsset, join(pluginDestDir, "mcp-schema-server.cjs"));
+      }
 
       console.log(`Bundled runtime plugin ${pluginId} to dist/plugins/${pluginId}/bundled.js`);
     }

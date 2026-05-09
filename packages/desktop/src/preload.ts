@@ -27,10 +27,12 @@ interface ShellConnectionState {
   desktopMode?: "local" | "remote";
   activeProfileId: string | null;
   profiles: ShellConnectionProfile[];
-  localServer?: {
-    status: "idle" | "starting" | "ready" | "error";
+  localRuntime?: {
+    source: "embedded-local" | "external-cli" | "none";
+    state: "stopped" | "starting" | "running" | "error";
     port?: number;
-    error?: string | null;
+    baseUrl?: string;
+    error?: string;
   };
 }
 
@@ -49,6 +51,15 @@ const electronApi = {
   getSystemInfo: (): Promise<SystemInfo> => ipcRenderer.invoke("app:getSystemInfo"),
   checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke("app:checkForUpdates"),
   getServerPort: (): Promise<number | undefined> => ipcRenderer.invoke("app:getServerPort"),
+  getDesktopRuntimeStatus: (): Promise<ShellConnectionState["localRuntime"]> => ipcRenderer.invoke("desktopRuntime:getStatus"),
+  startDesktopLocalRuntime: (): Promise<ShellConnectionState["localRuntime"]> => ipcRenderer.invoke("desktopRuntime:startLocal"),
+  stopDesktopLocalRuntime: (): Promise<ShellConnectionState["localRuntime"]> => ipcRenderer.invoke("desktopRuntime:stopLocal"),
+  getDesktopLaunchMode: (): Promise<"choose" | "local" | "remote"> => ipcRenderer.invoke("desktopLaunchMode:getMode"),
+  setDesktopLaunchMode: (mode: "choose" | "local" | "remote"): Promise<"choose" | "local" | "remote"> =>
+    ipcRenderer.invoke("desktopLaunchMode:setMode", mode),
+  getDesktopLaunchContext: (): Promise<{ mode: "remote"; profileId: string; serverBaseUrl: string; serverLabel?: string; authToken?: string } | null> =>
+    ipcRenderer.invoke("desktopLaunchMode:getContext"),
+  openConnectionManager: (): Promise<void> => ipcRenderer.invoke("shell:openConnectionManager"),
 
   // Tray status
   updateTrayStatus: (status: string): Promise<void> => ipcRenderer.invoke("tray:updateStatus", status),

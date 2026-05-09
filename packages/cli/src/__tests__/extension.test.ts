@@ -123,6 +123,7 @@ async function enableResearch(cwd: string): Promise<TaskStore> {
     researchGlobalEnabled: true,
     researchGlobalDefaults: { searchProvider: "searxng" },
     researchGlobalSearxngUrl: "http://localhost:8888",
+    experimentalFeatures: { researchView: true } as Record<string, boolean>,
   });
   await store.updateSettings({
     researchEnabled: true,
@@ -203,6 +204,8 @@ describe.skipIf(!SHOULD_RUN_LEGACY_EXTENSION_INTEGRATION)("fn pi extension (lega
         "fn_feature_link_task",
         "fn_agent_stop",
         "fn_agent_start",
+        "fn_agent_create",
+        "fn_agent_delete",
         "fn_list_agents",
         "fn_delegate_task",
         "fn_agent_show",
@@ -1341,6 +1344,46 @@ describe("fn pi extension (runnable structured-output regression slice)", () => 
     expect(result.content[0].text).toContain(ephemeralId);
   });
 
+  it("fn_task_create rejects non-executor assignment for implementation tasks", async () => {
+    const agentStore = new AgentStore({ rootDir: join(tmpDir, ".fusion") });
+    await agentStore.init();
+    const reviewer = await agentStore.createAgent({ name: "reviewer-create", role: "reviewer" });
+
+    const createTool = api.tools.get("fn_task_create")!;
+    const result = await createTool.execute(
+      "create-role-check",
+      { description: "create with reviewer", agentId: reviewer.id },
+      undefined,
+      undefined,
+      makeCtx(tmpDir),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("requires an \"executor\"-role agent");
+  });
+
+  it("fn_task_update rejects non-executor assignment for implementation tasks", async () => {
+    const agentStore = new AgentStore({ rootDir: join(tmpDir, ".fusion") });
+    await agentStore.init();
+    const reviewer = await agentStore.createAgent({ name: "reviewer", role: "reviewer" });
+
+    const store = new TaskStore(tmpDir);
+    await store.init();
+    const task = await store.createTask({ description: "needs owner", column: "todo" });
+
+    const updateTool = api.tools.get("fn_task_update")!;
+    const result = await updateTool.execute(
+      "update-role-check",
+      { id: task.id, agentId: reviewer.id },
+      undefined,
+      undefined,
+      makeCtx(tmpDir),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("requires an \"executor\"-role agent");
+  });
+
   describe("fn_list_agents", () => {
     it("returns agent list", async () => {
       await seedAgent(tmpDir, { name: "alpha-agent" });
@@ -1430,17 +1473,32 @@ describe("fn pi extension (runnable structured-output regression slice)", () => 
       const tool = api.tools.get("fn_research_run")!;
       const researchStore = store.getResearchStore();
 
-      setTimeout(() => {
+      const settleRunToCompleted = () => {
         const queuedRun = researchStore.listRuns({ limit: 1 })[0];
         if (!queuedRun) {
-          return;
+          return false;
         }
-        researchStore.updateRun(queuedRun.id, { status: "running" });
+        if (queuedRun.status === "completed") {
+          return true;
+        }
+        if (queuedRun.status === "queued") {
+          researchStore.updateRun(queuedRun.id, { status: "running" });
+        }
         researchStore.updateRun(queuedRun.id, {
           status: "completed",
           results: { summary: "done", findings: [{ heading: "h1", content: "f1", sources: [] }], citations: [] },
         });
-      }, 25);
+        return true;
+      };
+
+      if (!settleRunToCompleted()) {
+        const interval = setInterval(() => {
+          if (settleRunToCompleted()) {
+            clearInterval(interval);
+          }
+        }, 25);
+        setTimeout(() => clearInterval(interval), 500);
+      }
 
       const result = await tool.execute(
         "research-run-wait",
@@ -1512,6 +1570,42 @@ describe("fn pi extension (runnable structured-output regression slice)", () => 
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("ephemeral/runtime agent");
+    });
+
+    it("rejects non-executor delegate target without override", async () => {
+      const agentStore = new AgentStore({ rootDir: join(tmpDir, ".fusion") });
+      await agentStore.init();
+      const reviewer = await agentStore.createAgent({ name: "delegate-reviewer", role: "reviewer" });
+
+      const tool = api.tools.get("fn_delegate_task")!;
+      const result = await tool.execute(
+        "dt-role-1",
+        { agent_id: reviewer.id, description: "Will fail role policy" },
+        undefined,
+        undefined,
+        makeCtx(tmpDir),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("requires an \"executor\"-role agent");
+    });
+
+    it("allows non-executor delegate target with override", async () => {
+      const agentStore = new AgentStore({ rootDir: join(tmpDir, ".fusion") });
+      await agentStore.init();
+      const reviewer = await agentStore.createAgent({ name: "delegate-reviewer-override", role: "reviewer" });
+
+      const tool = api.tools.get("fn_delegate_task")!;
+      const result = await tool.execute(
+        "dt-role-2",
+        { agent_id: reviewer.id, description: "Intentional override", override: true },
+        undefined,
+        undefined,
+        makeCtx(tmpDir),
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(result.details.agentId).toBe(reviewer.id);
     });
 
     it("wires dependencies correctly", async () => {
