@@ -111,8 +111,8 @@
 }
 
 .project-stat--error {
-  border-color: rgba(248, 81, 73, 0.3);
-  background: rgba(248, 81, 73, 0.08);
+  border-color: color-mix(in srgb, var(--color-error) 30%, var(--border));
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
 }
 
 .project-stat--error .project-stat__value {
@@ -180,8 +180,8 @@
 }
 
 .project-filter-tab.has-errors.active {
-  background: rgba(248, 81, 73, 0.12);
-  border-color: rgba(248, 81, 73, 0.3);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+  border-color: color-mix(in srgb, var(--color-error) 30%, var(--border));
 }
 
 .project-filter-count {
@@ -206,7 +206,7 @@
 }
 
 .project-filter-tab.has-errors .project-filter-count {
-  background: rgba(248, 81, 73, 0.2);
+  background: color-mix(in srgb, var(--color-error) 20%, transparent);
   color: var(--color-error);
 }
 

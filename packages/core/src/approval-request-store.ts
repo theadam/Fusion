@@ -221,6 +221,31 @@ export class ApprovalRequestStore {
     return rows.map((row) => this.rowToRequest(row));
   }
 
+  findLatestByDedupeKey(input: { requesterActorId: string; taskId?: string; dedupeKey: string }): ApprovalRequest | null {
+    const where = ["requesterActorId = ?"];
+    const params: Array<string> = [input.requesterActorId];
+
+    if (input.taskId !== undefined) {
+      where.push("taskId = ?");
+      params.push(input.taskId);
+    }
+
+    const rows = this.db.prepare(`
+      SELECT * FROM approval_requests
+      WHERE ${where.join(" AND ")}
+      ORDER BY createdAt DESC, id DESC
+    `).all(...params) as ApprovalRequestRow[];
+
+    for (const row of rows) {
+      const context = fromJson<Record<string, unknown>>(row.targetContext);
+      if (context?.approvalDedupeKey === input.dedupeKey) {
+        return this.rowToRequest(row);
+      }
+    }
+
+    return null;
+  }
+
   decide(requestId: string, status: "approved" | "denied", input: ApprovalRequestDecisionInput): ApprovalRequest {
     const existing = this.get(requestId);
     if (!existing) {

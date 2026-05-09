@@ -5,6 +5,7 @@ import {
   evaluateAgentActionGate,
   getExemptToolNames,
   reloadExemptTools,
+  resolveGateOutcome,
 } from "../agent-action-gate.js";
 import type { AgentPermissionPolicy } from "@fusion/core";
 
@@ -213,6 +214,65 @@ describe("agent-action-gate", () => {
   it("resolves disposition from policy", () => {
     const result = evaluateAgentActionGate({ agentId: "a1", toolName: "write", args: { path: "a.ts" }, permissionPolicy: approvalPolicy });
     expect(result.disposition).toBe("require-approval");
+  });
+
+  it("resolveGateOutcome waits when there is no latest request", () => {
+    const decision = evaluateAgentActionGate({
+      agentId: "a1",
+      toolName: "write",
+      args: { path: "a.ts" },
+      permissionPolicy: approvalPolicy,
+    });
+    expect(resolveGateOutcome(decision, null)).toEqual({ outcome: "wait-for-approval" });
+  });
+
+  it("resolveGateOutcome reuses pending request", () => {
+    const decision = evaluateAgentActionGate({
+      agentId: "a1",
+      toolName: "write",
+      args: { path: "a.ts" },
+      permissionPolicy: approvalPolicy,
+    });
+    expect(resolveGateOutcome(decision, { id: "apr-1", status: "pending" })).toEqual({
+      outcome: "wait-for-approval",
+      approvalRequestId: "apr-1",
+    });
+  });
+
+  it("resolveGateOutcome executes once on approved request", () => {
+    const decision = evaluateAgentActionGate({
+      agentId: "a1",
+      toolName: "write",
+      args: { path: "a.ts" },
+      permissionPolicy: approvalPolicy,
+    });
+    expect(resolveGateOutcome(decision, { id: "apr-1", status: "approved" })).toEqual({
+      outcome: "execute-once-then-complete",
+      approvalRequestId: "apr-1",
+    });
+  });
+
+  it("resolveGateOutcome blocks denied request", () => {
+    const decision = evaluateAgentActionGate({
+      agentId: "a1",
+      toolName: "write",
+      args: { path: "a.ts" },
+      permissionPolicy: approvalPolicy,
+    });
+    expect(resolveGateOutcome(decision, { id: "apr-1", status: "denied" })).toEqual({
+      outcome: "block",
+      approvalRequestId: "apr-1",
+    });
+  });
+
+  it("resolveGateOutcome requires new approval after completion", () => {
+    const decision = evaluateAgentActionGate({
+      agentId: "a1",
+      toolName: "write",
+      args: { path: "a.ts" },
+      permissionPolicy: approvalPolicy,
+    });
+    expect(resolveGateOutcome(decision, { id: "apr-1", status: "completed" })).toEqual({ outcome: "wait-for-approval" });
   });
 
   it("computes deterministic dedupe key", () => {

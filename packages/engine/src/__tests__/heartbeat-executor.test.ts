@@ -267,6 +267,59 @@ describe("executeHeartbeat", () => {
     expect(args.permanentAgentGating?.permissionPolicy?.presetId).toBe("unrestricted");
   });
 
+  it("pauseForApproval pauses task and agent when taskId exists", async () => {
+    const store = createStoreWithAgentForExec({ taskId: "FN-001" });
+    const pauseTask = vi.fn().mockResolvedValue(undefined);
+    const logEntry = vi.fn().mockResolvedValue(undefined);
+    mockTaskStore = createMockTaskStore({ pauseTask, logEntry });
+    const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
+
+    const ctx = (monitor as any).buildActionGateContext({ id: "agent-001", name: "Test Agent", permissionPolicy: undefined }, "FN-001", "run-1");
+    await ctx.pauseForApproval({
+      approvalRequestId: "apr-1",
+      decision: {
+        disposition: "require-approval",
+        category: "command_execution",
+        toolName: "bash",
+        operation: "git commit",
+        summary: "bash: git commit",
+        resourceType: "git",
+        approvalDedupeKey: "dedupe-1",
+        metadata: {},
+      },
+    });
+
+    expect(pauseTask).toHaveBeenCalledWith("FN-001", true, undefined, { pausedByAgentId: "agent-001" });
+    expect((store.updateAgentState as any)).toHaveBeenCalledWith("agent-001", "paused");
+    expect((store.updateAgent as any)).toHaveBeenCalledWith("agent-001", { pauseReason: "awaiting-approval" });
+  });
+
+  it("pauseForApproval still pauses agent when taskId is undefined", async () => {
+    const store = createStoreWithAgentForExec({ taskId: undefined });
+    const pauseTask = vi.fn().mockResolvedValue(undefined);
+    mockTaskStore = createMockTaskStore({ pauseTask });
+    const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
+
+    const ctx = (monitor as any).buildActionGateContext({ id: "agent-001", name: "Test Agent", permissionPolicy: undefined }, undefined, "run-1");
+    await ctx.pauseForApproval({
+      approvalRequestId: "apr-1",
+      decision: {
+        disposition: "require-approval",
+        category: "command_execution",
+        toolName: "bash",
+        operation: "git commit",
+        summary: "bash: git commit",
+        resourceType: "git",
+        approvalDedupeKey: "dedupe-1",
+        metadata: {},
+      },
+    });
+
+    expect(pauseTask).not.toHaveBeenCalled();
+    expect((store.updateAgentState as any)).toHaveBeenCalledWith("agent-001", "paused");
+    expect((store.updateAgent as any)).toHaveBeenCalledWith("agent-001", { pauseReason: "awaiting-approval" });
+  });
+
   it("omits permanent-agent gating context for ephemeral heartbeat agents", async () => {
     const store = createStoreWithAgentForExec({
       taskId: "FN-001",

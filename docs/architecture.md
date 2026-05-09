@@ -218,6 +218,15 @@ Schema (migration 68 in `db.ts`) adds two tables:
 
 Store API (`packages/core/src/approval-request-store.ts`):
 
+Dashboard approval endpoints (`packages/dashboard/src/routes/register-approval-routes.ts`):
+- `GET /api/approval-requests`
+- `GET /api/approval-requests/:id`
+- `GET /api/approval-requests/:id/audit`
+- `POST /api/approval-requests/:id/approve`
+- `POST /api/approval-requests/:id/deny`
+
+Runtime flow: engine action gate creates/reuses request → pauses task/agent with `pauseReason="awaiting-approval"` → approver calls approve/deny endpoint → request transitions (`pending→approved|denied`) → route resumes matching paused task/agent best-effort → next tool retry consumes `approved` exactly once (then `completed`) or returns structured denial.
+
 - `create(input: ApprovalRequestCreateInput)` — inserts a `pending` request and appends a `created` audit event
 - `get(id)` — returns one request or `null`
 - `list(input?: ApprovalRequestListInput)` — filters by `status`, `requesterActorId`, `taskId`, `runId`; ordered `createdAt DESC, id DESC`; paginated by `limit`/`offset`

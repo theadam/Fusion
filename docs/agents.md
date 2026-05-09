@@ -90,11 +90,14 @@ Unknown/unclassified tool fallback:
 - Operators can reload the in-memory exempt-tool registry at runtime via `POST /api/action-gate/reload` (optional body `{ "tools": string[] }`) to apply exemption-list updates without restarting the engine process.
 - Canonical tool classification/exemption sets live in `packages/engine/src/gating-classifications.ts` and are shared by both action-gate paths.
 
-Interim enforcement behavior (persistence-integrated, pre-resume lifecycle):
+Approval pause/resume lifecycle (FN-3548):
 
 - Permanent-agent gating short-circuits `block` and `require-approval` actions before tool execution and returns structured non-success tool results.
-- For `require-approval`, the engine now creates durable approval requests (via `ApprovalRequestStore`) with requester identity, task/run context, and tool/action metadata; the original mutation is not executed.
-- Pause/resume execution, suspended-run continuation, and approve/deny continuation behavior remain deferred to FN-3548.
+- For `require-approval`, the engine creates/reuses a durable approval request and pauses execution with canonical `pauseReason: "awaiting-approval"`.
+- If task-backed, the owning task is paused (`Task.paused=true`, `pausedByAgentId=<requester>`); the requesting agent is paused (`state="paused"`, `pauseReason="awaiting-approval"`).
+- Dedupe semantics by `approvalDedupeKey`: `pending` reuses the same request, `approved` allows exactly one execution and then marks request `completed`, `denied` stays blocked, `completed` requires a fresh request.
+- HTTP decision endpoints resume best-effort: `POST /api/approval-requests/:id/approve` and `POST /api/approval-requests/:id/deny` unpause matching task/agent when they are paused for `awaiting-approval`.
+- Approval API surface: `GET /api/approval-requests`, `GET /api/approval-requests/:id`, `GET /api/approval-requests/:id/audit`, `POST /api/approval-requests/:id/approve`, `POST /api/approval-requests/:id/deny`.
 
 Default and legacy fallback behavior:
 

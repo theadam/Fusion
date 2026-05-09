@@ -755,9 +755,34 @@ export class TaskExecutor {
           },
         },
       }),
+      findApprovalByDedupeKey: async (dedupeKey) => {
+        const latest = this.approvalRequestStore.findLatestByDedupeKey({ requesterActorId: agent.id, taskId, dedupeKey });
+        return latest ? { id: latest.id, status: latest.status } : null;
+      },
       findPendingApprovalByDedupeKey: async (dedupeKey) => {
-        const pending = this.approvalRequestStore.list({ status: "pending", requesterActorId: agent.id, taskId, limit: 100 });
-        return pending.find((request) => request.targetAction.context?.approvalDedupeKey === dedupeKey) ?? null;
+        const latest = this.approvalRequestStore.findLatestByDedupeKey({ requesterActorId: agent.id, taskId, dedupeKey });
+        return latest?.status === "pending" ? { id: latest.id } : null;
+      },
+      pauseForApproval: async ({ approvalRequestId, decision }) => {
+        if (taskId) {
+          await this.store.pauseTask(taskId, true, this.currentRunContext, { pausedByAgentId: agent.id });
+          await this.store.logEntry(
+            taskId,
+            `Approval required for ${decision.toolName}. Request ${approvalRequestId} created; task and agent paused awaiting decision.`,
+            undefined,
+            this.currentRunContext,
+          );
+        }
+        if (this.options.agentStore) {
+          await this.options.agentStore.updateAgentState(agent.id, "paused");
+          await this.options.agentStore.updateAgent(agent.id, { pauseReason: "awaiting-approval" });
+        }
+      },
+      markApprovalCompleted: async (approvalRequestId) => {
+        await this.approvalRequestStore.markCompleted(approvalRequestId, {
+          actor: { actorId: agent.id, actorType: "agent", actorName: agent.name },
+          note: "Tool executed after approval",
+        });
       },
     };
   }

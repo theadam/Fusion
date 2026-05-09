@@ -119,6 +119,7 @@ import { registerRuntimeProviderRoutes } from "./routes/register-runtime-provide
 import { registerFnBinaryRoutes } from "./routes/register-fn-binary-routes.js";
 import { registerUpdateCheckRoutes } from "./routes/register-update-check-routes.js";
 import { registerIntegratedRouters, registerIntegratedDevServerRouter } from "./routes/register-integrated-routers.js";
+import { registerApprovalRoutes } from "./routes/register-approval-routes.js";
 import { runGitCommand } from "./routes/resolve-diff-base.js";
 
 const TASK_DETAIL_ACTIVITY_LOG_LIMIT = 500;
@@ -982,6 +983,7 @@ export function createApiRoutes(store: TaskStore, options?: ServerOptions): Rout
   registerFilesTerminalWorkspaceRoutes(routeContext);
   registerAgentsProjectsNodesRoutes(routeContext);
   registerPluginsAutomationRoutes(routeContext);
+  registerApprovalRoutes(routeContext);
 
   // HeartbeatMonitor for triggering agent execution runs
   const heartbeatMonitor = options?.heartbeatMonitor;

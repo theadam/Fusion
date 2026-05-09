@@ -151,6 +151,42 @@ describe("buildExecutionPrompt", () => {
   });
 });
 
+describe("TaskExecutor action gate context", () => {
+  it("pauses task and agent for approval and marks completion", async () => {
+    const store = createMockStore();
+    store.pauseTask = vi.fn().mockResolvedValue(undefined);
+    store.logEntry = vi.fn().mockResolvedValue(undefined);
+    const agentStore = {
+      updateAgentState: vi.fn().mockResolvedValue(undefined),
+      updateAgent: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const executor = new TaskExecutor(store as any, "/tmp/project", { agentStore });
+    (executor as any).currentRunContext = { runId: "run-1" };
+
+    const context = (executor as any).buildActionGateContext("FN-1", { id: "agent-1", name: "Agent One", permissionPolicy: undefined });
+
+    await context.pauseForApproval({
+      approvalRequestId: "apr-1",
+      decision: {
+        disposition: "require-approval",
+        category: "command_execution",
+        toolName: "bash",
+        operation: "git commit",
+        summary: "bash: git commit",
+        resourceType: "git",
+        approvalDedupeKey: "dedupe-1",
+        metadata: {},
+      },
+    });
+
+    expect(store.pauseTask).toHaveBeenCalledWith("FN-1", true, { runId: "run-1" }, { pausedByAgentId: "agent-1" });
+    expect(agentStore.updateAgentState).toHaveBeenCalledWith("agent-1", "paused");
+    expect(agentStore.updateAgent).toHaveBeenCalledWith("agent-1", { pauseReason: "awaiting-approval" });
+
+  });
+});
+
 // ── Skill Selection Regression Tests (FN-1514) ──────────────────────────
 
 describe("TaskExecutor skillSelection regression (FN-1511)", () => {

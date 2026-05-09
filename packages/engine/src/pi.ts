@@ -52,6 +52,7 @@ import { readCustomProviders } from "./custom-providers.js";
 import {
   buildGateRejection,
   evaluateAgentActionGate,
+  resolveGateOutcome,
   type AgentActionGateContext,
 } from "./agent-action-gate.js";
 import { resolvePermanentAgentToolDecision } from "./permanent-agent-gating.js";
@@ -1190,25 +1191,70 @@ export function wrapToolsWithActionGate(
           permissionPolicy: gateContext.permissionPolicy,
         });
 
-        if (decision.disposition === "allow") {
+        const latestApproval = gateContext.findApprovalByDedupeKey
+          ? await gateContext.findApprovalByDedupeKey(decision.approvalDedupeKey)
+          : await gateContext.findPendingApprovalByDedupeKey?.(decision.approvalDedupeKey).then((request) =>
+            request ? { id: request.id, status: "pending" as const } : null
+          );
+
+        const gateOutcome = resolveGateOutcome(decision, latestApproval ?? null);
+
+        if (gateOutcome.outcome === "allow") {
           return originalExecute(...args);
         }
 
-        if (decision.disposition === "block") {
+        if (gateOutcome.outcome === "execute-once-then-complete") {
+          try {
+            const result = await originalExecute(...args);
+            if (gateOutcome.approvalRequestId) {
+              await gateContext.markApprovalCompleted?.(gateOutcome.approvalRequestId);
+            }
+            return result;
+          } catch (error) {
+            throw error;
+          }
+        }
+
+        if (gateOutcome.outcome === "block") {
+          if (latestApproval?.status === "denied") {
+            return buildGateRejection(
+              {
+                ...decision,
+                metadata: {
+                  ...decision.metadata,
+                  approvalRequestId: latestApproval.id,
+                  dedupeKey: decision.approvalDedupeKey,
+                },
+              },
+              "Action was denied by approver. The agent must not retry this action.",
+            );
+          }
+
           return buildGateRejection(
             decision,
             `Action blocked by permission policy (${decision.category}) for ${gateContext.agentName}`,
           );
         }
 
-        const existing = await gateContext.findPendingApprovalByDedupeKey(decision.approvalDedupeKey);
-        if (!existing) {
-          await gateContext.createApprovalRequest(decision, params);
+        let approvalRequestId = gateOutcome.approvalRequestId;
+        if (!approvalRequestId) {
+          const created = await gateContext.createApprovalRequest(decision, params) as { id?: string } | null;
+          approvalRequestId = created?.id;
+          if (approvalRequestId) {
+            await gateContext.pauseForApproval?.({ approvalRequestId, decision });
+          }
         }
 
         return buildGateRejection(
-          decision,
-          `Action requires approval (${decision.category}). Approval request queued.`,
+          {
+            ...decision,
+            metadata: {
+              ...decision.metadata,
+              ...(approvalRequestId ? { approvalRequestId } : {}),
+              dedupeKey: decision.approvalDedupeKey,
+            },
+          },
+          `Action requires approval (request ${approvalRequestId ?? "pending"}). Agent and task have been paused; will resume once a decision is made.`,
         );
       },
     };

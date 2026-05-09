@@ -2,6 +2,7 @@ import type {
   AgentPermissionPolicy,
   AgentPermissionPolicyActionCategory,
   AgentPermissionPolicyDisposition,
+  ApprovalRequestStatus,
 } from "@fusion/core";
 import {
   ACTION_GATE_NETWORK_API_TOOLS,
@@ -34,7 +35,11 @@ export interface AgentActionGateContext {
   runId?: string;
   permissionPolicy: AgentPermissionPolicy;
   createApprovalRequest: (decision: AgentActionGateDecision, args: Record<string, unknown>) => Promise<unknown>;
-  findPendingApprovalByDedupeKey: (dedupeKey: string) => Promise<unknown | null>;
+  findApprovalByDedupeKey?: (dedupeKey: string) => Promise<{ id: string; status: ApprovalRequestStatus } | null>;
+  /** @deprecated Use findApprovalByDedupeKey */
+  findPendingApprovalByDedupeKey?: (dedupeKey: string) => Promise<{ id: string } | null>;
+  pauseForApproval?: (info: { approvalRequestId: string; decision: AgentActionGateDecision }) => Promise<void>;
+  markApprovalCompleted?: (approvalRequestId: string) => Promise<void>;
 }
 
 // FN-3724: Internal Fusion runtime/coordinator tools never perform external mutations.
@@ -185,6 +190,31 @@ export function evaluateAgentActionGate(params: {
     approvalDedupeKey: dedupeKey,
     metadata: {},
   };
+}
+
+export function resolveGateOutcome(
+  decision: AgentActionGateDecision,
+  latestRequest: { id: string; status: ApprovalRequestStatus } | null,
+): { outcome: "allow" | "block" | "execute-once-then-complete" | "wait-for-approval"; approvalRequestId?: string } {
+  if (decision.disposition === "allow") {
+    return { outcome: "allow" };
+  }
+  if (decision.disposition === "block") {
+    return { outcome: "block" };
+  }
+  if (!latestRequest) {
+    return { outcome: "wait-for-approval" };
+  }
+  if (latestRequest.status === "pending") {
+    return { outcome: "wait-for-approval", approvalRequestId: latestRequest.id };
+  }
+  if (latestRequest.status === "approved") {
+    return { outcome: "execute-once-then-complete", approvalRequestId: latestRequest.id };
+  }
+  if (latestRequest.status === "denied") {
+    return { outcome: "block", approvalRequestId: latestRequest.id };
+  }
+  return { outcome: "wait-for-approval" };
 }
 
 export function buildGateRejection(decision: AgentActionGateDecision, reason: string) {

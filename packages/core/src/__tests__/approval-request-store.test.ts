@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -191,6 +191,98 @@ describe("ApprovalRequestStore", () => {
     expect(pending.map((r) => r.id)).toContain(first.id);
     expect(approved.map((r) => r.id)).toContain(second.id);
     expect(byTask.map((r) => r.id)).toEqual([first.id]);
+  });
+
+  it("findLatestByDedupeKey returns newest match across statuses", () => {
+    vi.useFakeTimers();
+    const dedupeKey = "agent-1|FN-100|write|file_write_delete|file|a.ts|write";
+
+    vi.setSystemTime(new Date("2026-05-08T00:00:00.000Z"));
+    const first = store.create({
+      requester: REQUESTER,
+      targetAction: {
+        category: "file_write_delete",
+        action: "write",
+        summary: "write a.ts",
+        resourceType: "file",
+        resourceId: "a.ts",
+        context: { approvalDedupeKey: dedupeKey },
+      },
+      taskId: "FN-100",
+    });
+    store.decide(first.id, "approved", { actor: APPROVER });
+
+    vi.setSystemTime(new Date("2026-05-08T00:00:01.000Z"));
+    const second = store.create({
+      requester: REQUESTER,
+      targetAction: {
+        category: "file_write_delete",
+        action: "write",
+        summary: "write a.ts again",
+        resourceType: "file",
+        resourceId: "a.ts",
+        context: { approvalDedupeKey: dedupeKey },
+      },
+      taskId: "FN-100",
+    });
+
+    const latest = store.findLatestByDedupeKey({ requesterActorId: REQUESTER.actorId, taskId: "FN-100", dedupeKey });
+    expect(latest?.id).toBe(second.id);
+    expect(latest?.status).toBe("pending");
+    vi.useRealTimers();
+  });
+
+  it("findLatestByDedupeKey scopes by requester and task", () => {
+    const dedupeKey = "shared-key";
+
+    const mine = store.create({
+      requester: REQUESTER,
+      targetAction: {
+        category: "command_execution",
+        action: "bash",
+        summary: "run command",
+        resourceType: "command",
+        resourceId: "pnpm test",
+        context: { approvalDedupeKey: dedupeKey },
+      },
+      taskId: "FN-200",
+    });
+
+    store.create({
+      requester: { ...REQUESTER, actorId: "agent-2" },
+      targetAction: {
+        category: "command_execution",
+        action: "bash",
+        summary: "other requester",
+        resourceType: "command",
+        resourceId: "pnpm lint",
+        context: { approvalDedupeKey: dedupeKey },
+      },
+      taskId: "FN-200",
+    });
+
+    store.create({
+      requester: REQUESTER,
+      targetAction: {
+        category: "command_execution",
+        action: "bash",
+        summary: "other task",
+        resourceType: "command",
+        resourceId: "pnpm build",
+        context: { approvalDedupeKey: dedupeKey },
+      },
+      taskId: "FN-201",
+    });
+
+    const scoped = store.findLatestByDedupeKey({ requesterActorId: REQUESTER.actorId, taskId: "FN-200", dedupeKey });
+    expect(scoped?.id).toBe(mine.id);
+  });
+
+  it("findLatestByDedupeKey returns null when no dedupe key matches", () => {
+    createSampleRequest();
+
+    const latest = store.findLatestByDedupeKey({ requesterActorId: REQUESTER.actorId, taskId: "FN-3546", dedupeKey: "missing" });
+    expect(latest).toBeNull();
   });
 
   it("persists requests and audit history across restart/migration", () => {
