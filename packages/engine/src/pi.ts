@@ -1049,6 +1049,8 @@ function buildPermanentAgentApprovalDedupeKey(input: {
   ].join("|");
 }
 
+const HEARTBEAT_TERMINAL_TOOL_NAME = "fn_heartbeat_done";
+
 export function wrapToolsWithBoundary(
   tools: ToolDefinition[],
   worktreePath: string | null,
@@ -1114,6 +1116,12 @@ export function wrapToolsWithPermanentAgentGating(
   }
 
   return tools.map((tool) => {
+    // FN-3852: heartbeat terminal completion must never be approval-gated,
+    // otherwise permanent-agent runs can deadlock in an open session.
+    if (tool.name === HEARTBEAT_TERMINAL_TOOL_NAME) {
+      return tool;
+    }
+
     const originalExecute = tool.execute as any;
     return {
       ...tool,
@@ -1178,6 +1186,12 @@ export function wrapToolsWithActionGate(
   }
 
   return tools.map((tool) => {
+    // FN-3852: heartbeat terminal completion must never be approval-gated,
+    // otherwise permanent-agent runs can deadlock in an open session.
+    if (tool.name === HEARTBEAT_TERMINAL_TOOL_NAME) {
+      return tool;
+    }
+
     const originalExecute = tool.execute as any;
     return {
       ...tool,

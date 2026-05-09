@@ -529,6 +529,34 @@ describe("wrapToolsWithPermanentAgentGating", () => {
     expect((result as any).details).toBeUndefined();
     expect(tool.execute).not.toHaveBeenCalled();
   });
+
+  it("bypasses wrapping for fn_heartbeat_done under locked-down policy", async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, terminal: true });
+    const tool = { name: "fn_heartbeat_done", label: "Heartbeat Done", description: "", parameters: {}, execute };
+    const createApprovalRequest = vi.fn();
+    const findPendingApprovalRequest = vi.fn();
+    const { wrapToolsWithPermanentAgentGating } = await import("../pi.js");
+    const wrapped = wrapToolsWithPermanentAgentGating([tool as any], {
+      permissionPolicy: {
+        presetId: "locked-down",
+        rules: {
+          git_write: "block",
+          file_write_delete: "block",
+          command_execution: "block",
+          network_api: "block",
+          task_agent_mutation: "block",
+        },
+      },
+      createApprovalRequest,
+      findPendingApprovalRequest,
+    });
+
+    expect(wrapped[0]).toBe(tool);
+    await expect((wrapped[0] as any).execute("t1", {})).resolves.toEqual({ ok: true, terminal: true });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(findPendingApprovalRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("wrapToolsWithActionGate", () => {
@@ -670,22 +698,34 @@ describe("wrapToolsWithActionGate", () => {
     expect(tool.execute).not.toHaveBeenCalled();
   });
 
-  it("passes through exempt internal tools under locked-down policy", async () => {
-    const execute = vi.fn().mockResolvedValue({ ok: true });
+  it.each<[
+    "locked-down" | "approval-required",
+    typeof lockedDownRules | typeof approvalRules
+  ]>([
+    ["locked-down", lockedDownRules],
+    ["approval-required", approvalRules],
+  ])("bypasses wrapping for fn_heartbeat_done under %s policy", async (presetId, rules) => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, terminal: true });
     const tool = { name: "fn_heartbeat_done", label: "Heartbeat Done", description: "", parameters: {}, execute };
+    const createApprovalRequest = vi.fn();
+    const pauseForApproval = vi.fn();
     const { wrapToolsWithActionGate } = await import("../pi.js");
     const wrapped = wrapToolsWithActionGate([tool as any], {
       agentId: "agent-1",
       agentName: "Agent",
       isEphemeral: false,
       taskId: "FN-1",
-      permissionPolicy: { presetId: "locked-down", rules: lockedDownRules },
-      createApprovalRequest: vi.fn(),
+      permissionPolicy: { presetId, rules },
+      createApprovalRequest,
       findApprovalByDedupeKey: vi.fn(),
+      pauseForApproval,
     });
 
-    await (wrapped[0] as any).execute("t1", {});
+    expect(wrapped[0]).toBe(tool);
+    await expect((wrapped[0] as any).execute("t1", {})).resolves.toEqual({ ok: true, terminal: true });
     expect(execute).toHaveBeenCalledTimes(1);
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(pauseForApproval).not.toHaveBeenCalled();
   });
 });
 
