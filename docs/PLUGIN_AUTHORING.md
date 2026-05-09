@@ -456,7 +456,8 @@ const plugin: FusionPlugin = {
 
 ### Route Mounting
 
-Routes are mounted at `/api/plugins/{pluginId}/{path}`:
+Routes are mounted at `/api/plugins/{pluginId}/{path}`.
+Route handlers receive the same loader-built `PluginContext` used by hooks/tools, including real `taskStore`, plugin `settings`, `logger`, `emitEvent`, and engine-injected `createAiSession` (when available):
 
 - Plugin ID: `fusion-plugin-notification`
 - Route path: `/status`

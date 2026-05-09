@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createRoadmapPluginRoutes } from "../routes/roadmap-routes.js";
+import { createRoadmapPluginRoutes } from "../roadmap-routes.js";
 
 function createCtx() {
   return {
@@ -29,5 +29,20 @@ describe("createRoadmapPluginRoutes", () => {
     const route = createRoadmapPluginRoutes().find((r) => r.path === "/roadmaps/:roadmapId/suggestions/milestones");
     const result = await route!.handler({ params: { roadmapId: "RM-1" }, body: {} }, createCtx());
     expect(result).toMatchObject({ status: 400 });
+  });
+
+  it("returns 404 for milestone suggestions when roadmap is missing", async () => {
+    const route = createRoadmapPluginRoutes().find((r) => r.path === "/roadmaps/:roadmapId/suggestions/milestones");
+    const ctx = createCtx();
+    const store = ctx.taskStore.getRoadmapStore();
+    ctx.taskStore.getRoadmapStore = () => ({ ...store, getRoadmap: vi.fn(() => null) });
+    const result = await route!.handler({ params: { roadmapId: "RM-404" }, body: { goalPrompt: "goal" } }, ctx);
+    expect(result).toMatchObject({ status: 404 });
+  });
+
+  it("returns 503 for suggestions when createAiSession is unavailable", async () => {
+    const route = createRoadmapPluginRoutes().find((r) => r.path === "/roadmaps/:roadmapId/suggestions/milestones");
+    const result = await route!.handler({ params: { roadmapId: "RM-1" }, body: { goalPrompt: "goal" } }, createCtx());
+    expect(result).toMatchObject({ status: 503 });
   });
 });

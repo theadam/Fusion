@@ -1204,6 +1204,47 @@ describe("plugin-defined route dispatch", () => {
     const patchRoute = stack.find((layer) => layer.route?.path === "/roadmap-planner/roadmaps/x");
     expect(patchRoute?.route?.methods.patch).toBe(true);
   });
+
+  it("passes scoped taskStore and createAiSession through pluginLoader.createRouteContext", async () => {
+    const routeHandler = vi.fn().mockResolvedValue({ ok: true });
+    const pluginRunner = {
+      getPluginRoutes: vi.fn().mockReturnValue([
+        { pluginId: "roadmap-planner", route: { method: "POST", path: "/ctx-check", handler: routeHandler } },
+      ]),
+    };
+    const scopedPluginStore = createMockPluginStore();
+    const scopedTaskStore = createMockTaskStore({ getPluginStore: vi.fn().mockReturnValue(scopedPluginStore) });
+    mockGetOrCreateProjectStore.mockResolvedValue(scopedTaskStore);
+    const createRouteContext = vi.fn().mockImplementation(async (_pluginId: string, overrides: any) => ({
+      pluginId: "roadmap-planner",
+      taskStore: overrides.taskStore,
+      settings: overrides.settings,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      emitEvent: vi.fn(),
+      createAiSession: vi.fn(),
+      resolveProjectTaskStore: overrides.resolveProjectTaskStore,
+    }));
+    const pluginLoader = createMockPluginLoader({
+      createRouteContext,
+      getPlugin: vi.fn().mockReturnValue({ manifest: { id: "roadmap-planner" } }),
+    } as any);
+    const pluginStore = createMockPluginStore();
+
+    const app = express();
+    app.use(express.json());
+    app.use("/api/plugins", createPluginRouter(pluginStore, pluginLoader, pluginRunner as any, createMockTaskStore()));
+
+    const res = await REQUEST(app, "POST", "/api/plugins/roadmap-planner/ctx-check", { projectId: "proj_123" });
+    expect(res.status).toBe(200);
+    expect(createRouteContext).toHaveBeenCalledWith("roadmap-planner", expect.objectContaining({
+      taskStore: scopedTaskStore,
+      resolveProjectTaskStore: projectStoreResolver.getOrCreateProjectStore,
+    }));
+    expect(routeHandler).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ taskStore: scopedTaskStore, createAiSession: expect.any(Function) }),
+    );
+  });
 });
 
 describe("Project scoping", () => {

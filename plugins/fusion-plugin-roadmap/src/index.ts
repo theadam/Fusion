@@ -1,5 +1,5 @@
 import { definePlugin } from "@fusion/plugin-sdk";
-import { createRoadmapPluginRoutes } from "./routes/roadmap-routes.js";
+import { createRoadmapPluginRoutes } from "./roadmap-routes.js";
 import { ensureRoadmapSchema } from "./roadmap-schema.js";
 
 const plugin = definePlugin({

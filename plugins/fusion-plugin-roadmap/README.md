@@ -31,4 +31,6 @@
 
 Roadmap tables are plugin-owned and created via `hooks.onSchemaInit` in `src/index.ts`, which delegates to `src/roadmap-schema.ts`. Core database bootstrap no longer creates roadmap tables/indexes.
 
+Roadmap AI suggestion generation is plugin-owned (`src/roadmap-suggestions.ts` / `src/roadmap-routes.ts`) and uses `PluginContext.createAiSession()` when available. The plugin must not import `@fusion/engine` directly for suggestion generation.
+
 The plugin keeps a single canonical dashboard entrypoint (`./dashboard-view`) and accepts host-supplied dashboard context (`projectId`, optional `addToast`). Do not deep-import dashboard internals from this plugin.

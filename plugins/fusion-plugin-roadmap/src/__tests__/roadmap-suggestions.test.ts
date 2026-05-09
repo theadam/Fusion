@@ -4,7 +4,7 @@ import {
   __setCreateAiSessionFactory,
   generateMilestoneSuggestions,
   ServiceUnavailableError,
-} from "../routes/roadmap-suggestions.js";
+} from "../roadmap-suggestions.js";
 
 describe("roadmap suggestion service", () => {
   beforeEach(() => {
