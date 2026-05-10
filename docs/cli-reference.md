@@ -820,13 +820,16 @@ Plugin lifecycle management.
 fn plugin list
 fn plugin install <path> [--ai-scan]
 fn plugin rescan <id>
+fn plugin trust <id>
+fn plugin untrust <id>
+fn plugin verify <id>
 fn plugin uninstall <id> --force
 fn plugin enable <id>
 fn plugin disable <id>
 fn plugin create <name>
 ```
 
-Subcommands: `list|ls`, `install`, `rescan`, `uninstall`, `enable`, `disable`, `create`.
+Subcommands: `list|ls`, `install`, `rescan`, `trust`, `untrust`, `verify`, `uninstall`, `enable`, `disable`, `create`.
 
 Scope semantics:
 - `fn plugin install` / `fn plugin uninstall` are **global** operations

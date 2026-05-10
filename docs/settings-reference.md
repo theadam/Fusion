@@ -173,6 +173,7 @@ Defaults from `DEFAULT_PROJECT_SETTINGS`; key scope from `PROJECT_SETTINGS_KEYS`
 | `unavailableNodePolicy` | `"block" \| "fallback-local"` | `"block"` | Project routing policy used during scheduler dispatch when a task resolves to a remote node and node health is known. `"block"` keeps the task in `todo` if the node is unhealthy; `"fallback-local"` reroutes dispatch to local execution. See [Architecture → Task Routing Architecture](./architecture.md#task-routing-architecture). |
 
 | `groupOverlappingFiles` | `boolean` | `true` | Serialize execution when file scopes overlap. |
+| `pluginTrustPolicy` | `"off" | "warn" | "enforce"` | `"warn"` | Plugin provenance enforcement mode: `off` records verification metadata only, `warn` blocks only `invalid` signatures, `enforce` allows only `verified-trusted` or `trusted-local`. |
 | `overlapIgnorePaths` | `string[]` | `[]` | Optional project-relative file or directory paths to exclude from overlap blocking (for example `docs` or `generated/openapi.json`). Entries are trimmed, deduplicated, and must not be absolute or contain `..` traversal. |
 | `autoMerge` | `boolean` | `true` | Auto-finalize tasks from `in-review`. |
 | `mergeStrategy` | `"direct" \| "pull-request"` | `"direct"` | Completion mode (local direct merge vs PR-first). |
@@ -339,6 +340,16 @@ Follow-up policy meanings:
 - `disabled`: do not emit follow-up suggestions/tasks
 - `suggest-only`: emit suggestions without automatic task creation
 - `auto-create`: permit automatic task creation for qualifying follow-ups
+
+### Plugin trust policy (project scope)
+
+`pluginTrustPolicy` controls loader behavior after signature verification:
+
+- `off`: always continue load decisions based on existing plugin lifecycle checks; signature/trust metadata is still persisted
+- `warn`: block only `invalid` signatures (tampered/corrupt). `unsigned` and `verified-untrusted` remain loadable with warnings
+- `enforce`: allow only `verified-trusted` and `trusted-local`; block `verified-untrusted`, `unsigned`, and `invalid`
+
+`trusted-local` is reserved for bundled in-repo plugin paths so existing shipped plugins remain usable without retro-signing.
 
 ### Node Routing settings (project scope)
 

@@ -80,6 +80,37 @@ If your plugin is blocked:
 - document external calls and sensitive operations in README
 - ask operators to run `fn plugin rescan <id>` after publishing fixes
 
+### Signature Verification and Publisher Trust
+
+Fusion supports deterministic detached-signature verification for plugin provenance before plugin code is loaded.
+
+Expected plugin files at the plugin root:
+- `manifest.json`
+- `plugin-publisher.json` (publisher identity + public key metadata)
+- `plugin-signature.json` (detached signature over canonical payload)
+
+Canonical payload inputs (sorted, deterministic):
+- normalized `manifest.json`
+- publisher metadata from `plugin-publisher.json`
+- declared file digest map (sorted by relative path)
+
+Verification statuses:
+- `trusted-local` — bundled/in-repo plugin path trusted by local policy exception
+- `verified-trusted` — signature verifies and publisher key is trusted
+- `verified-untrusted` — signature verifies but publisher/key is not trusted yet
+- `unsigned` — no signature bundle present
+- `invalid` — signature or digest validation failed (tampered/corrupt)
+
+Trust decisions are explicit and keyed by publisher ID + key fingerprint. Manifest author/homepage strings are informational only and are never used as trust proof.
+
+### Plugin Author Checklist for Signed Releases
+
+1. Produce deterministic file digests for distributed plugin files
+2. Publish `plugin-publisher.json` with stable publisher ID and key fingerprint
+3. Sign the canonical payload and ship `plugin-signature.json`
+4. Keep digest/signature files in source control and release artifacts
+5. In release notes, include publisher ID + key fingerprint so operators can verify trust prompts
+
 ### Plugin Project Structure
 
 ```
@@ -1100,6 +1131,10 @@ This keeps regressions durable while preserving clear ownership boundaries acros
    ```bash
    npm publish --access public
    ```
+
+### Signed plugin recommendation
+
+For production distribution, publish signed artifacts (`plugin-publisher.json` + `plugin-signature.json`) alongside your compiled plugin output so operators can verify provenance under warn/enforce trust policy modes.
 
 ### Installation
 
