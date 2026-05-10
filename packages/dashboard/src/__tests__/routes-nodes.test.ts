@@ -107,6 +107,7 @@ describe("Node routes", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   describe("GET /api/nodes", () => {
@@ -371,6 +372,61 @@ describe("Node routes", () => {
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(1);
       expect(res.body[0].connections).toHaveLength(0);
+    });
+
+    it("fetches remote local mesh state and merges it into response", async () => {
+      const nodes = [
+        createMockNode({ id: "local", name: "Local", type: "local" }),
+        createMockNode({ id: "remote-1", name: "Remote 1", type: "remote", url: "http://remote1:3001" }),
+      ];
+      mockListNodes.mockResolvedValue(nodes);
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ([
+          {
+            nodeId: "remote-1",
+            nodeName: "Remote 1",
+            nodeUrl: "http://remote1:3001",
+            type: "local",
+            status: "online",
+            metrics: { cpuUsage: 50 },
+            lastSeen: "2026-01-02T00:00:00.000Z",
+            connectedAt: "2026-01-01T00:00:00.000Z",
+            knownPeers: [],
+          },
+        ]),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const res = await get(app, "/api/mesh/state");
+
+      expect(res.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://remote1:3001/api/mesh/state?includeRemote=false",
+        expect.objectContaining({ method: "GET" }),
+      );
+      const remoteState = res.body.find((entry: { nodeId: string }) => entry.nodeId === "remote-1");
+      expect(remoteState).toBeDefined();
+      expect(remoteState.metrics).toEqual({ cpuUsage: 50 });
+    });
+
+    it("returns only local node state when includeRemote is false", async () => {
+      const nodes = [
+        createMockNode({ id: "local", name: "Local", type: "local" }),
+        createMockNode({ id: "remote-1", name: "Remote 1", type: "remote", url: "http://remote1:3001" }),
+      ];
+      mockListNodes.mockResolvedValue(nodes);
+
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const res = await get(app, "/api/mesh/state?includeRemote=false");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(1);
+      expect(res.body[0].nodeId).toBe("local");
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 

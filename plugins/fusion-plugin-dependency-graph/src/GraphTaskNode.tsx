@@ -105,8 +105,8 @@ export function GraphTaskNode({
       data-current-step={isActive && hasValidCurrentStep ? String(task.currentStep) : undefined}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      onClick={(event) => {
-        onClick?.(event);
+      onClick={onClick}
+      onDoubleClick={(event) => {
         if (event.defaultPrevented) {
           return;
         }

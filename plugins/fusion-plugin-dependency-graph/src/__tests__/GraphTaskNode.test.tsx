@@ -220,18 +220,17 @@ describe("GraphTaskNode", () => {
     expect(screen.getByTestId("graph-task-node-FN-TEST").hasAttribute("data-current-step")).toBe(false);
   });
 
-  it("clicking card opens task detail exactly once", () => {
+  it("double-clicking card opens task detail exactly once", () => {
     const props = createProps(createTask());
     const { container } = render(<GraphTaskNode {...props} />);
 
-    const card = container.querySelector(".card");
-    expect(card).toBeTruthy();
-    fireEvent.click(card!);
+    const node = screen.getByTestId("graph-task-node-FN-TEST");
+    fireEvent.doubleClick(node);
     expect(props.onOpenDetail).toHaveBeenCalledTimes(1);
     expect(props.onOpenDetail).toHaveBeenCalledWith(expect.objectContaining({ id: "FN-TEST" }));
   });
 
-  it("clicking active indicator surface opens task detail", () => {
+  it("single click on active indicator surface does not open task detail", () => {
     const props = createProps(createTask({ column: "in-progress", status: "executing" }));
     const { container } = render(<GraphTaskNode {...props} />);
 
@@ -239,8 +238,7 @@ describe("GraphTaskNode", () => {
     expect(indicator).toBeTruthy();
     fireEvent.click(indicator!);
 
-    expect(props.onOpenDetail).toHaveBeenCalledTimes(1);
-    expect(props.onOpenDetail).toHaveBeenCalledWith(expect.objectContaining({ id: "FN-TEST" }));
+    expect(props.onOpenDetail).not.toHaveBeenCalled();
   });
 
   it("applies highlighted class only when requested", () => {

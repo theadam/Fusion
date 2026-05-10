@@ -3,26 +3,38 @@ import type { ApiRouteRegistrar } from "./types.js";
 import { fetchFromRemoteNode } from "./register-settings-sync-helpers.js";
 
 export const registerMeshRoutes: ApiRouteRegistrar = (ctx) => {
-  const { router, store, emitRemoteRouteDiagnostic, rethrowAsApiError } = ctx;
+  const { router, store, options, emitRemoteRouteDiagnostic, rethrowAsApiError } = ctx;
+
+  const withCentralCore = async <T>(work: (central: import("@fusion/core").CentralCore) => Promise<T>): Promise<T> => {
+    const { CentralCore } = await import("@fusion/core");
+    const central = options?.centralCore ?? new CentralCore();
+    const shouldClose = !options?.centralCore;
+    if (shouldClose) {
+      await central.init();
+    }
+    try {
+      return await work(central);
+    } finally {
+      if (shouldClose) {
+        await central.close();
+      }
+    }
+  };
 
   const resolveAllocator = async (coordinatorNodeId?: string) => {
-    const { CentralCore } = await import("@fusion/core");
-    const central = new CentralCore();
-    await central.init();
-    if (!coordinatorNodeId) {
-      await central.close();
-      return { mode: "local" as const };
-    }
-    const coordinator = await central.getNode(coordinatorNodeId);
-    if (coordinator?.type === "local") {
-      await central.close();
-      return { mode: "local" as const };
-    }
-    await central.close();
-    if (!coordinator) {
-      throw new ApiError(503, "Allocator coordinator is unavailable");
-    }
-    return { mode: "remote" as const, coordinator };
+    return withCentralCore(async (central) => {
+      if (!coordinatorNodeId) {
+        return { mode: "local" as const };
+      }
+      const coordinator = await central.getNode(coordinatorNodeId);
+      if (coordinator?.type === "local") {
+        return { mode: "local" as const };
+      }
+      if (!coordinator) {
+        throw new ApiError(503, "Allocator coordinator is unavailable");
+      }
+      return { mode: "remote" as const, coordinator };
+    });
   };
 
   const mapCoordinatorWriteError = (err: unknown): never => {
@@ -38,11 +50,7 @@ export const registerMeshRoutes: ApiRouteRegistrar = (ctx) => {
     senderNodeId?: string,
   ): Promise<boolean> => {
     if (!senderNodeId) return true;
-    const { CentralCore } = await import("@fusion/core");
-    const central = new CentralCore();
-    await central.init();
-    const senderNode = await central.getNode(senderNodeId);
-    await central.close();
+    const senderNode = await withCentralCore((central) => central.getNode(senderNodeId));
     if (!senderNode?.apiKey) return true;
     const authHeader = req.headers.authorization;
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
@@ -59,22 +67,15 @@ export const registerMeshRoutes: ApiRouteRegistrar = (ctx) => {
    * GET /api/mesh/state
    * Returns the full mesh topology state with peer connections between nodes.
    */
-  router.get("/mesh/state", async (_req, res) => {
+  router.get("/mesh/state", async (req, res) => {
     try {
-      const { CentralCore } = await import("@fusion/core");
-      const central = new CentralCore();
-      await central.init();
+      const includeRemote = req.query.includeRemote !== "false";
+      const meshState = await withCentralCore(async (central) => {
+        const nodes = await central.listNodes();
+        const remoteNodes = nodes.filter((n) => n.type === "remote");
+        const nodeStates = new Map<string, unknown>();
 
-      const nodes = await central.listNodes();
-      const remoteNodes = nodes.filter((n) => n.type === "remote");
-      const meshState: unknown[] = [];
-      for (const node of nodes) {
-        const state = typeof (central as InstanceType<typeof CentralCore>).getMeshState === "function"
-          ? await (central as InstanceType<typeof CentralCore>).getMeshState(node.id)
-          : null;
-        if (state) {
-          meshState.push(state);
-        } else {
+        const fallbackStateForNode = (node: (typeof nodes)[number]) => {
           const connections =
             node.type === "local"
               ? remoteNodes.map((peer) => ({
@@ -84,7 +85,7 @@ export const registerMeshRoutes: ApiRouteRegistrar = (ctx) => {
                   status: peer.status,
                 }))
               : [];
-          meshState.push({
+          return {
             nodeId: node.id,
             nodeName: node.name,
             nodeUrl: node.url ?? null,
@@ -95,10 +96,64 @@ export const registerMeshRoutes: ApiRouteRegistrar = (ctx) => {
             connectedAt: node.createdAt ?? null,
             knownPeers: connections,
             connections,
-          });
+          };
+        };
+
+        for (const node of nodes) {
+          const state = typeof (central as { getMeshState?: (nodeId?: string) => Promise<unknown> }).getMeshState === "function"
+            ? await (central as { getMeshState: (nodeId?: string) => Promise<unknown> }).getMeshState(node.id)
+            : null;
+          nodeStates.set(node.id, state ?? fallbackStateForNode(node));
         }
-      }
-      await central.close();
+
+        if (!includeRemote) {
+          const localNode = nodes.find((node) => node.type === "local");
+          return localNode ? [nodeStates.get(localNode.id)] : Array.from(nodeStates.values());
+        }
+
+        await Promise.all(
+          remoteNodes.map(async (remoteNode) => {
+            if (!remoteNode.url) {
+              return;
+            }
+            const headers: Record<string, string> = { "Content-Type": "application/json" };
+            if (remoteNode.apiKey) {
+              headers.Authorization = `Bearer ${remoteNode.apiKey}`;
+            }
+            try {
+              const response = await fetch(`${remoteNode.url.replace(/\/$/, "")}/api/mesh/state?includeRemote=false`, {
+                method: "GET",
+                headers,
+                signal: AbortSignal.timeout(10_000),
+              });
+              if (!response.ok) {
+                throw new Error(`Remote mesh state request failed (${response.status})`);
+              }
+              const payload = await response.json();
+              if (!Array.isArray(payload)) {
+                return;
+              }
+              for (const remoteState of payload) {
+                if (remoteState && typeof remoteState === "object" && typeof (remoteState as { nodeId?: unknown }).nodeId === "string") {
+                  nodeStates.set((remoteState as { nodeId: string }).nodeId, remoteState);
+                }
+              }
+            } catch (error) {
+              emitRemoteRouteDiagnostic({
+                route: "mesh-state",
+                message: "Failed to fetch remote mesh state",
+                nodeId: remoteNode.id,
+                upstreamPath: "/api/mesh/state",
+                operationStage: "fetch-remote-mesh-state",
+                level: "warn",
+                error,
+              });
+            }
+          }),
+        );
+
+        return Array.from(nodeStates.values());
+      });
 
       res.json(meshState);
     } catch (err: unknown) {

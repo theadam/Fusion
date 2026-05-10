@@ -72,11 +72,11 @@ describe("dependency graph interactions", () => {
     expect(result.current.pan.y).toBeCloseTo(150, 3);
   });
 
-  it("clicking a node opens task detail", () => {
+  it("double-clicking a node opens task detail", () => {
     const onOpenDetail = vi.fn();
     render(<DependencyGraph tasks={[createTask("A", "in-progress")]} onOpenDetail={onOpenDetail} />);
 
-    fireEvent.click(screen.getByTestId("task-A"));
+    fireEvent.doubleClick(screen.getByTestId("graph-task-node-A"));
     expect(onOpenDetail).toHaveBeenCalledTimes(1);
     expect(onOpenDetail).toHaveBeenCalledWith(expect.objectContaining({ id: "A" }));
     expect(screen.getAllByText(/Executing/).length).toBeGreaterThan(0);

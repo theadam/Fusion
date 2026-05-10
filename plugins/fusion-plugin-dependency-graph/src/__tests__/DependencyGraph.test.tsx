@@ -117,18 +117,33 @@ describe("DependencyGraph", () => {
     expect(fitToGraph).toHaveBeenCalled();
   });
 
-  it("clicking a card triggers onOpenDetail exactly once", () => {
+  it("single-clicking a node selects it without opening detail", () => {
     const onOpenDetail = vi.fn();
     render(<DependencyGraph tasks={[createTask("A", "in-progress")]} onOpenDetail={onOpenDetail} />);
-    fireEvent.click(screen.getByTestId("task-A"));
+    const node = screen.getByTestId("graph-task-node-A");
+
+    fireEvent.click(node);
+
+    expect(node.className).toContain("graph-node--draggable");
+    expect(onOpenDetail).not.toHaveBeenCalled();
+  });
+
+  it("double-clicking a node opens detail", () => {
+    const onOpenDetail = vi.fn();
+    render(<DependencyGraph tasks={[createTask("A", "in-progress")]} onOpenDetail={onOpenDetail} />);
+
+    fireEvent.doubleClick(screen.getByTestId("graph-task-node-A"));
+
     expect(onOpenDetail).toHaveBeenCalledTimes(1);
     expect(onOpenDetail).toHaveBeenCalledWith(expect.objectContaining({ id: "A" }));
   });
 
-  it("falls back to onOpenTaskDetail when onOpenDetail is not provided", () => {
+  it("double-click falls back to onOpenTaskDetail when onOpenDetail is not provided", () => {
     const onOpenTaskDetail = vi.fn();
     render(<DependencyGraph tasks={[createTask("A", "in-progress")]} onOpenTaskDetail={onOpenTaskDetail} />);
-    fireEvent.click(screen.getByTestId("task-A"));
+
+    fireEvent.doubleClick(screen.getByTestId("graph-task-node-A"));
+
     expect(onOpenTaskDetail).toHaveBeenCalledWith("A");
   });
 

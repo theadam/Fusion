@@ -87,7 +87,7 @@ describe("DependencyGraph highlighting", () => {
     expect(screen.getByTestId("graph-task-node-A").className).toContain("graph-task-node--highlighted");
   });
 
-  it("applies edge dimming/highlighting and preserves click-to-detail", () => {
+  it("applies edge dimming/highlighting and preserves double-click-to-detail", () => {
     const onOpenDetail = vi.fn();
     render(<DependencyGraph tasks={tasks} onOpenDetail={onOpenDetail} />);
 
@@ -99,7 +99,7 @@ describe("DependencyGraph highlighting", () => {
     expect(edgeAB?.className.baseVal || edgeAB?.className).toContain("graph-edge--highlighted");
     expect(edgeCB?.className.baseVal || edgeCB?.className).toContain("graph-edge--highlighted");
 
-    fireEvent.click(screen.getByTestId("task-C"));
+    fireEvent.doubleClick(screen.getByTestId("graph-task-node-C"));
     expect(onOpenDetail).toHaveBeenCalledTimes(1);
     expect(onOpenDetail).toHaveBeenCalledWith(expect.objectContaining({ id: "C" }));
   });

@@ -67,7 +67,7 @@ describe("dependency graph plugin host integration contract", () => {
       }),
     );
 
-    fireEvent.click(screen.getByTestId("task-FN-HOST"));
+    fireEvent.doubleClick(screen.getByTestId("graph-task-node-FN-HOST"));
     expect(openTaskDetail).toHaveBeenCalledTimes(1);
     expect(openTaskDetail).toHaveBeenCalledWith(expect.objectContaining({ id: "FN-HOST" }));
   });
