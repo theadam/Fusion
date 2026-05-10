@@ -193,7 +193,12 @@ Heartbeat sessions for durable agents resolve models with heartbeat-specific fal
 
 When the runtime model is present and differs from execution-lane settings, heartbeat passes the execution-lane model as a fallback pair for session creation.
 
-If a **timer heartbeat** still cannot create/run a session due to unavailable provider credentials or missing provider registration, the run completes with `resultJson.reason = "heartbeat_model_unavailable"` and diagnostics in `resultJson.detail`/`stderrExcerpt` instead of leaving the durable agent stuck in persistent `state="error"`.
+If a heartbeat cannot create/run a session due to unavailable provider credentials or missing provider registration, Fusion records `resultJson.reason = "heartbeat_model_unavailable"` with actionable diagnostics in `resultJson.detail`/`stderrExcerpt`.
+
+- **Timer trigger:** run completes and the durable agent returns to `state="active"` (recoverable soft-fail).
+- **Assignment / on-demand trigger:** run completes with `resultJson.actionRequired = true`, then the durable agent is paused with `pauseReason="heartbeat-model-unavailable"` and `lastError` set to actionable credential guidance (including the missing provider name when detectable).
+
+After credentials are fixed, operators should resume the paused durable agent; subsequent heartbeats proceed normally.
 
 ### Assigned-agent identity + planning model precedence for task triage
 

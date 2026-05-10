@@ -1877,12 +1877,59 @@ export class HeartbeatMonitor {
           });
         }
 
-        const resolveFailSoftProviderError = (errorMessage: string): boolean => {
-          if (source !== "timer") return false;
+        const isModelUnavailableError = (errorMessage: string): boolean => {
           const normalized = errorMessage.toLowerCase();
           return normalized.includes("no api key for provider")
             || normalized.includes("configured primary model")
             || normalized.includes("was not found in the pi model registry");
+        };
+
+        const extractUnavailableProvider = (errorMessage: string): string | undefined => {
+          const providerMatch = /no api key for provider:\s*([^\s)]+)/i.exec(errorMessage);
+          if (providerMatch?.[1]) return providerMatch[1];
+          const modelMatch = /configured primary model\s+([^/\s]+)\//i.exec(errorMessage);
+          if (modelMatch?.[1]) return modelMatch[1];
+          return undefined;
+        };
+
+        const completeAsModelUnavailable = async (errorMessage: string): Promise<void> => {
+          const provider = extractUnavailableProvider(errorMessage);
+          const detail = provider
+            ? `${errorMessage}. Configure credentials for provider "${provider}" in settings, then resume the agent.`
+            : `${errorMessage}. Configure valid provider credentials in settings, then resume the agent.`;
+
+          if (source === "timer") {
+            await this.completeRun(agentId, run.id, {
+              status: "completed",
+              resultJson: {
+                reason: "heartbeat_model_unavailable",
+                source,
+                detail,
+              },
+              stderrExcerpt: detail,
+              stdoutExcerpt: stdoutExcerpt || undefined,
+            });
+            return;
+          }
+
+          await this.completeRun(agentId, run.id, {
+            status: "completed",
+            resultJson: {
+              reason: "heartbeat_model_unavailable",
+              source,
+              detail,
+              actionRequired: true,
+            },
+            stderrExcerpt: detail,
+            stdoutExcerpt: stdoutExcerpt || undefined,
+            skipStateTransition: true,
+          });
+
+          await this.store.updateAgentState(agentId, "paused");
+          await this.store.updateAgent(agentId, {
+            pauseReason: "heartbeat-model-unavailable",
+            lastError: detail,
+          });
         };
 
         let heartbeatModelSettings: Settings | undefined;
@@ -2241,17 +2288,8 @@ export class HeartbeatMonitor {
           heartbeatLog.error(`Heartbeat execution failed for ${agentId}: ${errorDetail}`);
           await flushAgentLogger();
 
-          if (resolveFailSoftProviderError(errorDetail)) {
-            await this.completeRun(agentId, run.id, {
-              status: "completed",
-              resultJson: {
-                reason: "heartbeat_model_unavailable",
-                source,
-                detail: errorDetail,
-              },
-              stderrExcerpt: errorDetail,
-              stdoutExcerpt: stdoutExcerpt || undefined,
-            });
+          if (isModelUnavailableError(errorDetail)) {
+            await completeAsModelUnavailable(errorDetail);
           } else {
             await this.completeRun(agentId, run.id, {
               status: "failed",
@@ -2282,30 +2320,56 @@ export class HeartbeatMonitor {
         await flushAgentLogger();
 
         const normalizedError = errorDetail.toLowerCase();
-        const shouldFailSoft = source === "timer" && (
-          normalizedError.includes("no api key for provider")
+        const isModelUnavailable = normalizedError.includes("no api key for provider")
           || normalizedError.includes("configured primary model")
-          || normalizedError.includes("was not found in the pi model registry")
-        );
+          || normalizedError.includes("was not found in the pi model registry");
 
         // Attempt to complete the run if it's still active.
         // If completeRun also fails, fall back to a direct DB update to ensure
         // the run is not permanently stuck in "active" state.
         try {
-          await this.completeRun(agentId, run.id, shouldFailSoft
-            ? {
+          if (isModelUnavailable) {
+            const providerMatch = /no api key for provider:\s*([^\s)]+)/i.exec(errorDetail);
+            const modelMatch = /configured primary model\s+([^/\s]+)\//i.exec(errorDetail);
+            const provider = providerMatch?.[1] ?? modelMatch?.[1];
+            const detail = provider
+              ? `${errorDetail}. Configure credentials for provider "${provider}" in settings, then resume the agent.`
+              : `${errorDetail}. Configure valid provider credentials in settings, then resume the agent.`;
+
+            if (source === "timer") {
+              await this.completeRun(agentId, run.id, {
                 status: "completed",
                 resultJson: {
                   reason: "heartbeat_model_unavailable",
                   source,
-                  detail: errorDetail,
+                  detail,
                 },
-                stderrExcerpt: errorDetail,
-              }
-            : {
-                status: "failed",
-                stderrExcerpt: errorDetail,
+                stderrExcerpt: detail,
               });
+            } else {
+              await this.completeRun(agentId, run.id, {
+                status: "completed",
+                resultJson: {
+                  reason: "heartbeat_model_unavailable",
+                  source,
+                  detail,
+                  actionRequired: true,
+                },
+                stderrExcerpt: detail,
+                skipStateTransition: true,
+              });
+              await this.store.updateAgentState(agentId, "paused");
+              await this.store.updateAgent(agentId, {
+                pauseReason: "heartbeat-model-unavailable",
+                lastError: detail,
+              });
+            }
+          } else {
+            await this.completeRun(agentId, run.id, {
+              status: "failed",
+              stderrExcerpt: errorDetail,
+            });
+          }
         } catch (completeRunErr) {
           const completeRunErrMsg = completeRunErr instanceof Error ? completeRunErr.message : String(completeRunErr);
           heartbeatLog.error(`completeRun failed for ${agentId}/${run.id}: ${completeRunErrMsg} — attempting safety-net completion`);
