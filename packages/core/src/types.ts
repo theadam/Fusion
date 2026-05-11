@@ -1095,6 +1095,8 @@ export interface TaskBranchContext {
 
 export interface Task {
   id: string;
+  /** Immutable lineage identity used for durable commit/task attribution. */
+  lineageId: string;
   title?: string;
   description: string;
   /**
@@ -1325,6 +1327,8 @@ export interface InboxTask {
 
 export interface TaskCreateInput {
   title?: string;
+  /** Optional lineage override for trusted replication/import paths only. */
+  lineageId?: string;
   description: string;
   /** Configured merge target/base branch for this task (task intent).
    *  Defaults to the project default branch when omitted. */
@@ -2587,6 +2591,28 @@ export interface MergeResult extends MergeDetails {
   _buildRetried?: boolean;
 }
 
+export type TaskCommitAssociationMatchSource =
+  | "canonical-lineage-trailer"
+  | "legacy-task-id-trailer"
+  | "legacy-subject"
+  | "manual-reconciliation";
+
+export type TaskCommitAssociationConfidence = "canonical" | "legacy" | "ambiguous";
+
+export interface TaskCommitAssociation {
+  id: string;
+  taskLineageId: string;
+  taskIdSnapshot: string;
+  commitSha: string;
+  commitSubject: string;
+  authoredAt: string;
+  matchedBy: TaskCommitAssociationMatchSource;
+  confidence: TaskCommitAssociationConfidence;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export const COLUMN_LABELS: Record<Column, string> = {
   triage: "Planning",
   todo: "Todo",
@@ -2623,6 +2649,8 @@ export const VALID_TRANSITIONS: Record<Column, Column[]> = {
  */
 export interface ArchivedTaskEntry {
   id: string;
+  /** Immutable lineage identity preserved across archive/restore. */
+  lineageId: string;
   title?: string;
   description: string;
   /**

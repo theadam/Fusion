@@ -12,6 +12,7 @@ import { DatabaseSync } from "./sqlite-adapter.js";
 import { isAbsolute, join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { DEFAULT_PROJECT_SETTINGS } from "./types.js";
 import type { PluginOnSchemaInit } from "./plugin-types.js";
 import type { SteeringComment, TaskComment } from "./types.js";
@@ -88,7 +89,7 @@ export function probeFts5(db: DatabaseSync): boolean {
 
 // ── Schema Definition ────────────────────────────────────────────────
 
-const SCHEMA_VERSION = 71;
+const SCHEMA_VERSION = 72;
 
 function normalizeTaskComments(
   steeringComments: SteeringComment[] | undefined,
@@ -152,6 +153,7 @@ const SCHEMA_SQL = `
 -- Tasks table with JSON columns for nested data
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
+  lineageId TEXT,
   title TEXT,
   description TEXT NOT NULL,
   priority TEXT DEFAULT 'normal',
@@ -316,6 +318,23 @@ CREATE TABLE IF NOT EXISTS archivedTasks (
 );
 
 CREATE INDEX IF NOT EXISTS idxArchivedTasksId ON archivedTasks(id);
+
+CREATE TABLE IF NOT EXISTS task_commit_associations (
+  id TEXT PRIMARY KEY,
+  taskLineageId TEXT NOT NULL,
+  taskIdSnapshot TEXT NOT NULL,
+  commitSha TEXT NOT NULL,
+  commitSubject TEXT NOT NULL,
+  authoredAt TEXT NOT NULL,
+  matchedBy TEXT NOT NULL CHECK (matchedBy IN ('canonical-lineage-trailer', 'legacy-task-id-trailer', 'legacy-subject', 'manual-reconciliation')),
+  confidence TEXT NOT NULL CHECK (confidence IN ('canonical', 'legacy', 'ambiguous')),
+  note TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  UNIQUE(taskLineageId, commitSha, matchedBy)
+);
+CREATE INDEX IF NOT EXISTS idxTaskCommitAssociationsLineage ON task_commit_associations(taskLineageId);
+CREATE INDEX IF NOT EXISTS idxTaskCommitAssociationsCommitSha ON task_commit_associations(commitSha);
 
 -- Automations table
 CREATE TABLE IF NOT EXISTS automations (
@@ -2966,6 +2985,37 @@ export class Database {
     if (version < 71) {
       this.applyMigration(71, () => {
         this.addColumnIfMissing("tasks", "githubTracking", "TEXT");
+      });
+    }
+
+    if (version < 72) {
+      this.applyMigration(72, () => {
+        this.addColumnIfMissing("tasks", "lineageId", "TEXT");
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idxTasksLineageId ON tasks(lineageId)`);
+        const missing = this.db.prepare("SELECT id FROM tasks WHERE lineageId IS NULL OR trim(lineageId) = ''").all() as Array<{ id: string }>;
+        const updateLineage = this.db.prepare("UPDATE tasks SET lineageId = ? WHERE id = ?");
+        for (const row of missing) {
+          updateLineage.run(randomUUID(), row.id);
+        }
+
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS task_commit_associations (
+            id TEXT PRIMARY KEY,
+            taskLineageId TEXT NOT NULL,
+            taskIdSnapshot TEXT NOT NULL,
+            commitSha TEXT NOT NULL,
+            commitSubject TEXT NOT NULL,
+            authoredAt TEXT NOT NULL,
+            matchedBy TEXT NOT NULL CHECK (matchedBy IN ('canonical-lineage-trailer', 'legacy-task-id-trailer', 'legacy-subject', 'manual-reconciliation')),
+            confidence TEXT NOT NULL CHECK (confidence IN ('canonical', 'legacy', 'ambiguous')),
+            note TEXT,
+            createdAt TEXT NOT NULL,
+            updatedAt TEXT NOT NULL,
+            UNIQUE(taskLineageId, commitSha, matchedBy)
+          )
+        `);
+        this.db.exec("CREATE INDEX IF NOT EXISTS idxTaskCommitAssociationsLineage ON task_commit_associations(taskLineageId)");
+        this.db.exec("CREATE INDEX IF NOT EXISTS idxTaskCommitAssociationsCommitSha ON task_commit_associations(commitSha)");
       });
     }
 

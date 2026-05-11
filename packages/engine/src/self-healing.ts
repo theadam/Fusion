@@ -137,6 +137,7 @@ type AlreadyMergedDetectionStrategy = "trailer" | "ancestry" | "patch-id";
 
 interface AlreadyMergedLookupInput {
   taskId: string;
+  lineageId?: string;
   repoDir: string;
   baseBranch: string;
   taskBranch?: string;
@@ -148,7 +149,10 @@ interface AlreadyMergedLookupResult {
   strategy: AlreadyMergedDetectionStrategy;
 }
 
-function commitOwnedByTask(taskId: string, subject: string, body: string): boolean {
+function commitOwnedByTask(taskId: string, lineageId: string | undefined, subject: string, body: string): boolean {
+  if (lineageId && body.includes(`Fusion-Task-Lineage: ${lineageId}`)) {
+    return true;
+  }
   return body.includes(`Fusion-Task-Id: ${taskId}`) || subject.includes(taskId);
 }
 
@@ -506,9 +510,9 @@ export class SelfHealingManager {
     // Search strategies, tried in order of reliability:
     //   1. mergeDetails.commitSha — already stored by the merger; verify it's
     //      reachable from HEAD before trusting it.
-    //   2. Fusion-Task-Id trailer — emitted into every Fusion-managed merge
-    //      commit body; survives `includeTaskIdInCommit: false`.
-    //   3. Subject grep — legacy/AI commits where the task ID lives in the
+    //   2. Fusion-Task-Lineage trailer — canonical immutable lineage marker.
+    //   3. Fusion-Task-Id trailer — legacy human task-id marker.
+    //   4. Subject grep — legacy/AI commits where the task ID lives in the
     //      subject line (e.g. `feat(FN-123): …`).
     //
     // (1) gives us the right sha even if the commit subject is exotic; (2)
@@ -528,7 +532,7 @@ export class SelfHealingManager {
           { cwd: this.options.rootDir, maxBuffer: 1024 * 1024 },
         );
         const [sha, subject = "", body = ""] = stdout.trim().split("\x1f");
-        if (sha && commitOwnedByTask(task.id, subject, body)) {
+        if (sha && commitOwnedByTask(task.id, task.lineageId, subject, body)) {
           const commit: LandedTaskCommit = { sha, subject };
           try {
             const stats = await execAsync(`git show --shortstat --format= ${shellQuote(sha)}`, {
@@ -561,8 +565,8 @@ export class SelfHealingManager {
       });
     };
 
-    // Search (2) trailer first, then (3) subject as fallback. Both share the
-    // same range-resolution logic (bounded, then full HEAD if empty).
+    // Search canonical lineage trailer, then legacy task-id trailer, then
+    // legacy subject fallback. All share bounded/full HEAD range resolution.
     const search = async (grepArg: string, fixedStrings: boolean): Promise<string> => {
       let out: string;
       try {
@@ -590,11 +594,20 @@ export class SelfHealingManager {
       return out;
     };
 
-    // (2) Trailer — anchored regex so we don't false-match ID substrings.
-    const trailerPattern = `^Fusion-Task-Id: ${task.id}$`;
-    let stdout = await search(shellQuote(trailerPattern), false);
+    // (2) Canonical lineage trailer.
+    let stdout = "";
+    if (task.lineageId) {
+      const lineagePattern = `^Fusion-Task-Lineage: ${task.lineageId}$`;
+      stdout = await search(shellQuote(lineagePattern), false);
+    }
 
-    // (3) Subject grep fallback (legacy commits).
+    // (3) Legacy task-id trailer.
+    if (!stdout.trim()) {
+      const trailerPattern = `^Fusion-Task-Id: ${task.id}$`;
+      stdout = await search(shellQuote(trailerPattern), false);
+    }
+
+    // (4) Subject grep fallback (legacy commits).
     if (!stdout.trim()) {
       stdout = await search(shellQuote(task.id), true);
     }
@@ -626,9 +639,30 @@ export class SelfHealingManager {
   private async findAlreadyMergedTaskCommit(
     input: AlreadyMergedLookupInput,
   ): Promise<AlreadyMergedLookupResult | null> {
-    const { taskId, repoDir, baseBranch, taskBranch, baseCommitSha } = input;
+    const { taskId, lineageId, repoDir, baseBranch, taskBranch, baseCommitSha } = input;
 
     try {
+      if (lineageId) {
+        const lineagePattern = `^Fusion-Task-Lineage: ${lineageId}$`;
+        const lineageCommand = [
+          "git log",
+          `--grep=${shellQuote(lineagePattern)}`,
+          "-E",
+          "--max-count=1",
+          "--format=%H",
+          shellQuote(baseBranch),
+        ].join(" ");
+        const lineage = await execAsync(lineageCommand, {
+          cwd: repoDir,
+          timeout: 30_000,
+          maxBuffer: 1024 * 1024,
+        });
+        const lineageSha = lineage.stdout.trim();
+        if (lineageSha) {
+          return { sha: lineageSha, strategy: "trailer" };
+        }
+      }
+
       const trailerPattern = `^Fusion-Task-Id: ${taskId}$`;
       const trailerCommand = [
         "git log",
@@ -1854,6 +1888,7 @@ export class SelfHealingManager {
 
           const landed = await this.findAlreadyMergedTaskCommit({
             taskId: task.id,
+            lineageId: task.lineageId,
             repoDir: this.options.rootDir,
             baseBranch,
             taskBranch: task.branch,

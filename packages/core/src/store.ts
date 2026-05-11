@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync, watch, type FSWatcher } from "node:fs";
-import type { Task, TaskDetail, TaskCreateInput, TaskAttachment, AgentLogEntry, BoardConfig, Column, MergeResult, Settings, GlobalSettings, ProjectSettings, ActivityLogEntry, ActivityEventType, TaskDocument, TaskDocumentRevision, TaskDocumentCreateInput, TaskDocumentWithTask, InboxTask, TaskLogEntry, RunMutationContext, RunAuditEvent, RunAuditEventInput, RunAuditEventFilter, ArchivedTaskEntry, ArchiveAgentLogMode, TaskPriority, SourceType, WorkflowStepTemplate, Agent, AutostashOrphanRecord } from "./types.js";
+import type { Task, TaskDetail, TaskCreateInput, TaskAttachment, AgentLogEntry, BoardConfig, Column, MergeResult, Settings, GlobalSettings, ProjectSettings, ActivityLogEntry, ActivityEventType, TaskDocument, TaskDocumentRevision, TaskDocumentCreateInput, TaskDocumentWithTask, InboxTask, TaskLogEntry, RunMutationContext, RunAuditEvent, RunAuditEventInput, RunAuditEventFilter, ArchivedTaskEntry, ArchiveAgentLogMode, TaskPriority, SourceType, WorkflowStepTemplate, Agent, AutostashOrphanRecord, TaskCommitAssociation, TaskCommitAssociationMatchSource, TaskCommitAssociationConfidence } from "./types.js";
 import { createActivityLogSnapshot, createRunAuditSnapshot, createTaskMetadataSnapshot, toTaskMetadataRecord, validateSnapshotEnvelope, type ActivityLogSnapshot, type RunAuditSnapshot, type TaskMetadataSnapshot } from "./shared-mesh-state.js";
 import { VALID_TRANSITIONS, DEFAULT_SETTINGS, isGlobalSettingsKey, WORKFLOW_STEP_TEMPLATES, validateDocumentKey } from "./types.js";
 import { normalizeTaskPriority } from "./task-priority.js";
@@ -27,6 +27,7 @@ import { createLogger } from "./logger.js";
 import { validateNodeOverrideChange } from "./node-override-guard.js";
 import { sanitizeTitle } from "./ai-summarize.js";
 import { assertProjectRootDir } from "./project-root-guard.js";
+import { generateTaskLineageId, normalizeTaskCommitAssociation } from "./task-lineage.js";
 import { createDistributedTaskIdAllocator, type DistributedTaskIdAllocator } from "./distributed-task-id.js";
 import {
   buildBootstrapPrompt,
@@ -38,6 +39,7 @@ import type { MeshReplicatedTaskApplyResult, MeshReplicatedTaskCreatePayload } f
 /** Database row shape for the tasks table (all columns). */
 interface TaskRow {
   id: string;
+  lineageId: string | null;
   title: string | null;
   description: string;
   priority: string | null;
@@ -163,6 +165,20 @@ function withTaskBranchContextInSourceMetadata(
       ...(branchContext.inheritedBaseBranch ? { inheritedBaseBranch: branchContext.inheritedBaseBranch } : {}),
     },
   };
+}
+
+interface TaskCommitAssociationRow {
+  id: string;
+  taskLineageId: string;
+  taskIdSnapshot: string;
+  commitSha: string;
+  commitSubject: string;
+  authoredAt: string;
+  matchedBy: TaskCommitAssociationMatchSource;
+  confidence: TaskCommitAssociationConfidence;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface TaskDocumentRow {
@@ -750,6 +766,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   private rowToTask(row: TaskRow): Task {
     return {
       id: row.id,
+      lineageId: row.lineageId || generateTaskLineageId(),
       title: row.title || undefined,
       description: row.description,
       priority: normalizeTaskPriority(row.priority),
@@ -894,6 +911,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   private archiveEntryToTask(entry: ArchivedTaskEntry, slim = false): Task {
     return {
       id: entry.id,
+      lineageId: entry.lineageId || generateTaskLineageId(),
       title: entry.title,
       description: entry.description,
       priority: normalizeTaskPriority(entry.priority),
@@ -1019,6 +1037,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
 
     return {
       id: task.id,
+      lineageId: task.lineageId || generateTaskLineageId(),
       title: task.title,
       description: task.description,
       priority: normalizeTaskPriority(task.priority),
@@ -1105,7 +1124,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
 
     const prefix = tableAlias ? `${tableAlias}.` : "";
     return [
-      "id", "title", "description", "priority", "\"column\"", "status", "size", "reviewLevel", "currentStep",
+      "id", "lineageId", "title", "description", "priority", "\"column\"", "status", "size", "reviewLevel", "currentStep",
       "worktree", "blockedBy", "paused", "baseBranch", "branch", "executionStartBranch", "baseCommitSha",
       "modelPresetId", "modelProvider", "modelId",
       "validatorModelProvider", "validatorModelId",
@@ -1154,7 +1173,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
 
   private getTaskSelectClauseWithActivityLogLimit(limit: number): string {
     const columns = [
-      "id", "title", "description", "priority", "\"column\"", "status", "size", "reviewLevel", "currentStep",
+      "id", "lineageId", "title", "description", "priority", "\"column\"", "status", "size", "reviewLevel", "currentStep",
       "worktree", "blockedBy", "paused", "baseBranch", "branch", "executionStartBranch", "baseCommitSha",
       "modelPresetId", "modelProvider", "modelId",
       "validatorModelProvider", "validatorModelId",
@@ -1199,7 +1218,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   private upsertTask(task: Task): void {
     this.db.prepare(`
       INSERT INTO tasks (
-        id, title, description, priority, "column", status, size, reviewLevel, currentStep,
+        id, lineageId, title, description, priority, "column", status, size, reviewLevel, currentStep,
         worktree, blockedBy, paused, baseBranch, branch, executionStartBranch, baseCommitSha, modelPresetId, modelProvider,
         modelId, validatorModelProvider, validatorModelId, planningModelProvider, planningModelId, mergeRetries,
         workflowStepRetries, stuckKillCount, postReviewFixCount, recoveryRetryCount, taskDoneRetryCount, verificationFailureCount, mergeConflictBounceCount, nextRecoveryAt, error,
@@ -1211,9 +1230,10 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         sourceIssueProvider, sourceIssueRepository, sourceIssueExternalIssueId, sourceIssueNumber, sourceIssueUrl,
         mergeDetails, breakIntoSubtasks, enabledWorkflowSteps, modifiedFiles, missionId, sliceId, assignedAgentId, pausedByAgentId, assigneeUserId, nodeId, effectiveNodeId, effectiveNodeSource, sourceType, sourceAgentId, sourceRunId, sourceSessionId, sourceMessageId, sourceParentTaskId, sourceMetadata, checkedOutBy, checkedOutAt, checkoutNodeId, checkoutRunId, checkoutLeaseRenewedAt, checkoutLeaseEpoch
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
       ON CONFLICT(id) DO UPDATE SET
+        lineageId = excluded.lineageId,
         title = excluded.title,
         description = excluded.description,
         priority = excluded.priority,
@@ -1304,6 +1324,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         checkoutLeaseEpoch = excluded.checkoutLeaseEpoch
     `).run(
       task.id,
+      task.lineageId ?? generateTaskLineageId(),
       task.title ?? null,
       task.description,
       normalizeTaskPriority(task.priority),
@@ -2509,6 +2530,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
     const now = options?.createdAt ?? new Date().toISOString();
     const task: Task = {
       id,
+      lineageId: input.lineageId ?? generateTaskLineageId(),
       title,
       description: input.description,
       priority: normalizeTaskPriority(input.priority),
@@ -2586,6 +2608,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
     // Create new task with copied title/description, but fresh state
     const newTask: Task = {
       id: newId,
+      lineageId: generateTaskLineageId(),
       title: sourceTask.title,
       description: `${sourceTask.description}\n\n(Duplicated from ${id})`,
       priority: normalizeTaskPriority(sourceTask.priority),
@@ -2666,6 +2689,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
     // Create new refinement task
     const newTask: Task = {
       id: newId,
+      lineageId: generateTaskLineageId(),
       title: `Refinement: ${sourceLabel}`,
       description: `${feedback.trim()}\n\nRefines: ${id}`,
       priority: normalizeTaskPriority(sourceTask.priority),
@@ -6418,6 +6442,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
     // Build restored task (clear transient fields)
     const restoredTask: Task = {
       id: entry.id,
+      lineageId: entry.lineageId || generateTaskLineageId(),
       title: entry.title,
       description: entry.description,
       priority: normalizeTaskPriority(entry.priority),
@@ -7326,6 +7351,63 @@ ${notificationsSection}`;
     }
 
     return { applied, skipped };
+  }
+
+  async upsertTaskCommitAssociation(
+    input: Omit<TaskCommitAssociation, "id" | "createdAt" | "updatedAt"> & { id?: string },
+  ): Promise<TaskCommitAssociation> {
+    const now = new Date().toISOString();
+    const association: TaskCommitAssociation = normalizeTaskCommitAssociation({
+      id: input.id ?? randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      ...input,
+    });
+    this.db.prepare(
+      `INSERT INTO task_commit_associations
+       (id, taskLineageId, taskIdSnapshot, commitSha, commitSubject, authoredAt, matchedBy, confidence, note, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(taskLineageId, commitSha, matchedBy) DO UPDATE SET
+         taskIdSnapshot = excluded.taskIdSnapshot,
+         commitSubject = excluded.commitSubject,
+         authoredAt = excluded.authoredAt,
+         confidence = excluded.confidence,
+         note = excluded.note,
+         updatedAt = excluded.updatedAt`,
+    ).run(
+      association.id,
+      association.taskLineageId,
+      association.taskIdSnapshot,
+      association.commitSha,
+      association.commitSubject,
+      association.authoredAt,
+      association.matchedBy,
+      association.confidence,
+      association.note ?? null,
+      association.createdAt,
+      association.updatedAt,
+    );
+    return association;
+  }
+
+  async getTaskCommitAssociationsByLineageId(lineageId: string): Promise<TaskCommitAssociation[]> {
+    const rows = this.db.prepare(
+      `SELECT * FROM task_commit_associations WHERE taskLineageId = ? ORDER BY authoredAt DESC, createdAt DESC`,
+    ).all(lineageId) as TaskCommitAssociationRow[];
+    return rows.map((row) => normalizeTaskCommitAssociation({ ...row, note: row.note ?? undefined }));
+  }
+
+  async replaceLegacyTaskCommitAssociations(
+    lineageId: string,
+    associations: Array<Omit<TaskCommitAssociation, "id" | "createdAt" | "updatedAt" | "taskLineageId">>,
+  ): Promise<void> {
+    const deleteStmt = this.db.prepare(
+      `DELETE FROM task_commit_associations WHERE taskLineageId = ? AND matchedBy IN ('legacy-task-id-trailer', 'legacy-subject', 'manual-reconciliation')`,
+    );
+    deleteStmt.run(lineageId);
+    for (const association of associations) {
+      await this.upsertTaskCommitAssociation({ ...association, taskLineageId: lineageId });
+    }
   }
 
   // ── Backward Compatibility (Multi-Project Support) ────────────────────────

@@ -52,6 +52,8 @@ export interface EngineRunContext {
   agentId: string;
   /** Task ID being operated on (if applicable). */
   taskId?: string;
+  /** Immutable task lineage ID for durable cross-history correlation. */
+  taskLineageId?: string;
   /** Execution phase for disambiguating sub-operations (e.g., "heartbeat", "execute", "merge-attempt-1"). */
   phase?: string;
   /** Invocation source for heartbeat runs (e.g., "timer", "on_demand", "assignment"). */
@@ -193,6 +195,7 @@ export function createRunAuditor(store: TaskStore, context: EngineRunContext | n
         metadata: {
           phase: context.phase,
           ...(context.source ? { source: context.source } : {}),
+          ...(context.taskLineageId ? { taskLineageId: context.taskLineageId } : {}),
           ...input.metadata,
         },
       };
@@ -217,6 +220,7 @@ export function createRunAuditor(store: TaskStore, context: EngineRunContext | n
         metadata: {
           phase: context.phase,
           ...(context.source ? { source: context.source } : {}),
+          ...(context.taskLineageId ? { taskLineageId: context.taskLineageId } : {}),
           ...input.metadata,
         },
       };
@@ -234,6 +238,7 @@ export function createRunAuditor(store: TaskStore, context: EngineRunContext | n
         metadata: {
           phase: context.phase,
           ...(context.source ? { source: context.source } : {}),
+          ...(context.taskLineageId ? { taskLineageId: context.taskLineageId } : {}),
           ...input.metadata,
         },
       };
