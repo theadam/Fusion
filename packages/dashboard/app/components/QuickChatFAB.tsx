@@ -884,6 +884,7 @@ export function QuickChatFAB({
   // eye reads as jank while the iOS keyboard is animating in.
   useMobileKeyboard({ enabled: isOpen });
   const viewportMode = useViewportMode();
+  const isMobile = viewportMode === "mobile";
 
   const [chatMode, setChatMode] = useState<"agent" | "model">("agent");
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
@@ -1502,6 +1503,35 @@ export function QuickChatFAB({
 
     anchorToBottom(messagesEl);
   }, [isOpen, activeSession?.id, anchorToBottom]);
+
+  useEffect(() => {
+    if (!isMobile || !isOpen || !activeSession) {
+      return;
+    }
+
+    const reAnchorToLatest = () => {
+      const messagesEl = messagesRef.current;
+      if (!messagesEl) {
+        return;
+      }
+      anchorToBottom(messagesEl);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      reAnchorToLatest();
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pageshow", reAnchorToLatest);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pageshow", reAnchorToLatest);
+    };
+  }, [isMobile, isOpen, activeSession, anchorToBottom]);
 
   // Auto-scroll messages when user is near the live tail.
   useEffect(() => {

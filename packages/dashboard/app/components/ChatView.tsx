@@ -1101,6 +1101,35 @@ export function ChatView({ projectId, addToast, experimentalFeatures }: ChatView
     };
   }, [isMobile, activeSession]);
 
+  useEffect(() => {
+    if (!isMobile || !activeSession) {
+      return;
+    }
+
+    const reAnchorToLatest = () => {
+      const messagesContainer = messagesContainerRef.current;
+      if (!messagesContainer) {
+        return;
+      }
+      anchorToBottom(messagesContainer);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      reAnchorToLatest();
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pageshow", reAnchorToLatest);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pageshow", reAnchorToLatest);
+    };
+  }, [isMobile, activeSession, anchorToBottom]);
+
   // Fetch agents on mount for name resolution (project-scoped with stale-request protection)
   useEffect(() => {
     let cancelled = false;

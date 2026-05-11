@@ -634,6 +634,77 @@ describe("QuickChatFAB session-first UX", () => {
     }
   });
 
+  it("FN-4040: mobile reopen re-anchors quick chat to the latest message", async () => {
+    mockUseViewportMode.mockReturnValue("mobile");
+    mockFetchChatMessages.mockResolvedValue({
+      messages: [{ id: "msg-1", sessionId: "session-model", role: "assistant", content: "hello", createdAt: new Date().toISOString() }],
+    });
+
+    render(<QuickChatFAB addToast={vi.fn()} projectId="proj-1" />);
+    const fab = screen.getByTestId("quick-chat-fab");
+    fireEvent.click(fab);
+
+    let scrollTopValue = 0;
+    const installScrollDescriptors = (target: HTMLElement) => {
+      Object.defineProperty(target, "scrollHeight", { configurable: true, get: () => 1080 });
+      Object.defineProperty(target, "scrollTop", {
+        configurable: true,
+        get: () => scrollTopValue,
+        set: (value: number) => {
+          scrollTopValue = value;
+        },
+      });
+    };
+
+    let messages = await screen.findByTestId("quick-chat-messages");
+    installScrollDescriptors(messages);
+
+    fireEvent.click(screen.getByTestId("quick-chat-close"));
+    scrollTopValue = 0;
+    fireEvent.click(fab);
+
+    messages = await screen.findByTestId("quick-chat-messages");
+    installScrollDescriptors(messages);
+
+    await waitFor(() => {
+      expect(scrollTopValue).toBe(1080);
+    });
+  });
+
+  it("FN-4040: mobile visibility restore re-anchors quick chat to latest", async () => {
+    mockUseViewportMode.mockReturnValue("mobile");
+    mockFetchChatMessages.mockResolvedValue({
+      messages: [{ id: "msg-1", sessionId: "session-model", role: "assistant", content: "hello", createdAt: new Date().toISOString() }],
+    });
+
+    render(<QuickChatFAB addToast={vi.fn()} projectId="proj-1" />);
+    fireEvent.click(screen.getByTestId("quick-chat-fab"));
+
+    const messages = await screen.findByTestId("quick-chat-messages");
+    let scrollTopValue = 120;
+    Object.defineProperty(messages, "scrollHeight", { configurable: true, get: () => 1320 });
+    Object.defineProperty(messages, "scrollTop", {
+      configurable: true,
+      get: () => scrollTopValue,
+      set: (value: number) => {
+        scrollTopValue = value;
+      },
+    });
+
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    fireEvent(document, new Event("visibilitychange"));
+    scrollTopValue = 280;
+
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    fireEvent(document, new Event("visibilitychange"));
+
+    await waitFor(() => {
+      expect(scrollTopValue).toBe(1320);
+    });
+
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  });
+
   it("renders non-member mention chips when roomContext is provided", async () => {
     mockFetchChatMessages.mockResolvedValueOnce({
       messages: [

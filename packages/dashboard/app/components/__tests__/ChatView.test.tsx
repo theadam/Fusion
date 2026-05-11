@@ -3518,6 +3518,72 @@ describe("ChatView mobile behavior", () => {
     }
   });
 
+  it("FN-4040: mobile thread entry anchors to latest message", async () => {
+    const restoreMatchMedia = mockViewportMode("mobile");
+    try {
+      setupMockChat({
+        activeSession: activeSessionFixture,
+        messages: [{ id: "msg-001", sessionId: "session-001", role: "assistant", content: "One", createdAt: "2026-04-08T00:00:00.000Z" }],
+      });
+
+      render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+      const messagesContainer = document.querySelector(".chat-messages") as HTMLDivElement;
+      let scrollTopValue = 0;
+      Object.defineProperty(messagesContainer, "scrollHeight", { configurable: true, get: () => 1040 });
+      Object.defineProperty(messagesContainer, "scrollTop", {
+        configurable: true,
+        get: () => scrollTopValue,
+        set: (value: number) => {
+          scrollTopValue = value;
+        },
+      });
+
+      await waitFor(() => {
+        expect(scrollTopValue).toBe(1040);
+      });
+    } finally {
+      restoreMatchMedia.mockRestore();
+    }
+  });
+
+  it("FN-4040: mobile visibility restore re-anchors chat thread to latest", async () => {
+    const restoreMatchMedia = mockViewportMode("mobile");
+    try {
+      setupMockChat({
+        activeSession: activeSessionFixture,
+        messages: [{ id: "msg-001", sessionId: "session-001", role: "assistant", content: "One", createdAt: "2026-04-08T00:00:00.000Z" }],
+      });
+
+      render(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+
+      const messagesContainer = document.querySelector(".chat-messages") as HTMLDivElement;
+      let scrollTopValue = 250;
+      Object.defineProperty(messagesContainer, "scrollHeight", { configurable: true, get: () => 1180 });
+      Object.defineProperty(messagesContainer, "scrollTop", {
+        configurable: true,
+        get: () => scrollTopValue,
+        set: (value: number) => {
+          scrollTopValue = value;
+        },
+      });
+
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      fireEvent(document, new Event("visibilitychange"));
+      scrollTopValue = 300;
+
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      fireEvent(document, new Event("visibilitychange"));
+
+      await waitFor(() => {
+        expect(scrollTopValue).toBe(1180);
+      });
+    } finally {
+      restoreMatchMedia.mockRestore();
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    }
+  });
+
   it("FN-3884: retries bottom anchor while container height keeps growing", async () => {
     const restoreMatchMedia = mockDesktopViewport();
     const originalRaf = window.requestAnimationFrame;
@@ -3695,14 +3761,13 @@ describe("ChatView mobile CSS contract", () => {
     expect(mobileRuleContains(".chat-sidebar-list", "min-height: 0")).toBe(true);
   });
 
-  it("mobile .chat-sidebar-footer exists with display: flex and border-top", () => {
-    expect(mobileRuleContains(".chat-sidebar-footer", "display: flex")).toBe(true);
+  it("mobile .chat-sidebar-footer exists with display block and border-top", () => {
+    expect(mobileRuleContains(".chat-sidebar-footer", "display: block")).toBe(true);
     expect(mobileRuleContains(".chat-sidebar-footer", "border-top")).toBe(true);
   });
 
-  it("mobile .chat-sidebar-footer-btn has flex: 1 for full-width button", () => {
-    expect(mobileRuleContains(".chat-sidebar-footer-btn", "flex: 1")).toBe(true);
-    expect(mobileRuleContains(".chat-sidebar-footer-btn", "justify-content: center")).toBe(true);
+  it("mobile .chat-sidebar-footer-btn stays full-width and centered", () => {
+    expect(css).toMatch(/@media\s*\(max-width:\s*768px\)[\s\S]*?\.chat-sidebar-footer\s+\.chat-sidebar-footer-btn\s*\{[^}]*width:\s*100%[^}]*justify-content:\s*center/);
   });
 
   it("mobile does not override assistant render toggle visibility", () => {
@@ -3734,7 +3799,7 @@ describe("ChatView mobile CSS contract", () => {
   });
 
   it("mobile widens chat bubbles for readability", () => {
-    expect(css).toMatch(/@media\s*\(max-width:\s*768px\)[\s\S]*?\.chat-message\s*\{[\s\S]*?max-width:\s*82%/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*768px\)[\s\S]*?\.chat-message\s*\{[^}]*max-width:\s*90%/);
   });
 
   it("mobile keeps thread-header identity and render toggle inline", () => {
