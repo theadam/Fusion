@@ -4,6 +4,11 @@ _Date: 2026-04-08_
 
 ## 1) Executive Summary
 
+### FN-3978 TaskStore suite split follow-up (2026-05-10)
+
+- Decomposed `packages/core/src/__tests__/store.test.ts` into focused suites: `store-plugin-routing.test.ts`, `store-prompt-generation.test.ts`, `store-priority.test.ts`, `store-token-usage.test.ts`, `store-persistence.test.ts`, `store-settings.test.ts`, `store-attachments.test.ts`, `store-watcher.test.ts`, and `store-migration.test.ts`.
+- Local verification after the split (`pnpm --filter @fusion/core exec vitest run ...`) showed the extracted suites running in sub-second to low-single-digit durations (`store-attachments` ~0.45s, `store-migration` ~0.46s, `store-persistence` ~0.72s, `store-watcher` ~2.89s), while the remaining catch-all `store.test.ts` still measured ~23.35s and remains the largest residual core test file.
+
 ### FN-3293 stabilization update (2026-05-04)
 
 - Replaced ad-hoc frame sleeps in `packages/cli/src/commands/dashboard-tui/__tests__/app.test.tsx` with deterministic `vi.waitFor`-based frame assertions and microtask flush helpers.
