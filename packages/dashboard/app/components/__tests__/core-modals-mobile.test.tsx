@@ -245,7 +245,7 @@ describe("core modals mobile css coverage", () => {
 
     expect(menuBlock).toContain("max-height");
     expect(menuBlock).toContain("overflow-y: auto");
-    expect(menuBlock).toContain("max-width: calc(100vw - 28px)");
+    expect(menuBlock).toContain("max-width: calc(100vw - calc(var(--space-lg) + var(--space-md)))");
   });
 
   it("TaskDetailModal: mobile back control keeps token-based touch-target sizing", () => {
