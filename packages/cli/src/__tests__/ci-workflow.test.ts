@@ -178,8 +178,38 @@ describe("PR checks workflow (.github/workflows/pr-checks.yml)", () => {
     expect(content).not.toContain("run: pnpm test\n");
   });
 
+  it("keeps lint as install + lint only, without Bun/setup build coupling", () => {
+    const lintSteps = workflow.jobs?.lint?.steps ?? [];
+    expect(
+      lintSteps.some(
+        (step: any) =>
+          step.name === "Install dependencies" &&
+          typeof step.run === "string" &&
+          step.run.includes("pnpm install --frozen-lockfile"),
+      ),
+    ).toBe(true);
+    expect(
+      lintSteps.some((step: any) => step.name === "Lint" && typeof step.run === "string" && step.run.includes("pnpm lint")),
+    ).toBe(true);
+    expect(
+      lintSteps.some(
+        (step: any) =>
+          step.name === "Install Bun" ||
+          (typeof step.uses === "string" && step.uses.includes("oven-sh/setup-bun")) ||
+          (typeof step.run === "string" && step.run.includes("pnpm build")),
+      ),
+    ).toBe(false);
+  });
+
   it("keeps build coverage as an explicit PR gate", () => {
     const buildSteps = workflow.jobs?.build?.steps ?? [];
+    expect(
+      buildSteps.some(
+        (step: any) =>
+          step.name === "Install Bun" ||
+          (typeof step.uses === "string" && step.uses.includes("oven-sh/setup-bun")),
+      ),
+    ).toBe(true);
     expect(
       buildSteps.some(
         (step: any) => step.name === "Build" && typeof step.run === "string" && step.run.includes("pnpm build"),
