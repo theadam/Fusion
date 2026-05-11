@@ -4576,6 +4576,180 @@ describe("aiMergeTask — deterministic merge verification", () => {
     );
     expect(testRuns.length).toBeGreaterThan(0);
   });
+
+  it("runs ensure-test-artifacts preamble before verification and logs it", async () => {
+    setupHappyPathExecSync();
+    mockedCreateFnAgent.mockResolvedValue({ session: { prompt: vi.fn(), dispose: vi.fn() } } as any);
+    const store = createMockStore();
+    (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      testCommand: "vitest run",
+      verificationFixRetries: 0,
+    });
+
+    await aiMergeTask(store, "/tmp/root", "FN-050");
+
+    const nodeCallIndex = mockedExecSync.mock.calls.findIndex((call) =>
+      String(call[0]).includes("node scripts/ensure-test-artifacts.mjs"),
+    );
+    const testCallIndex = mockedExecSync.mock.calls.findIndex((call) => String(call[0]).includes("vitest run"));
+    expect(nodeCallIndex).toBeGreaterThan(-1);
+    expect(testCallIndex).toBeGreaterThan(nodeCallIndex);
+    expect((store.logEntry as ReturnType<typeof vi.fn>).mock.calls.some((call) => String(call[1]).includes("[verification:bootstrap]"))).toBe(true);
+  });
+
+  it("rebuilds missing workspace package and retries verification once", async () => {
+    let testAttempts = 0;
+    mockedExecSync.mockImplementation((cmd: any) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("rev-parse --verify")) return Buffer.from("abc123");
+      if (cmdStr === "git rev-parse HEAD" || cmdStr.startsWith("git rev-parse HEAD ")) return "mergedcommit123";
+      if (cmdStr.includes("git log")) return "- feat: something" as any;
+      if (cmdStr.includes("merge-base")) return Buffer.from("abc123");
+      if (cmdStr.includes("git diff") && cmdStr.includes("--stat")) return "1 file changed" as any;
+      if (cmdStr.includes("merge --squash")) return Buffer.from("");
+      if (cmdStr.includes("diff --cached --quiet")) return "1" as any;
+      if (cmdStr.includes("diff --cached")) return "0" as any;
+      if (cmdStr.includes("show --shortstat")) return "3 files changed, 10 insertions(+), 2 deletions(-)" as any;
+      if (cmdStr.includes("branch -d") || cmdStr.includes("branch -D")) return Buffer.from("");
+      if (cmdStr.includes("worktree remove")) return Buffer.from("");
+      if (cmdStr.includes("vitest run")) {
+        testAttempts += 1;
+        if (testAttempts === 1) {
+          const err = new Error("vite failure") as any;
+          err.status = 1;
+          err.stderr = 'Failed to resolve entry for package "@fusion/dashboard"';
+          throw err;
+        }
+        return Buffer.from("");
+      }
+      return Buffer.from("");
+    });
+
+    mockedCreateFnAgent.mockResolvedValue({ session: { prompt: vi.fn(), dispose: vi.fn() } } as any);
+    const store = createMockStore();
+    (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ ...DEFAULT_SETTINGS, testCommand: "vitest run", verificationFixRetries: 0 });
+
+    const result = await aiMergeTask(store, "/tmp/root", "FN-050");
+    expect(result.merged).toBe(true);
+    expect(mockedExecSync.mock.calls.some((call) => String(call[0]).includes("pnpm --filter @fusion/dashboard build"))).toBe(true);
+    expect(testAttempts).toBe(2);
+  });
+
+  it("throws VerificationError with environmentFault.recovered=false when retry still fails the same way", async () => {
+    mockedExecSync.mockImplementation((cmd: any) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("rev-parse --verify")) return Buffer.from("abc123");
+      if (cmdStr === "git rev-parse HEAD" || cmdStr.startsWith("git rev-parse HEAD ")) return "mergedcommit123";
+      if (cmdStr.includes("git log")) return "- feat: something" as any;
+      if (cmdStr.includes("merge-base")) return Buffer.from("abc123");
+      if (cmdStr.includes("git diff") && cmdStr.includes("--stat")) return "1 file changed" as any;
+      if (cmdStr.includes("merge --squash")) return Buffer.from("");
+      if (cmdStr.includes("diff --cached --quiet")) return "1" as any;
+      if (cmdStr.includes("diff --cached")) return "0" as any;
+      if (cmdStr.includes("show --shortstat")) return "3 files changed, 10 insertions(+), 2 deletions(-)" as any;
+      if (cmdStr.includes("branch -d") || cmdStr.includes("branch -D")) return Buffer.from("");
+      if (cmdStr.includes("worktree remove")) return Buffer.from("");
+      if (cmdStr.includes("vitest run")) {
+        const err = new Error("vite failure") as any;
+        err.status = 1;
+        err.stderr = 'Failed to resolve entry for package "@fusion/dashboard"';
+        throw err;
+      }
+      return Buffer.from("");
+    });
+
+    mockedCreateFnAgent.mockResolvedValue({ session: { prompt: vi.fn(), dispose: vi.fn() } } as any);
+    const store = createMockStore();
+    (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ ...DEFAULT_SETTINGS, testCommand: "vitest run", verificationFixRetries: 0 });
+
+    await expect(aiMergeTask(store, "/tmp/root", "FN-050")).rejects.toMatchObject({
+      name: "VerificationError",
+      verificationResult: {
+        environmentFault: {
+          kind: "missing-workspace-entry",
+          packageName: "@fusion/dashboard",
+          recovered: false,
+        },
+      },
+    });
+  });
+
+  it("throws normal VerificationError without environmentFault when retry fails differently", async () => {
+    let testAttempts = 0;
+    mockedExecSync.mockImplementation((cmd: any) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("rev-parse --verify")) return Buffer.from("abc123");
+      if (cmdStr === "git rev-parse HEAD" || cmdStr.startsWith("git rev-parse HEAD ")) return "mergedcommit123";
+      if (cmdStr.includes("git log")) return "- feat: something" as any;
+      if (cmdStr.includes("merge-base")) return Buffer.from("abc123");
+      if (cmdStr.includes("git diff") && cmdStr.includes("--stat")) return "1 file changed" as any;
+      if (cmdStr.includes("merge --squash")) return Buffer.from("");
+      if (cmdStr.includes("diff --cached --quiet")) return "1" as any;
+      if (cmdStr.includes("diff --cached")) return "0" as any;
+      if (cmdStr.includes("show --shortstat")) return "3 files changed, 10 insertions(+), 2 deletions(-)" as any;
+      if (cmdStr.includes("branch -d") || cmdStr.includes("branch -D")) return Buffer.from("");
+      if (cmdStr.includes("worktree remove")) return Buffer.from("");
+      if (cmdStr.includes("vitest run")) {
+        testAttempts += 1;
+        const err = new Error("verification failure") as any;
+        err.status = 1;
+        err.stderr = testAttempts === 1
+          ? 'Failed to resolve entry for package "@fusion/dashboard"'
+          : "AssertionError: genuine test failure";
+        throw err;
+      }
+      return Buffer.from("");
+    });
+
+    mockedCreateFnAgent.mockResolvedValue({ session: { prompt: vi.fn(), dispose: vi.fn() } } as any);
+    const store = createMockStore();
+    (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ ...DEFAULT_SETTINGS, testCommand: "vitest run", verificationFixRetries: 0 });
+
+    try {
+      await aiMergeTask(store, "/tmp/root", "FN-050");
+      throw new Error("expected verification error");
+    } catch (error) {
+      expect(error).toMatchObject({ name: "VerificationError" });
+      expect(error).not.toHaveProperty("verificationResult.environmentFault");
+    }
+  });
+
+  it("throws VerificationError when bootstrap preamble fails without environmentFault", async () => {
+    mockedExecSync.mockImplementation((cmd: any) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("node scripts/ensure-test-artifacts.mjs")) {
+        const err = new Error("bootstrap failed") as any;
+        err.status = 1;
+        err.stderr = "bootstrap failed";
+        throw err;
+      }
+      if (cmdStr.includes("rev-parse --verify")) return Buffer.from("abc123");
+      if (cmdStr === "git rev-parse HEAD" || cmdStr.startsWith("git rev-parse HEAD ")) return "mergedcommit123";
+      if (cmdStr.includes("git log")) return "- feat: something" as any;
+      if (cmdStr.includes("merge-base")) return Buffer.from("abc123");
+      if (cmdStr.includes("git diff") && cmdStr.includes("--stat")) return "1 file changed" as any;
+      if (cmdStr.includes("merge --squash")) return Buffer.from("");
+      if (cmdStr.includes("diff --cached --quiet")) return "1" as any;
+      if (cmdStr.includes("diff --cached")) return "0" as any;
+      if (cmdStr.includes("show --shortstat")) return "3 files changed, 10 insertions(+), 2 deletions(-)" as any;
+      if (cmdStr.includes("branch -d") || cmdStr.includes("branch -D")) return Buffer.from("");
+      if (cmdStr.includes("worktree remove")) return Buffer.from("");
+      return Buffer.from("");
+    });
+
+    mockedCreateFnAgent.mockResolvedValue({ session: { prompt: vi.fn(), dispose: vi.fn() } } as any);
+    const store = createMockStore();
+    (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ ...DEFAULT_SETTINGS, testCommand: "vitest run", verificationFixRetries: 0 });
+
+    try {
+      await aiMergeTask(store, "/tmp/root", "FN-050");
+      throw new Error("expected verification error");
+    } catch (error) {
+      expect(error).toMatchObject({ name: "VerificationError" });
+      expect(error).not.toHaveProperty("verificationResult.environmentFault");
+    }
+  });
 });
 
 describe("shouldSyncDependenciesForMerge", () => {

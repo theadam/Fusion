@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 import {
+  detectMissingWorkspaceEntry,
   runVerificationCommand as runVerificationCommandShared,
   summarizeVerificationOutput,
   truncateWithEllipsis,
@@ -659,10 +660,136 @@ async function runDeterministicVerification(
   await store.logEntry(taskId, deterministicVerificationMessage);
   await store.appendAgentLog(taskId, deterministicVerificationMessage, "text", undefined, "merger");
 
+  const bootstrapScriptPath = join(rootDir, "scripts/ensure-test-artifacts.mjs");
+  if (hasTestCommand || hasBuildCommand) {
+    if (!existsSync(bootstrapScriptPath)) {
+      const bootstrapMissingMessage = `${taskId}: [verification:bootstrap] script missing at scripts/ensure-test-artifacts.mjs — skipping preamble`;
+      mergerLog.warn(bootstrapMissingMessage);
+      await store.logEntry(taskId, bootstrapMissingMessage);
+      await store.appendAgentLog(taskId, bootstrapMissingMessage, "text", undefined, "merger");
+    } else {
+      const bootstrapCommand = "node scripts/ensure-test-artifacts.mjs";
+      await store.logEntry(taskId, `[verification:bootstrap] running: ${bootstrapCommand}`);
+      await store.appendAgentLog(taskId, "[verification:bootstrap] running bootstrap preamble", "tool", bootstrapCommand, "merger");
+      try {
+        throwIfAborted(signal, taskId);
+        await execAsync(bootstrapCommand, {
+          cwd: rootDir,
+          timeout: 300_000,
+          maxBuffer: 10 * 1024 * 1024,
+          signal,
+        });
+        throwIfAborted(signal, taskId);
+        await store.logEntry(taskId, "[verification:bootstrap] bootstrap preamble succeeded");
+        await store.appendAgentLog(taskId, "[verification:bootstrap] bootstrap preamble succeeded", "tool_result", undefined, "merger");
+      } catch (error) {
+        throwIfAborted(signal, taskId);
+        const err = error as { stdout?: string | Buffer; stderr?: string | Buffer; status?: number; code?: number | string; message?: string };
+        const bootstrapStdout = err?.stdout?.toString?.() || "";
+        const bootstrapStderr = err?.stderr?.toString?.() || "";
+        const bootstrapOutput = bootstrapStderr || bootstrapStdout || err?.message || "Unknown bootstrap failure";
+        const bootstrapExitCode = typeof err?.status === "number"
+          ? err.status
+          : (typeof err?.code === "number" ? err.code : null);
+
+        result.allPassed = false;
+        result.failedCommand = "bootstrap";
+        await store.logEntry(
+          taskId,
+          `[verification:bootstrap] bootstrap preamble failed (exit ${bootstrapExitCode ?? "unknown"}): ${truncateWithEllipsis(bootstrapOutput, VERIFICATION_LOG_MAX_CHARS)}`,
+          "VerificationError",
+        );
+        await store.appendAgentLog(
+          taskId,
+          "[verification:bootstrap] bootstrap preamble failed",
+          "tool_error",
+          `exit ${bootstrapExitCode ?? "unknown"}`,
+          "merger",
+        );
+        throw new VerificationError(
+          `Verification bootstrap preamble failed for ${taskId}`,
+          result,
+        );
+      }
+    }
+  }
+
+  let missingEntryRetryAttempted = false;
+
+  const executeVerificationWithRetry = async (
+    command: string,
+    type: "test" | "build",
+    failedCommandLabel: "testCommand" | "buildCommand",
+  ): Promise<VerificationCommandResult> => {
+    const firstAttempt = await runVerificationCommand(
+      store, rootDir, taskId, command, type, signal,
+    );
+    if (firstAttempt.success) {
+      return firstAttempt;
+    }
+
+    const missingWorkspaceEntry = detectMissingWorkspaceEntry(firstAttempt.stderr, firstAttempt.stdout);
+    if (!missingWorkspaceEntry || missingEntryRetryAttempted) {
+      return firstAttempt;
+    }
+
+    missingEntryRetryAttempted = true;
+    const packageName = missingWorkspaceEntry.packageName;
+    const rebuildCommand = `pnpm --filter ${packageName} build`;
+    await store.logEntry(taskId, `[verification:retry] bootstrap-built: detected missing workspace entry for ${packageName}; running ${rebuildCommand}`);
+    await store.appendAgentLog(taskId, "[verification:retry] bootstrap-built", "tool", rebuildCommand, "merger");
+
+    try {
+      throwIfAborted(signal, taskId);
+      await execAsync(rebuildCommand, {
+        cwd: rootDir,
+        timeout: 300_000,
+        maxBuffer: 10 * 1024 * 1024,
+        signal,
+      });
+      throwIfAborted(signal, taskId);
+    } catch (_error) {
+      throwIfAborted(signal, taskId);
+      await store.logEntry(taskId, `[verification:retry] retry-different-failure: workspace rebuild failed for ${packageName}`);
+      await store.appendAgentLog(taskId, "[verification:retry] retry-different-failure", "tool_error", packageName, "merger");
+      return firstAttempt;
+    }
+
+    const retryAttempt = await runVerificationCommand(
+      store, rootDir, taskId, command, type, signal,
+    );
+    if (retryAttempt.success) {
+      result.environmentFault = {
+        kind: "missing-workspace-entry",
+        packageName,
+        recovered: true,
+      };
+      await store.logEntry(taskId, `[verification:retry] retry-success: rebuilt ${packageName} and ${failedCommandLabel} now passes`);
+      await store.appendAgentLog(taskId, "[verification:retry] retry-success", "tool_result", packageName, "merger");
+      return retryAttempt;
+    }
+
+    const retryMissingWorkspaceEntry = detectMissingWorkspaceEntry(retryAttempt.stderr, retryAttempt.stdout);
+    if (retryMissingWorkspaceEntry?.packageName === packageName) {
+      result.environmentFault = {
+        kind: "missing-workspace-entry",
+        packageName,
+        recovered: false,
+      };
+      await store.logEntry(taskId, `[verification:retry] retry-still-missing: ${packageName} still missing after rebuild`);
+      await store.appendAgentLog(taskId, "[verification:retry] retry-still-missing", "tool_error", packageName, "merger");
+      return retryAttempt;
+    }
+
+    await store.logEntry(taskId, `[verification:retry] retry-different-failure: rebuild fixed entry point but ${failedCommandLabel} still failed`);
+    await store.appendAgentLog(taskId, "[verification:retry] retry-different-failure", "tool_error", packageName, "merger");
+    return retryAttempt;
+  };
+
   // Run test command first if configured
   if (hasTestCommand) {
-    const testResult = await runVerificationCommand(
-      store, rootDir, taskId, normalizedTestCommand!, "test", signal,
+    const testResult = await executeVerificationWithRetry(
+      normalizedTestCommand!, "test", "testCommand",
     );
     result.testResult = testResult;
 
@@ -690,8 +817,8 @@ async function runDeterministicVerification(
 
   // Run build command second if configured
   if (hasBuildCommand) {
-    const buildResult = await runVerificationCommand(
-      store, rootDir, taskId, normalizedBuildCommand!, "build", signal,
+    const buildResult = await executeVerificationWithRetry(
+      normalizedBuildCommand!, "build", "buildCommand",
     );
     result.buildResult = buildResult;
 

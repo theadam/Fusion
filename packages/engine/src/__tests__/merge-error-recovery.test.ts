@@ -1,13 +1,27 @@
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { Settings } from "@fusion/core";
 
-const testState = vi.hoisted(() => ({
-  currentStore: null as MockTaskStore | null,
-  aiMergeTask: vi.fn(),
-}));
+const testState = vi.hoisted(() => {
+  class MockVerificationError extends Error {
+    verificationResult: unknown;
+
+    constructor(message: string, verificationResult: unknown) {
+      super(message);
+      this.name = "VerificationError";
+      this.verificationResult = verificationResult;
+    }
+  }
+
+  return {
+    currentStore: null as MockTaskStore | null,
+    aiMergeTask: vi.fn(),
+    VerificationError: MockVerificationError,
+  };
+});
 
 vi.mock("../merger.js", () => ({
   aiMergeTask: testState.aiMergeTask,
+  VerificationError: testState.VerificationError,
 }));
 
 vi.mock("../runtimes/in-process-runtime.js", () => ({
@@ -26,7 +40,7 @@ vi.mock("../runtimes/in-process-runtime.js", () => ({
 
 import { ProjectEngine } from "../project-engine.js";
 import { runtimeLog } from "../logger.js";
-import { aiMergeTask } from "../merger.js";
+import { aiMergeTask, VerificationError } from "../merger.js";
 
 type MockTask = {
   id: string;
@@ -687,6 +701,32 @@ describe("ProjectEngine merge error recovery", () => {
     );
     expect(logSpy).toHaveBeenCalledWith(
       `Auto-merge: ${TASK_ID} deterministic test verification failed (1/3) — moved to in-progress with status=merging-fix`,
+    );
+  });
+
+  it("leaves task in-review without bounce when VerificationError is an unrecovered missing-workspace-entry environment fault", async () => {
+    const verificationError = new VerificationError("Deterministic test verification failed", {
+      allPassed: false,
+      failedCommand: "testCommand",
+      environmentFault: {
+        kind: "missing-workspace-entry",
+        packageName: "@fusion/dashboard",
+        recovered: false,
+      },
+    });
+    vi.mocked(aiMergeTask).mockRejectedValueOnce(verificationError);
+
+    const store = makeStore({
+      tasks: [makeTask({ verificationFailureCount: 2, status: "in-review" })],
+    });
+    const engine = createEngine(store);
+
+    await runMergeCycle(engine);
+
+    expect(store.moveTask).not.toHaveBeenCalledWith(TASK_ID, "in-progress");
+    expect(store.updateTask).not.toHaveBeenCalledWith(
+      TASK_ID,
+      expect.objectContaining({ verificationFailureCount: 3 }),
     );
   });
 

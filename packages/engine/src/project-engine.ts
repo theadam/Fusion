@@ -22,7 +22,7 @@ import { NotificationService } from "./notification/index.js";
 import { GridlockDetector } from "./gridlock-detector.js";
 import { CronRunner, createAiPromptExecutor } from "./cron-runner.js";
 import type { RoutineRunner } from "./routine-runner.js";
-import { aiMergeTask, sweepStaleAutostashes } from "./merger.js";
+import { aiMergeTask, sweepStaleAutostashes, VerificationError } from "./merger.js";
 import { PRIORITY_MERGE } from "./concurrency.js";
 import { runtimeLog } from "./logger.js";
 import type { HeartbeatTriggerScheduler } from "./agent-heartbeat.js";
@@ -1468,6 +1468,18 @@ export class ProjectEngine {
             errorMsg.includes("Deterministic build verification failed");
 
           if (taskOnErr && isVerificationError) {
+            if (
+              err instanceof VerificationError
+              && err.verificationResult?.environmentFault?.kind === "missing-workspace-entry"
+              && err.verificationResult.environmentFault.recovered === false
+            ) {
+              const packageName = err.verificationResult.environmentFault.packageName;
+              const message = `${taskId}: verification failed with environment fault (missing-workspace-entry: ${packageName}) — leaving in-review for next sweep, not incrementing verificationFailureCount`;
+              await store.logEntry(taskId, message, "VerificationError").catch(() => undefined);
+              runtimeLog.log(`Auto-merge: ${message}`);
+              continue;
+            }
+
             const failedKind = errorMsg.includes("build verification") ? "build" : "test";
             const previousBounces = taskOnErr.verificationFailureCount ?? 0;
             const nextBounces = previousBounces + 1;

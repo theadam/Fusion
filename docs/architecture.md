@@ -1281,6 +1281,7 @@ When a tracked task transitions into `done`, Fusion closes the linked GitHub iss
 - `aiMergeTask()` in `merger.ts` performs merge flow
 - `merger.ts` also exposes a test-only `__test__` helper object for internal merger unit/integration coverage (for example autostash orphan cleanup behavior)
 - Supports workflow-step execution after merge (post-merge phase)
+- Deterministic verification now runs a bootstrap preamble (`node scripts/ensure-test-artifacts.mjs`) before configured `testCommand`/`buildCommand`, then self-heals Vite `Failed to resolve entry for package "@fusion/..."` workspace-entry faults by rebuilding the missing package once and retrying the failed command. If that retry still reports the same missing-entry fault, merger raises a typed environment fault and `ProjectEngine` leaves the task in-review (no verificationFailureCount increment or in-progress bounce) so the next recovery sweep can retry after other runs rebuild artifacts.
 
 #### Autostash lifecycle
 - Before destructive merge prep, `stashUnrelatedRootDirChanges()` snapshots dirty root-dir edits into `fusion-merger-autostash:<taskId>:<ts>` (plus optional `race-rescue-*` stashes for late writes).

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { execWithProcessGroup } from "../verification-utils.js";
+import { detectMissingWorkspaceEntry, execWithProcessGroup } from "../verification-utils.js";
 
 const onPosix = process.platform !== "win32";
 const itPosix = onPosix ? it : it.skip;
@@ -77,5 +77,33 @@ setInterval(() => {}, 1000);
 
     await delay(700);
     await expect(access(markerPath)).rejects.toThrow();
+  });
+});
+
+describe("detectMissingWorkspaceEntry", () => {
+  it("matches @fusion package names from stderr", () => {
+    expect(
+      detectMissingWorkspaceEntry('Error: Failed to resolve entry for package "@fusion/dashboard" from vite'),
+    ).toEqual({ packageName: "@fusion/dashboard" });
+  });
+
+  it("matches @fusion-plugin-examples package names from stderr", () => {
+    expect(
+      detectMissingWorkspaceEntry('Failed to resolve entry for package "@fusion-plugin-examples/hermes-runtime"'),
+    ).toEqual({ packageName: "@fusion-plugin-examples/hermes-runtime" });
+  });
+
+  it("returns null for unrelated stderr", () => {
+    expect(detectMissingWorkspaceEntry("Some different failure output")).toBeNull();
+  });
+
+  it("returns null for truncated messages without closing quote", () => {
+    expect(detectMissingWorkspaceEntry('Failed to resolve entry for package "@fusion/da')).toBeNull();
+  });
+
+  it("finds matches in stdout when stderr does not contain one", () => {
+    expect(
+      detectMissingWorkspaceEntry("no error in stderr", 'Failed to resolve entry for package "@fusion/core" in stdout'),
+    ).toEqual({ packageName: "@fusion/core" });
   });
 });

@@ -30,6 +30,11 @@ export interface VerificationResult {
   buildResult?: VerificationCommandResult;
   allPassed: boolean;
   failedCommand?: string;
+  environmentFault?: {
+    kind: "missing-workspace-entry";
+    packageName: string;
+    recovered: boolean;
+  };
 }
 
 // ── Process group exec ─────────────────────────────────────────────────
@@ -171,6 +176,23 @@ export async function execWithProcessGroup(
 export function truncateWithEllipsis(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}\n... (truncated)`;
+}
+
+export function detectMissingWorkspaceEntry(stderr: string, stdout?: string): { packageName: string } | null {
+  const pattern = /Failed to resolve entry for package\s+"(@fusion\/[a-z0-9-]+|@fusion-plugin-examples\/[a-z0-9-]+)"/;
+  const stderrMatch = stderr.match(pattern);
+  if (stderrMatch) {
+    return { packageName: stderrMatch[1] };
+  }
+
+  if (stdout) {
+    const stdoutMatch = stdout.match(pattern);
+    if (stdoutMatch) {
+      return { packageName: stdoutMatch[1] };
+    }
+  }
+
+  return null;
 }
 
 function truncateOutput(output: string): string {
