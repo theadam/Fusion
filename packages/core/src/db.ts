@@ -1074,7 +1074,15 @@ export const MIGRATION_ONLY_TABLE_SCHEMAS: Record<string, Record<string, string>
 
 // ── Database Class ───────────────────────────────────────────────────
 
+type SharedIntegrityCheckState = {
+  timer: ReturnType<typeof setTimeout> | null;
+  subscribers: Set<Database>;
+  running: boolean;
+};
+
 export class Database {
+  private static readonly sharedIntegrityChecks = new Map<string, SharedIntegrityCheckState>();
+
   private db: DatabaseSync;
   private readonly dbPath: string;
   private readonly inMemory: boolean;
@@ -1086,8 +1094,8 @@ export class Database {
   /** Tracks transaction nesting depth for savepoint-based nested transactions. */
   private transactionDepth = 0;
   private readonly _fts5Available: boolean;
-  private backgroundIntegrityTimer: ReturnType<typeof setTimeout> | null = null;
   private integrityCheckScheduled = false;
+  private closed = false;
 
 
   constructor(fusionDir: string, options?: { inMemory?: boolean }) {
@@ -3089,40 +3097,80 @@ export class Database {
   }
 
   private scheduleBackgroundIntegrityCheck(): void {
-    if (this.inMemory || this.integrityCheckScheduled) {
+    if (this.inMemory || this.integrityCheckScheduled || this.closed) {
       return;
     }
 
     this.integrityCheckScheduled = true;
     this.integrityCheckPending = true;
-    this.backgroundIntegrityTimer = setTimeout(() => {
-      this.backgroundIntegrityTimer = null;
-      const integrity = this.integrityCheck();
-      this.integrityCheckPending = false;
-      this.integrityCheckLastRunAt = new Date().toISOString();
 
-      if (integrity.ok) {
-        this.corruptionDetected = false;
-        return;
+    const existing = Database.sharedIntegrityChecks.get(this.dbPath);
+    if (existing) {
+      existing.subscribers.add(this);
+      return;
+    }
+
+    const shared: SharedIntegrityCheckState = {
+      timer: null,
+      subscribers: new Set([this]),
+      running: false,
+    };
+
+    shared.timer = setTimeout(() => {
+      shared.timer = null;
+      shared.running = true;
+
+      const participants = [...shared.subscribers].filter((instance) => !instance.closed);
+      const primary = participants[0];
+      const startedAt = new Date().toISOString();
+
+      let integrity: ReturnType<Database["integrityCheck"]> = { ok: true };
+      if (primary) {
+        integrity = primary.integrityCheck();
       }
 
-      this.corruptionDetected = true;
-      const errorSummary = integrity.errors.slice(0, 3).join(" | ");
-      console.error(
-        `[fusion:db] Background integrity check detected corruption for ${this.dbPath}: ${errorSummary}`,
-      );
+      for (const participant of participants) {
+        participant.integrityCheckPending = false;
+        participant.integrityCheckLastRunAt = startedAt;
+        participant.corruptionDetected = !integrity.ok;
+      }
+
+      if (!integrity.ok) {
+        const errorSummary = integrity.errors.slice(0, 3).join(" | ");
+        console.error(
+          `[fusion:db] Background integrity check detected corruption for ${this.dbPath}: ${errorSummary}`,
+        );
+      }
+
+      Database.sharedIntegrityChecks.delete(this.dbPath);
     }, 3000);
+
+    Database.sharedIntegrityChecks.set(this.dbPath, shared);
   }
 
   /**
    * Close the database connection.
    */
   close(): void {
-    if (this.backgroundIntegrityTimer) {
-      clearTimeout(this.backgroundIntegrityTimer);
-      this.backgroundIntegrityTimer = null;
-      this.integrityCheckPending = false;
+    if (this.closed) {
+      return;
     }
+
+    this.closed = true;
+
+    const shared = Database.sharedIntegrityChecks.get(this.dbPath);
+    if (shared) {
+      shared.subscribers.delete(this);
+      if (!shared.running && shared.subscribers.size === 0) {
+        if (shared.timer) {
+          clearTimeout(shared.timer);
+          shared.timer = null;
+        }
+        Database.sharedIntegrityChecks.delete(this.dbPath);
+      }
+    }
+
+    this.integrityCheckPending = false;
     this.db.close();
   }
 

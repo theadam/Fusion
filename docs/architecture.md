@@ -846,7 +846,8 @@ A `prefetchLazyViews()` function runs once on mount via `requestIdleCallback` to
 - **Health check**: `GET /api/health`
   - Returns liveness status for load balancers and monitoring
   - Response: `{ status: "ok" | "degraded", version: string, uptime: number, database: { corruptionDetected: boolean, integrityCheckPending: boolean, integrityCheckLastRunAt: string | null } }`
-  - Startup does not block on full `PRAGMA integrity_check(100)`; Fusion schedules it in the background shortly after boot and surfaces progress/results via `database.*` fields
+  - Startup does not block on full `PRAGMA integrity_check(100)`; Fusion schedules it in the background shortly after boot.
+  - Background integrity checks are deduplicated process-wide per on-disk SQLite path: multiple `Database` instances sharing the same `fusion.db` join one shared run, and each instance still updates `database.integrityCheckPending`, `database.integrityCheckLastRunAt`, and `database.corruptionDetected` from the shared result.
   - No authentication required
 
 ### Custom Provider endpoints

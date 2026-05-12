@@ -317,6 +317,72 @@ describe("Database", () => {
         vi.useRealTimers();
       }
     });
+
+    it("deduplicates background integrity check across multiple instances sharing a db path", () => {
+      vi.useFakeTimers();
+      const integritySpy = vi.spyOn(Database.prototype, "integrityCheck");
+      const freshDir = makeTmpDir();
+      const freshFusionDir = join(freshDir, ".fusion");
+      const dbA = new Database(freshFusionDir);
+      const dbB = new Database(freshFusionDir);
+
+      try {
+        dbA.init();
+        dbB.init();
+
+        expect(dbA.integrityCheckPending).toBe(true);
+        expect(dbB.integrityCheckPending).toBe(true);
+
+        vi.advanceTimersByTime(3000);
+
+        expect(integritySpy).toHaveBeenCalledTimes(1);
+        expect(dbA.integrityCheckPending).toBe(false);
+        expect(dbB.integrityCheckPending).toBe(false);
+        expect(dbA.integrityCheckLastRunAt).toBeTruthy();
+        expect(dbB.integrityCheckLastRunAt).toBeTruthy();
+        expect(dbA.corruptionDetected).toBe(false);
+        expect(dbB.corruptionDetected).toBe(false);
+      } finally {
+        dbA.close();
+        dbB.close();
+        rmSync(freshDir, { recursive: true, force: true });
+        integritySpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it("fans out corruption detection to all instances participating in shared background check", () => {
+      vi.useFakeTimers();
+      const integritySpy = vi.spyOn(Database.prototype, "integrityCheck").mockReturnValue({
+        ok: false,
+        errors: ["malformed database"],
+      });
+      const freshDir = makeTmpDir();
+      const freshFusionDir = join(freshDir, ".fusion");
+      const dbA = new Database(freshFusionDir);
+      const dbB = new Database(freshFusionDir);
+
+      try {
+        dbA.init();
+        dbB.init();
+
+        vi.advanceTimersByTime(3000);
+
+        expect(integritySpy).toHaveBeenCalledTimes(1);
+        expect(dbA.integrityCheckPending).toBe(false);
+        expect(dbB.integrityCheckPending).toBe(false);
+        expect(dbA.integrityCheckLastRunAt).toBeTruthy();
+        expect(dbB.integrityCheckLastRunAt).toBeTruthy();
+        expect(dbA.corruptionDetected).toBe(true);
+        expect(dbB.corruptionDetected).toBe(true);
+      } finally {
+        dbA.close();
+        dbB.close();
+        rmSync(freshDir, { recursive: true, force: true });
+        integritySpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("change detection", () => {
