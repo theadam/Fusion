@@ -151,6 +151,42 @@ const WORKFLOW_SCRIPT_OUTPUT_MAX_CHARS = 4_000;
 
 class NonRetryableWorktreeError extends Error {}
 
+const SESSION_WORKTREE_PATH_REGEX = /([A-Za-z]:)?[^"'\s]*\.worktrees[\\/][^"'\s]+/g;
+
+function normalizeWorktreePath(pathValue: string): string {
+  return resolvePath(pathValue).replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+async function extractPersistedSessionWorktreePath(sessionFile: string): Promise<string | null> {
+  try {
+    const content = await readFile(sessionFile, "utf-8");
+    const matches = content.match(SESSION_WORKTREE_PATH_REGEX) ?? [];
+    if (matches.length === 0) return null;
+
+    const normalizedCounts = new Map<string, number>();
+    for (const match of matches) {
+      const normalized = normalizeWorktreePath(match);
+      normalizedCounts.set(normalized, (normalizedCounts.get(normalized) ?? 0) + 1);
+    }
+
+    let best: { path: string; count: number } | null = null;
+    for (const [path, count] of normalizedCounts.entries()) {
+      if (!best || count > best.count) best = { path, count };
+    }
+    return best?.path ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function isSessionWorktreeCompatible(
+  persistedWorktreePath: string | null,
+  currentWorktreePath: string,
+): boolean {
+  if (!persistedWorktreePath) return true;
+  return persistedWorktreePath === normalizeWorktreePath(currentWorktreePath);
+}
+
 function truncateWorkflowScriptOutput(output: string): string {
   if (output.length <= WORKFLOW_SCRIPT_OUTPUT_MAX_CHARS) return output;
   return `... output truncated to last ${WORKFLOW_SCRIPT_OUTPUT_MAX_CHARS} characters ...\n${output.slice(-WORKFLOW_SCRIPT_OUTPUT_MAX_CHARS)}`;
@@ -3183,8 +3219,26 @@ export class TaskExecutor {
 
         // Determine whether we're resuming a previous session (pause/resume)
         // or starting fresh. Use file-based sessions so conversation state
-        // persists across pause/unpause cycles.
-        const isResuming = !!task.sessionFile && existsSync(task.sessionFile);
+        // persists across pause/unpause cycles. Resume is allowed only when
+        // persisted session metadata still matches the task's live worktree.
+        let isResuming = !!task.sessionFile && existsSync(task.sessionFile);
+        if (isResuming) {
+          const persistedWorktreePath = await extractPersistedSessionWorktreePath(task.sessionFile!);
+          if (!isSessionWorktreeCompatible(persistedWorktreePath, worktreePath)) {
+            executorLog.warn(
+              `${task.id}: stale sessionFile worktree mismatch (session=${persistedWorktreePath}, task=${worktreePath}); starting fresh session`,
+            );
+            await this.store.logEntry(
+              task.id,
+              `Detected stale persisted session metadata (worktree mismatch: ${persistedWorktreePath} vs ${worktreePath}) — discarded resume state and started fresh session`,
+              undefined,
+              this.currentRunContext,
+            );
+            await this.store.updateTask(task.id, { sessionFile: null });
+            isResuming = false;
+          }
+        }
+
         const sessionManager = isResuming
           ? SessionManager.open(task.sessionFile!)
           : SessionManager.create(worktreePath);

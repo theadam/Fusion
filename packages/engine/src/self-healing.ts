@@ -21,7 +21,7 @@ import { getTaskMergeBlocker, isEphemeralAgent, type AgentStore, type TaskStore,
 import type { MeshLeaseManager } from "./mesh-lease-manager.js";
 import { createLogger } from "./logger.js";
 import { getRegisteredWorktreePaths, scanIdleWorktrees, scanOrphanedBranches } from "./worktree-pool.js";
-import { isRecoverableMissingWorktreeReviewFailure } from "./restart-recovery-coordinator.js";
+import { extractMissingWorktreePathFromSessionStartFailure, isMissingWorktreeSessionStartFailure, isRecoverableMissingWorktreeReviewFailure } from "./restart-recovery-coordinator.js";
 import { classifyError, extractMissingModulePath, isOperatorActionableAgentError, isStaleWorktreeModuleResolutionError } from "./transient-error-detector.js";
 
 const log = createLogger("self-healing");
@@ -1243,6 +1243,12 @@ export class SelfHealingManager {
             (blocker.mergeRetries ?? 0) >= MAX_AUTO_MERGE_RETRIES
           ) {
             reason = `blocker ${blockerId} in-review + failed (mergeRetries ${blocker.mergeRetries ?? 0}/${MAX_AUTO_MERGE_RETRIES})`;
+          } else if (
+            blocker.column === "in-review" &&
+            blocker.status === "failed" &&
+            isMissingWorktreeSessionStartFailure(blocker.error)
+          ) {
+            reason = `blocker ${blockerId} in-review + failed (missing-worktree session start)`;
           } else if (task.dependencies.length > 0 && !unresolvedDeps.includes(blockerId)) {
             reason = `blocker ${blockerId} not among unresolved dependencies`;
           }
@@ -2650,16 +2656,24 @@ export class SelfHealingManager {
       for (const task of candidates) {
         try {
           const staleWorktree = task.worktree;
+          const missingWorktreePath = extractMissingWorktreePathFromSessionStartFailure(task.error);
+          const hasMismatchedLiveWorktree =
+            typeof staleWorktree === "string" && staleWorktree.length > 0 &&
+            typeof missingWorktreePath === "string" && missingWorktreePath.length > 0 &&
+            resolve(staleWorktree) !== resolve(missingWorktreePath);
+
           await this.store.updateTask(task.id, {
             status: null,
             error: null,
-            worktree: null,
-            branch: null,
+            worktree: hasMismatchedLiveWorktree ? staleWorktree : null,
+            branch: hasMismatchedLiveWorktree ? task.branch ?? null : null,
             sessionFile: null,
           });
           await this.store.logEntry(
             task.id,
-            `Auto-recovered: retry/verification session targeted missing worktree${staleWorktree ? ` (${staleWorktree})` : ""} — cleared stale session metadata and requeued to todo`,
+            hasMismatchedLiveWorktree
+              ? `Auto-recovered: stale resume referenced missing worktree (${missingWorktreePath}) while live task worktree is ${staleWorktree} — cleared stale session metadata and requeued to todo`
+              : `Auto-recovered: retry/verification session targeted missing worktree${staleWorktree ? ` (${staleWorktree})` : ""} — cleared stale session metadata and requeued to todo`,
           );
           await this.store.moveTask(task.id, "todo", { preserveProgress: true });
           recovered++;

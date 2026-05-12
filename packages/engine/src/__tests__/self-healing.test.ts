@@ -1589,8 +1589,8 @@ describe("SelfHealingManager", () => {
       expect(store.updateTask).toHaveBeenCalledWith("FN-3900", {
         status: null,
         error: null,
-        worktree: null,
-        branch: null,
+        worktree: "/tmp/project/.worktrees/fn-3900-stale",
+        branch: "fusion/fn-3900",
         sessionFile: null,
       });
       expect(store.logEntry).toHaveBeenCalledWith(
@@ -4363,6 +4363,27 @@ describe("clearStaleBlockedBy", () => {
 
     expect(recovered).toBe(0);
     expect(store.updateTask).not.toHaveBeenCalled();
+    manager.stop();
+  });
+
+  it("FN-4013 signature: clears blockedBy when in-review blocker failed from missing-worktree session start", async () => {
+    const store = createRunningStore();
+    const taskA = createTask("FN-4013", { blockedBy: "FN-3908", dependencies: ["FN-3908"] });
+    const taskB = createTask("FN-3908", {
+      column: "in-review",
+      status: "failed",
+      mergeRetries: 0,
+      error: "Refusing to start coding agent in missing worktree: /Users/eclipxe/Projects/kb/.worktrees/bright-wren",
+      steps: [{ status: "done" }, { status: "pending" }] as any,
+    });
+    (store.listTasks as ReturnType<typeof vi.fn>).mockResolvedValue([taskA, taskB]);
+
+    const manager = new SelfHealingManager(store, { rootDir: "/tmp/test-project" });
+    const recovered = await manager.clearStaleBlockedBy();
+
+    expect(recovered).toBe(1);
+    expect(store.updateTask).toHaveBeenCalledWith("FN-4013", { blockedBy: null, status: null });
+    expect(store.logEntry).toHaveBeenCalledWith("FN-4013", expect.stringContaining("missing-worktree session start"));
     manager.stop();
   });
 
