@@ -23,6 +23,7 @@ export const DEFAULT_GLOBAL_SETTINGS = {
   ntfyEnabled: false,
   ntfyTopic: undefined,
   ntfyBaseUrl: undefined,
+  ntfyAccessToken: undefined,
   ntfyEvents: [
     "in-review",
     "merged",

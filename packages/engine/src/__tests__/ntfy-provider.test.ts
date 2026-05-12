@@ -26,6 +26,7 @@ describe("NtfyNotificationProvider", () => {
     await provider.initialize({
       topic: "topic-a",
       ntfyBaseUrl: "https://ntfy.local",
+      ntfyAccessToken: "secret-token",
       dashboardHost: "http://dash",
       projectId: "p1",
     });
@@ -63,6 +64,7 @@ describe("NtfyNotificationProvider", () => {
     expect(mocks.sendNtfyNotificationWithResult).toHaveBeenCalledWith(
       expect.objectContaining({
         topic: "topic-a",
+        ntfyAccessToken: "secret-token",
         title: expectedTitle,
         priority,
         message: expect.stringContaining(messagePart),

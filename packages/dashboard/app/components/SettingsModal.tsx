@@ -397,6 +397,7 @@ export function SettingsModal({
     worktreeInitCommand: "",
     ntfyEnabled: false,
     ntfyTopic: undefined,
+    ntfyAccessToken: undefined,
     webhookEnabled: false,
     webhookUrl: undefined,
     webhookFormat: "generic",
@@ -1186,6 +1187,7 @@ export function SettingsModal({
           ntfyEnabled: form.ntfyEnabled,
           ntfyTopic: form.ntfyTopic,
           ...(form.ntfyBaseUrl?.trim() ? { ntfyBaseUrl: form.ntfyBaseUrl.trim() } : {}),
+          ...(form.ntfyAccessToken?.trim() ? { ntfyAccessToken: form.ntfyAccessToken.trim() } : {}),
         }
         : providerId === "ntfy-message"
           ? { messageEventType: "message:agent-to-user" }
@@ -1215,7 +1217,17 @@ export function SettingsModal({
     } finally {
       setTestNotificationLoading((prev) => ({ ...prev, [providerId]: false }));
     }
-  }, [addToast, form.ntfyBaseUrl, form.ntfyEnabled, form.ntfyTopic, form.webhookEnabled, form.webhookFormat, form.webhookUrl, projectId]);
+  }, [
+    addToast,
+    form.ntfyAccessToken,
+    form.ntfyBaseUrl,
+    form.ntfyEnabled,
+    form.ntfyTopic,
+    form.webhookEnabled,
+    form.webhookFormat,
+    form.webhookUrl,
+    projectId,
+  ]);
 
   const handleBackupNow = useCallback(async () => {
     setBackupLoading(true);
@@ -4859,6 +4871,21 @@ export function SettingsModal({
                         />
                         <small>
                           Leave blank to keep the default server: https://ntfy.sh. Custom servers must use http:// or https://.
+                        </small>
+                        <label htmlFor="ntfyAccessToken">Access token (optional)</label>
+                        <input
+                          id="ntfyAccessToken"
+                          type="password"
+                          autoComplete="off"
+                          placeholder="tk_..."
+                          value={form.ntfyAccessToken || ""}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setForm((f) => ({ ...f, ntfyAccessToken: value || undefined }));
+                          }}
+                        />
+                        <small>
+                          Leave blank to publish without authentication. When set, Fusion sends an Authorization Bearer header with ntfy requests.
                         </small>
                       </div>
                     </details>

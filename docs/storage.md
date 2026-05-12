@@ -94,6 +94,8 @@ API endpoints reviewed:
 | `defaultThinkingLevel` | Global | `GET/PUT /api/settings/global` | Default reasoning effort |
 | `ntfyEnabled` | Global | `GET/PUT /api/settings/global` | Notifications enabled |
 | `ntfyTopic` | Global | `GET/PUT /api/settings/global` | Ntfy topic |
+| `ntfyBaseUrl` | Global | `GET/PUT /api/settings/global` | Custom ntfy server base URL override |
+| `ntfyAccessToken` | Global | `GET/PUT /api/settings/global` | Access token for authenticated ntfy publishes |
 | `ntfyEvents` | Global | `GET/PUT /api/settings/global` | Notification event filters |
 | `ntfyDashboardHost` | Global | `GET/PUT /api/settings/global` | Host for deep links |
 | `defaultProjectId` | Global | `GET/PUT /api/settings/global` | CLI default project |

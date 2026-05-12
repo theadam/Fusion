@@ -37,10 +37,12 @@ export interface NtfyNotificationConfigInput {
   events?: NtfyNotificationEvent[];
   projectId?: string;
   ntfyBaseUrl?: string;
+  ntfyAccessToken?: string;
 }
 
 export interface SendNtfyNotificationInput {
   ntfyBaseUrl?: string;
+  ntfyAccessToken?: string;
   topic: string;
   title: string;
   message: string;
@@ -140,6 +142,7 @@ export function buildNtfyClickUrl(options: {
  */
 export async function sendNtfyNotificationWithResult({
   ntfyBaseUrl,
+  ntfyAccessToken,
   topic,
   title,
   message,
@@ -156,6 +159,11 @@ export async function sendNtfyNotificationWithResult({
 
     if (clickUrl) {
       headers.Click = clickUrl;
+    }
+
+    const trimmedToken = ntfyAccessToken?.trim();
+    if (trimmedToken) {
+      headers.Authorization = `Bearer ${trimmedToken}`;
     }
 
     const resolvedBaseUrl = resolveNtfyBaseUrl(ntfyBaseUrl);

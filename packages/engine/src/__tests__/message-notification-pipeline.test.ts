@@ -37,7 +37,10 @@ function createStore(settings: Partial<Settings> = {}) {
 describe("message notification pipeline", () => {
   it("dispatches agent-originated messages and ignores user-to-agent", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
-    const store = createStore({ ntfyEvents: ["message:agent-to-user", "message:agent-to-agent"] });
+    const store = createStore({
+      ntfyEvents: ["message:agent-to-user", "message:agent-to-agent"],
+      ntfyAccessToken: "token-123",
+    });
     const messageStore = new TestMessageStore();
 
     const service = new NotificationService(store as any, {
@@ -53,6 +56,7 @@ describe("message notification pipeline", () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://ntfy.sh/test-topic");
     const firstHeaders = (fetchSpy.mock.calls[0]?.[1] as RequestInit).headers as Record<string, string>;
     expect(firstHeaders.Title).toContain("Triage Bot");
+    expect(firstHeaders.Authorization).toBe("Bearer token-123");
     const firstBody = String((fetchSpy.mock.calls[0]?.[1] as RequestInit).body);
     expect(firstBody).toContain("hi");
 

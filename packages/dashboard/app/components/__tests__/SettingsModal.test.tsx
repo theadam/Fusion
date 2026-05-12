@@ -182,6 +182,7 @@ const defaultSettings = {
   worktreeInitCommand: "",
   ntfyEnabled: false,
   ntfyTopic: undefined,
+  ntfyAccessToken: undefined,
   webhookEnabled: false,
   webhookUrl: undefined,
   webhookFormat: undefined,
@@ -2994,6 +2995,9 @@ describe("SettingsModal", () => {
       expect(screen.getByLabelText("Dashboard Hostname")).toBeInTheDocument();
       expect(screen.getByText("Notify on events")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /Test notification/ })).toBeInTheDocument();
+
+      await userEvent.click(screen.getByText("Advanced"));
+      expect(screen.getByLabelText("Access token (optional)")).toBeInTheDocument();
     });
 
     it("shows fallback, dreams, and mailbox message events for both providers", async () => {
@@ -3048,14 +3052,42 @@ describe("SettingsModal", () => {
       renderModal();
       await waitForSettingsModalReady();
       await openNotificationsSection();
+      await userEvent.click(screen.getByText("Advanced"));
+      await userEvent.type(screen.getByLabelText("Access token (optional)"), "secret-token");
 
       await userEvent.click(screen.getByRole("button", { name: /Test notification/ }));
 
       await waitFor(() => {
         expect(mockTestNotification).toHaveBeenCalledWith(
           "ntfy",
-          expect.objectContaining({ ntfyEnabled: true, ntfyTopic: "test-topic" }),
+          expect.objectContaining({
+            ntfyEnabled: true,
+            ntfyTopic: "test-topic",
+            ntfyAccessToken: "secret-token",
+          }),
           undefined,
+        );
+      });
+    });
+
+    it("clears a saved ntfy access token via global null-as-delete semantics", async () => {
+      mockFetchSettings.mockResolvedValueOnce({
+        ...defaultSettings,
+        ntfyEnabled: true,
+        ntfyTopic: "test-topic",
+        ntfyAccessToken: "saved-token",
+      });
+      renderModal();
+      await waitForSettingsModalReady();
+      await openNotificationsSection();
+      await userEvent.click(screen.getByText("Advanced"));
+      const tokenInput = screen.getByLabelText("Access token (optional)");
+      await userEvent.clear(tokenInput);
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => {
+        expect(mockUpdateGlobalSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ ntfyAccessToken: null }),
         );
       });
     });

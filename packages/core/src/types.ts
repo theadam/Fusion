@@ -1608,6 +1608,10 @@ export interface GlobalSettings {
    *  Must be an http:// or https:// URL. When omitted, notifications default to
    *  https://ntfy.sh. Example: "https://ntfy.internal.example" */
   ntfyBaseUrl?: string;
+  /** Optional ntfy access token used for authenticated publishes.
+   *  When set, Fusion sends `Authorization: Bearer <token>` with ntfy requests.
+   *  Leave undefined to publish without authentication. */
+  ntfyAccessToken?: string;
   /** List of notification events to send via ntfy.sh.
    *  When ntfyEnabled is true, only events in this list will trigger notifications.
    *  If undefined or empty when ntfyEnabled is true, all events are sent (backward compatible).

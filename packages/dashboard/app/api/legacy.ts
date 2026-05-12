@@ -993,7 +993,15 @@ export function testNotification(providerId: string, config?: Record<string, unk
  * Backward-compatible ntfy test helper.
  * Wraps testNotification() while preserving the legacy function signature.
  */
-export function testNtfyNotification(config?: { ntfyEnabled?: boolean; ntfyTopic?: string; ntfyBaseUrl?: string }, projectId?: string): Promise<{ success: boolean }> {
+export function testNtfyNotification(
+  config?: {
+    ntfyEnabled?: boolean;
+    ntfyTopic?: string;
+    ntfyBaseUrl?: string;
+    ntfyAccessToken?: string;
+  },
+  projectId?: string,
+): Promise<{ success: boolean }> {
   return testNotification("ntfy", config as Record<string, unknown> | undefined, projectId);
 }
 
