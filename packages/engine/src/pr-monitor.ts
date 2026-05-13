@@ -203,12 +203,16 @@ export class PrMonitor {
     }
 
     try {
-      const since = tracked.lastCheckedAt.toISOString();
+      // Fetch all comments on the PR. We do NOT pass `since` here: on the
+      // first poll, `lastCheckedAt` is the moment monitoring started, which
+      // would filter out any comments that exist on the PR from before then
+      // (e.g. comments the user left before the daemon was restarted, or
+      // before the PR was first linked to this task). De-dup is handled
+      // below by lastCommentId.
       const comments = await this.ghClient.fetchComments({
         owner: tracked.owner,
         repo: tracked.repo,
         prNumber: tracked.prInfo.number,
-        since,
       });
 
       // Filter to only new comments (by ID)
