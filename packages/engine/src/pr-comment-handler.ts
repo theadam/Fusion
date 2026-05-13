@@ -177,8 +177,20 @@ export class PrCommentHandler {
   }
 
   /**
-   * Create a follow-up task when a PR is closed with unaddressed feedback.
-   * This is called when a PR is merged or closed.
+   * Handle unaddressed PR comments that arrived while a PR was open and
+   * weren't acted on before the PR was merged or closed.
+   *
+   * Original behaviour spawned a sibling task ("Follow-up: Address PR
+   * feedback") in triage. That fragments the project board and forces the
+   * user to manage two tickets for one logical piece of work. Preferred
+   * behaviour is to **reopen the original task in place**: clear its merged
+   * PR info so a fresh PR can be opened, surface the comments as steering
+   * input, and move it back into the working columns. The agent will pick
+   * it up on the next scheduler tick and open a new PR off main with the
+   * fixes.
+   *
+   * Method name retained for backwards compatibility with the
+   * `onClosedPrFeedback` wiring in project-engine / runtimes.
    */
   async createFollowUpTask(
     originalTaskId: string,
@@ -187,34 +199,34 @@ export class PrCommentHandler {
   ): Promise<void> {
     if (unaddressedComments.length === 0) return;
 
-    const summary = unaddressedComments
-      .map((c) => `- @${c.user.login}: ${c.body.slice(0, 100).trim()}${c.body.length > 100 ? "..." : ""}`)
-      .join("\n");
-
-    const description = `Follow-up for ${originalTaskId}
-
-PR #${prInfo.number} was ${prInfo.status} with unaddressed feedback:
-
-${summary}
-
-Please review the PR comments and address any remaining issues.`;
-
     try {
-      const task = await this.store.createTask({
-        title: `Follow-up: Address PR #${prInfo.number} feedback`,
-        description,
-        column: "triage",
-        dependencies: [originalTaskId],
-        source: {
-          sourceType: "api",
-          sourceParentTaskId: originalTaskId,
-          sourceMetadata: { prNumber: prInfo.number, prUrl: prInfo.url },
-        },
-      });
+      // Inject each unaddressed comment as a steering input on the original
+      // task. Re-uses the same formatter the in-review flow uses so the
+      // payload looks identical to "address pre-merge" feedback.
+      for (const comment of unaddressedComments) {
+        const text = this.buildCommentText(prInfo, comment, this.hasCodeBlock(comment.body));
+        await this.store.addTaskComment(originalTaskId, text, "agent");
+      }
 
-      prMonitorLog.log(`Created follow-up task ${task.id} for PR #${prInfo.number}`);
+      // Clear the merged PR info so the agent's next pass opens a fresh PR
+      // against main, instead of trying to re-use the merged branch.
+      await this.store.updatePrInfo(originalTaskId, null);
+
+      // Reopen the task so the scheduler picks it up. todo (not in-progress)
+      // because the worktree was cleaned up after merge — the executor needs
+      // to recreate one. The scheduler will rebase a fresh worktree and run.
+      await this.store.moveTask(originalTaskId, "todo");
+
+      await this.store.logEntry(
+        originalTaskId,
+        `Reopened with ${unaddressedComments.length} unaddressed PR comment(s) after PR #${prInfo.number} ${prInfo.status}`,
+      );
+
+      prMonitorLog.log(
+        `Reopened ${originalTaskId} for ${unaddressedComments.length} unaddressed comment(s) on PR #${prInfo.number}`
+      );
     } catch (err) {
-      prMonitorLog.error(`Failed to create follow-up task:`, err);
+      prMonitorLog.error(`Failed to reopen ${originalTaskId} for PR feedback:`, err);
     }
   }
 
