@@ -1,4 +1,4 @@
-import type { Router } from "express";
+import type { Request, Router } from "express";
 import type { TaskStore } from "@fusion/core";
 import type { ServerOptions } from "../server.js";
 import { createMissionRouter } from "../mission-routes.js";
@@ -20,7 +20,13 @@ interface IntegratedRoutersOptions {
 
 interface DevServerRouterOptions {
   router: Router;
-  store: TaskStore;
+  /**
+   * Per-request project-root resolver. Injected by the API-routes layer so
+   * dev-server endpoints can target the right project's repo instead of the
+   * daemon's cwd. Falls back to the default store's rootDir when no
+   * projectId is on the request.
+   */
+  resolveProjectRoot: (req: Request) => Promise<string>;
 }
 
 export function registerIntegratedRouters({
@@ -42,9 +48,7 @@ export function registerIntegratedRouters({
   router.use("/stash-recovery", createStashRecoveryRouter(store));
 }
 
-export function registerIntegratedDevServerRouter({ router, store }: DevServerRouterOptions): void {
-  const devServerRouter = createDevServerRouter({
-    projectRoot: store.getRootDir(),
-  });
+export function registerIntegratedDevServerRouter({ router, resolveProjectRoot }: DevServerRouterOptions): void {
+  const devServerRouter = createDevServerRouter({ resolveProjectRoot });
   router.use("/dev-server", devServerRouter);
 }

@@ -1,4 +1,4 @@
-import { Router, type Response } from "express";
+import { Router, type Request, type Response } from "express";
 import { badRequest, conflict, ApiError, sendErrorResponse } from "./api-error.js";
 import { detectDevServerScripts } from "./dev-server-detect.js";
 import {
@@ -11,8 +11,14 @@ import {
 import { DevServerProcessManager } from "./dev-server-process.js";
 
 export interface DevServerRouterOptions {
-  /** Root directory of the project */
-  projectRoot: string;
+  /**
+   * Resolve the project root for an incoming request. Called once per
+   * request so a multi-project daemon routes each call to the right repo.
+   * Previously this was a single `projectRoot: string` captured at
+   * registration time, which baked the daemon's cwd in forever and made
+   * every dev-server operation target the wrong tree.
+   */
+  resolveProjectRoot: (req: Request) => Promise<string>;
 }
 
 interface DevServerRuntime {
@@ -155,9 +161,10 @@ function buildStatusResponse(state: DevServerState, isRunning: boolean) {
 export function createDevServerRouter(options: DevServerRouterOptions): Router {
   const router = Router();
 
-  router.get("/detect", async (_req, res) => {
+  router.get("/detect", async (req, res) => {
     try {
-      const result = await detectDevServerScripts(options.projectRoot);
+      const projectRoot = await options.resolveProjectRoot(req);
+      const result = await detectDevServerScripts(projectRoot);
       res.json({ candidates: result.candidates });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to detect dev server scripts";
@@ -165,9 +172,10 @@ export function createDevServerRouter(options: DevServerRouterOptions): Router {
     }
   });
 
-  router.get("/config", async (_req, res) => {
+  router.get("/config", async (req, res) => {
     try {
-      const { store } = await getRuntime(options.projectRoot);
+      const projectRoot = await options.resolveProjectRoot(req);
+      const { store } = await getRuntime(projectRoot);
       res.json(store.getConfig());
     } catch (error) {
       if (error instanceof ApiError) {
@@ -183,7 +191,8 @@ export function createDevServerRouter(options: DevServerRouterOptions): Router {
   router.put("/config", async (req, res) => {
     try {
       const partial = parseConfigUpdateBody(req.body);
-      const { store } = await getRuntime(options.projectRoot);
+      const projectRoot = await options.resolveProjectRoot(req);
+      const { store } = await getRuntime(projectRoot);
       const updated = await store.updateConfig(partial);
       res.json(updated);
     } catch (error) {
@@ -197,9 +206,10 @@ export function createDevServerRouter(options: DevServerRouterOptions): Router {
     }
   });
 
-  router.get("/status", async (_req, res) => {
+  router.get("/status", async (req, res) => {
     try {
-      const { store, manager } = await getRuntime(options.projectRoot);
+      const projectRoot = await options.resolveProjectRoot(req);
+      const { store, manager } = await getRuntime(projectRoot);
       const state = store.getState();
 
       res.json(buildStatusResponse(state, manager.isRunning()));
@@ -224,7 +234,8 @@ export function createDevServerRouter(options: DevServerRouterOptions): Router {
         throw badRequest("cwd is required and must be a non-empty string");
       }
 
-      const { manager } = await getRuntime(options.projectRoot);
+      const projectRoot = await options.resolveProjectRoot(req);
+      const { manager } = await getRuntime(projectRoot);
       if (manager.isRunning()) {
         throw conflict("Dev server is already running");
       }
@@ -247,9 +258,10 @@ export function createDevServerRouter(options: DevServerRouterOptions): Router {
     }
   });
 
-  router.post("/stop", async (_req, res) => {
+  router.post("/stop", async (req, res) => {
     try {
-      const { store, manager } = await getRuntime(options.projectRoot);
+      const projectRoot = await options.resolveProjectRoot(req);
+      const { store, manager } = await getRuntime(projectRoot);
       if (!manager.isRunning()) {
         res.json(store.getState());
         return;
@@ -263,9 +275,10 @@ export function createDevServerRouter(options: DevServerRouterOptions): Router {
     }
   });
 
-  router.post("/restart", async (_req, res) => {
+  router.post("/restart", async (req, res) => {
     try {
-      const { store, manager } = await getRuntime(options.projectRoot);
+      const projectRoot = await options.resolveProjectRoot(req);
+      const { store, manager } = await getRuntime(projectRoot);
       const state = store.getState();
       if (!state.command || !state.cwd) {
         throw badRequest("No previous command found to restart");
@@ -296,7 +309,8 @@ export function createDevServerRouter(options: DevServerRouterOptions): Router {
         throw badRequest("preview URL must start with http:// or https://");
       }
 
-      const { store } = await getRuntime(options.projectRoot);
+      const projectRoot = await options.resolveProjectRoot(req);
+      const { store } = await getRuntime(projectRoot);
       const state = await store.updateState({
         manualUrl: trimmed.length > 0 ? trimmed : undefined,
       });
@@ -315,7 +329,8 @@ export function createDevServerRouter(options: DevServerRouterOptions): Router {
 
   router.get("/logs/stream", async (req, res) => {
     try {
-      const { store, manager } = await getRuntime(options.projectRoot);
+      const projectRoot = await options.resolveProjectRoot(req);
+      const { store, manager } = await getRuntime(projectRoot);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");

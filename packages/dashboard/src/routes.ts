@@ -4546,7 +4546,19 @@ export function createApiRoutes(store: TaskStore, options?: ServerOptions): Rout
 
   // Dev server mount intentionally stays in this late position to keep route
   // precedence unchanged relative to existing wildcard handlers.
-  registerIntegratedDevServerRouter({ router, store });
+  // Resolve per-request so multi-project daemons target the right repo
+  // instead of the daemon's own cwd.
+  registerIntegratedDevServerRouter({
+    router,
+    resolveProjectRoot: async (req) => {
+      try {
+        const { store: scopedStore } = await getProjectContext(req);
+        return scopedStore.getRootDir();
+      } catch {
+        return store.getRootDir();
+      }
+    },
+  });
 
   if (options?.pluginStore && options?.pluginLoader) {
     const pluginRunner = options.pluginRunner as Parameters<typeof createPluginRouter>[2];
