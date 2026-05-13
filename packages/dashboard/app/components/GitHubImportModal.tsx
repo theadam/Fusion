@@ -103,7 +103,7 @@ export function GitHubImportModal({ isOpen, onClose, onImport, tasks, projectId 
       mountedRef.current = true;
 
       // Fetch git remotes
-      fetchGitRemotes()
+      fetchGitRemotes(projectId)
         .then((fetchedRemotes) => {
           if (!mountedRef.current) return;
 
@@ -134,7 +134,7 @@ export function GitHubImportModal({ isOpen, onClose, onImport, tasks, projectId 
         mountedRef.current = false;
       };
     }
-  }, [isOpen]);
+  }, [isOpen, projectId]);
 
   // Handle remote selection change
   const handleRemoteChange = useCallback((remoteName: string) => {
