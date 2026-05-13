@@ -16,23 +16,8 @@ interface PrComment {
  * steering comments or follow-up tasks.
  */
 export class PrCommentHandler {
-  // Keywords that suggest actionable feedback
-  private readonly ACTION_KEYWORDS = [
-    "fix",
-    "change",
-    "update",
-    "remove",
-    "add",
-    "should",
-    "need to",
-    "needs to",
-    "please",
-    "consider",
-    "suggest",
-    "recommend",
-  ];
-
-  // Non-actionable patterns to filter out
+  // Non-actionable patterns to filter out (true noise only — anything more
+  // nuanced is the agent's job to judge once the comment is injected).
   private readonly NON_ACTIONABLE_PATTERNS = [
     /^\s*lgtm\s*$/i,
     /^\s*looks? good\s*$/i,
@@ -66,20 +51,15 @@ export class PrCommentHandler {
     prInfo: PrInfo,
     comment: PrComment
   ): Promise<void> {
-    // Skip non-actionable comments
+    // Skip only the obvious noise (LGTM / thanks / emoji-only). Everything
+    // else flows through to the agent as a steering comment — the agent is
+    // the right place to decide what's actionable, not a keyword whitelist.
     if (this.isNonActionable(comment.body)) {
       prMonitorLog.log(`Skipping non-actionable comment #${comment.id}`);
       return;
     }
 
-    // Check if comment contains actionable feedback
-    const isActionable = this.isActionable(comment.body);
     const hasCodeSuggestions = this.hasCodeBlock(comment.body);
-
-    if (!isActionable && !hasCodeSuggestions) {
-      prMonitorLog.log(`Comment #${comment.id} does not contain actionable feedback`);
-      return;
-    }
 
     // Build comment text
     const text = this.buildCommentText(prInfo, comment, hasCodeSuggestions);
@@ -99,14 +79,6 @@ export class PrCommentHandler {
   private isNonActionable(body: string): boolean {
     const trimmed = body.trim();
     return this.NON_ACTIONABLE_PATTERNS.some((pattern) => pattern.test(trimmed));
-  }
-
-  /**
-   * Check if a comment contains actionable feedback keywords.
-   */
-  private isActionable(body: string): boolean {
-    const lowerBody = body.toLowerCase();
-    return this.ACTION_KEYWORDS.some((keyword) => lowerBody.includes(keyword));
   }
 
   /**

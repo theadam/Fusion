@@ -49,14 +49,23 @@ export function createDefaultPrMonitorGhClient(): PrMonitorGhClient {
         "comments",
       ]);
 
-      let comments = pr.comments.map((c) => ({
-        id: parseInt(c.id, 10),
-        body: c.body,
-        user: { login: c.author.login },
-        created_at: c.createdAt,
-        updated_at: c.updatedAt,
-        html_url: c.url,
-      }));
+      // `gh pr view --json comments` returns the comment id as a GraphQL node
+      // ID (e.g. "IC_kwDOSLGn2s8AAAABCG16tA"), not a number. The numeric id is
+      // embedded in the comment URL fragment `#issuecomment-<digits>`. Parse
+      // that out so downstream code (dedup via lastCommentId, log lines, etc.)
+      // gets a real integer instead of NaN.
+      let comments = pr.comments.map((c) => {
+        const m = /#issuecomment-(\d+)/.exec(c.url);
+        const numericId = m ? Number(m[1]) : NaN;
+        return {
+          id: numericId,
+          body: c.body,
+          user: { login: c.author.login },
+          created_at: c.createdAt,
+          updated_at: c.updatedAt,
+          html_url: c.url,
+        };
+      });
 
       if (since) {
         const sinceDate = new Date(since);
