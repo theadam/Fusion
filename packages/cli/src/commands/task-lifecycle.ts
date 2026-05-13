@@ -17,7 +17,7 @@ import { exec } from "node:child_process";
 import { promisify } from "node:util";
 const execAsync = promisify(exec);
 import type { TaskStore } from "@fusion/core";
-import { resolveTaskMergeTarget } from "@fusion/core";
+import { resolveTaskMergeTarget, getCurrentRepo } from "@fusion/core";
 import type { Settings, TaskDetail, PrInfo } from "@fusion/core";
 
 /**
@@ -25,16 +25,16 @@ import type { Settings, TaskDetail, PrInfo } from "@fusion/core";
  * Defined locally to avoid importing from @fusion/dashboard.
  */
 interface GitHubOperations {
-  findPrForBranch(params: { head: string; state?: "open" | "closed" | "all" }): Promise<PrInfo | null>;
-  createPr(params: { title: string; body: string; head: string; base?: string }): Promise<PrInfo>;
-  getPrMergeStatus(base?: string, head?: string, number?: number): Promise<{
+  findPrForBranch(params: { owner?: string; repo?: string; head: string; state?: "open" | "closed" | "all" }): Promise<PrInfo | null>;
+  createPr(params: { owner?: string; repo?: string; title: string; body: string; head: string; base?: string }): Promise<PrInfo>;
+  getPrMergeStatus(owner?: string, repo?: string, number?: number): Promise<{
     prInfo: PrInfo;
     reviewDecision: string | null;
     checks: Array<{ name: string; required: boolean; state: string }>;
     mergeReady: boolean;
     blockingReasons: string[];
   }>;
-  mergePr(params: { number: number; method?: "merge" | "squash" | "rebase" }): Promise<PrInfo>;
+  mergePr(params: { owner?: string; repo?: string; number: number; method?: "merge" | "squash" | "rebase" }): Promise<PrInfo>;
 }
 
 /**
@@ -235,12 +235,28 @@ export async function processPullRequestMergeTask(
   const mergeTarget = resolveTaskMergeTarget(task, {
     projectDefaultBranch,
   });
+  // Resolve repo from the project's cwd, not the daemon's process.cwd().
+  // The shared GitHubClient falls back to process.cwd() when owner/repo
+  // are omitted, which fails when the daemon was launched outside a git
+  // repo (e.g. a multi-project setup). Pass it through explicitly.
+  const projectRepo = getCurrentRepo(cwd);
+  if (!projectRepo) {
+    const error = `Could not determine GitHub repository from project cwd "${cwd}". Ensure the project has a GitHub origin remote.`;
+    await store.updateTask(task.id, { status: "failed", error });
+    await store.logEntry(task.id, error);
+    return "skipped";
+  }
   let prInfo: PrInfo | undefined = task.prInfo;
 
   if (!prInfo) {
     await store.updateTask(task.id, { status: "creating-pr" });
 
-    const existingPr = await github.findPrForBranch({ head: branch, state: "all" });
+    const existingPr = await github.findPrForBranch({
+      owner: projectRepo.owner,
+      repo: projectRepo.repo,
+      head: branch,
+      state: "all",
+    });
     if (!existingPr) {
       // gh pr create / GitHub REST require the head branch to exist on
       // origin. Nothing else in the merge path publishes the per-task
@@ -249,6 +265,8 @@ export async function processPullRequestMergeTask(
     }
     try {
       prInfo = existingPr ?? await github.createPr({
+        owner: projectRepo.owner,
+        repo: projectRepo.repo,
         title: buildPullRequestTitle(task),
         body: buildPullRequestBody(task),
         head: branch,
@@ -277,7 +295,7 @@ export async function processPullRequestMergeTask(
     throw new Error(`Failed to create or resolve pull request for ${task.id}`);
   }
 
-  const mergeStatus = await github.getPrMergeStatus(mergeTarget.branch, branch, prInfo.number);
+  const mergeStatus = await github.getPrMergeStatus(projectRepo.owner, projectRepo.repo, prInfo.number);
   const refreshedPrInfo: PrInfo = {
     ...prInfo,
     ...mergeStatus.prInfo,
@@ -319,11 +337,16 @@ export async function processPullRequestMergeTask(
   await store.updateTask(task.id, { status: "merging-pr" });
   let mergedPr: PrInfo;
   try {
-    mergedPr = await github.mergePr({ number: prInfo.number, method: "squash" });
+    mergedPr = await github.mergePr({
+      owner: projectRepo.owner,
+      repo: projectRepo.repo,
+      number: prInfo.number,
+      method: "squash",
+    });
   } catch (err: unknown) {
     let refreshedStatus: Awaited<ReturnType<GitHubOperations["getPrMergeStatus"]>>;
     try {
-      refreshedStatus = await github.getPrMergeStatus(mergeTarget.branch, branch, prInfo.number);
+      refreshedStatus = await github.getPrMergeStatus(projectRepo.owner, projectRepo.repo, prInfo.number);
     } catch {
       throw err;
     }
