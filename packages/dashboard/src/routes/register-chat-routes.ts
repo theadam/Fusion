@@ -590,7 +590,13 @@ export function registerChatRoutes(ctx: ApiRoutesContext, deps: ChatRouteDeps): 
       // daemon's own working directory (typically ~/fusion-home), which is
       // not where the user's code lives. Without this, agents spawned by
       // chat run against the wrong tree.
-      let chatStore = defaultChatStore;
+      //
+      // The manager's *rootDir* must be the project's repo, but its
+      // *chatStore* must remain the global one — sessions are created via
+      // POST /chat/sessions on the global chatStore (the only chat_sessions
+      // table the dashboard reads from). Passing a project-scoped chatStore
+      // would point sendMessage at a different SQLite file with no row for
+      // this session, producing "Chat session X not found" over SSE.
       let chatManager: ChatManager = defaultChatManager;
       if (session.projectId) {
         const scoped = await resolveProjectChatContext({
@@ -599,11 +605,10 @@ export function registerChatRoutes(ctx: ApiRoutesContext, deps: ChatRouteDeps): 
           defaultChatStore: defaultChatStore,
           engineManager: options?.engineManager,
         });
-        chatStore = scoped.chatStore;
         chatManager = await getOrCreateScopedChatManager({
           projectId: session.projectId,
           store: scoped.store,
-          chatStore: scoped.chatStore,
+          chatStore: defaultChatStore,
           pluginRunner: options?.pluginRunner,
           messageStore: options?.engine?.getMessageStore(),
         });
@@ -751,7 +756,7 @@ export function registerChatRoutes(ctx: ApiRoutesContext, deps: ChatRouteDeps): 
         chatManager = await getOrCreateScopedChatManager({
           projectId: session.projectId,
           store: scoped.store,
-          chatStore: scoped.chatStore,
+          chatStore: defaultChatStore,
           pluginRunner: options?.pluginRunner,
           messageStore: options?.engine?.getMessageStore(),
         });
