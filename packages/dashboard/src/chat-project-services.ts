@@ -65,6 +65,35 @@ export async function createProjectScopedChatManager(options: {
   );
 }
 
+/**
+ * Cache of project-scoped ChatManager instances keyed by projectId.
+ *
+ * Generation state (activeGenerations, inFlightPersistTimers) lives on the
+ * ChatManager instance, so cancel/send for the same session MUST go through
+ * the same manager. Caching by projectId guarantees that.
+ */
+const scopedChatManagerCache = new Map<string, ChatManager>();
+
+export async function getOrCreateScopedChatManager(options: {
+  projectId: string;
+  store: TaskStore;
+  chatStore: ChatStore;
+  pluginRunner?: ConstructorParameters<typeof ChatManager>[3];
+  messageStore?: MessageStore;
+}): Promise<ChatManager> {
+  const cached = scopedChatManagerCache.get(options.projectId);
+  if (cached) return cached;
+  const manager = await createProjectScopedChatManager({
+    store: options.store,
+    chatStore: options.chatStore,
+    pluginRunner: options.pluginRunner,
+    messageStore: options.messageStore,
+  });
+  scopedChatManagerCache.set(options.projectId, manager);
+  return manager;
+}
+
 export function __resetScopedChatStoreCache(): void {
   scopedChatStoreCache.clear();
+  scopedChatManagerCache.clear();
 }

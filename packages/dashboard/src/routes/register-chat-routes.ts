@@ -7,6 +7,8 @@ import { ApiError, badRequest, internalError, notFound } from "../api-error.js";
 import { rateLimit, RATE_LIMITS } from "../rate-limit.js";
 import { writeSSEEvent, type SessionBufferedEvent } from "../sse-buffer.js";
 import type { ApiRoutesContext } from "./types.js";
+import { getOrCreateScopedChatManager, resolveProjectChatContext } from "../chat-project-services.js";
+import type { ChatManager } from "../chat.js";
 
 interface ChatRouteDeps {
   parseLastEventId: (req: import("express").Request) => number | undefined;
@@ -559,9 +561,9 @@ export function registerChatRoutes(ctx: ApiRoutesContext, deps: ChatRouteDeps): 
    */
   router.post("/chat/sessions/:id/messages", rateLimit(RATE_LIMITS.sse), async (req, res) => {
     try {
-      const chatStore = options?.chatStore;
-      const chatManager = options?.chatManager;
-      if (!chatStore || !chatManager) {
+      const defaultChatStore = options?.chatStore;
+      const defaultChatManager = options?.chatManager;
+      if (!defaultChatStore || !defaultChatManager) {
         throw internalError("Chat store or manager not available");
       }
 
@@ -578,9 +580,33 @@ export function registerChatRoutes(ctx: ApiRoutesContext, deps: ChatRouteDeps): 
       }
 
       // Verify session exists
-      const session = chatStore.getSession(sessionId);
+      const session = defaultChatStore.getSession(sessionId);
       if (!session) {
         throw notFound(`Chat session ${sessionId} not found`);
+      }
+
+      // Resolve project-scoped chat manager when the session belongs to a
+      // registered project. The default chatManager runs with cwd = the
+      // daemon's own working directory (typically ~/fusion-home), which is
+      // not where the user's code lives. Without this, agents spawned by
+      // chat run against the wrong tree.
+      let chatStore = defaultChatStore;
+      let chatManager: ChatManager = defaultChatManager;
+      if (session.projectId) {
+        const scoped = await resolveProjectChatContext({
+          projectId: session.projectId,
+          defaultStore: ctx.store,
+          defaultChatStore: defaultChatStore,
+          engineManager: options?.engineManager,
+        });
+        chatStore = scoped.chatStore;
+        chatManager = await getOrCreateScopedChatManager({
+          projectId: session.projectId,
+          store: scoped.store,
+          chatStore: scoped.chatStore,
+          pluginRunner: options?.pluginRunner,
+          messageStore: options?.engine?.getMessageStore(),
+        });
       }
 
       // Set SSE headers
@@ -703,12 +729,33 @@ export function registerChatRoutes(ctx: ApiRoutesContext, deps: ChatRouteDeps): 
    */
   router.post("/chat/sessions/:id/cancel", rateLimit(RATE_LIMITS.mutation), async (req, res) => {
     try {
-      const chatManager = options?.chatManager;
-      if (!chatManager) {
-        throw new ApiError(503, "Chat manager not available");
+      const defaultChatStore = options?.chatStore;
+      const defaultChatManager = options?.chatManager;
+      if (!defaultChatStore || !defaultChatManager) {
+        throw new ApiError(503, "Chat store or manager not available");
       }
 
       const sessionId = String(req.params.id);
+      const session = defaultChatStore.getSession(sessionId);
+      // Route the cancel to the SAME manager that handled the send. Generation
+      // state lives on the manager instance, so cancelling on the wrong
+      // (default) manager would no-op while the real generation kept running.
+      let chatManager: ChatManager = defaultChatManager;
+      if (session?.projectId) {
+        const scoped = await resolveProjectChatContext({
+          projectId: session.projectId,
+          defaultStore: ctx.store,
+          defaultChatStore: defaultChatStore,
+          engineManager: options?.engineManager,
+        });
+        chatManager = await getOrCreateScopedChatManager({
+          projectId: session.projectId,
+          store: scoped.store,
+          chatStore: scoped.chatStore,
+          pluginRunner: options?.pluginRunner,
+          messageStore: options?.engine?.getMessageStore(),
+        });
+      }
       const success = chatManager.cancelGeneration(sessionId);
       res.json({ success });
     } catch (err: unknown) {
